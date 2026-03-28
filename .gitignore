@@ -7,6 +7,7 @@
 /.codex-temp/
 /artifacts/*.png
 /artifacts/*.json
+/games/HelenBatmanAA/builder/
 *.VC.db
 *.VC.opendb
 *.suo
