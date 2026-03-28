@@ -1,0 +1,347 @@
+#include <HelenHook/LoadedBuildPack.h>
+#include <HelenHook/PackRepository.h>
+
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <stdexcept>
+#include <string_view>
+
+namespace
+{
+    /**
+     * @brief Throws when one required boolean condition is false so the shared test harness stops at the first failure.
+     * @param condition Boolean condition that must evaluate to true.
+     * @param message Failure message reported by the shared test runner.
+     */
+    void Expect(bool condition, const char* message)
+    {
+        if (!condition)
+        {
+            throw std::runtime_error(message);
+        }
+    }
+
+    /**
+     * @brief Writes one exact UTF-8 text payload to disk for temporary pack manifest scenarios.
+     * @param path Destination file path that should be created or replaced.
+     * @param text Exact text content written into the file.
+     */
+    void WriteAllText(const std::filesystem::path& path, std::string_view text)
+    {
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        if (!stream)
+        {
+            throw std::runtime_error("Failed to create a pack repository test file.");
+        }
+
+        stream.write(text.data(), static_cast<std::streamsize>(text.size()));
+        if (!stream)
+        {
+            throw std::runtime_error("Failed to write a pack repository test file.");
+        }
+    }
+
+}
+
+/**
+ * @brief Verifies that the pack repository loads a complete synthetic split pack and skips malformed candidate builds.
+ */
+void RunPackRepositoryTests()
+{
+    helen::PackRepository repository;
+
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "HelenRuntimeTests" / "PackRepository";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+
+    try
+    {
+        const std::filesystem::path packs_root = root / "packs";
+        const std::filesystem::path valid_pack_root = packs_root / "batman-aa-subtitles";
+        const std::filesystem::path valid_build_root = valid_pack_root / "builds" / "steam-goty-1.0";
+        const std::filesystem::path pack_root = packs_root / "broken-pack";
+        const std::filesystem::path build_root = pack_root / "builds" / "broken-build";
+        std::filesystem::create_directories(valid_build_root);
+        std::filesystem::create_directories(build_root);
+
+        WriteAllText(
+            valid_pack_root / "pack.json",
+            R"({
+  "schemaVersion": 1,
+  "id": "batman-aa-subtitles",
+  "name": "Batman Arkham Asylum Gameplay Subtitle Slice",
+  "targets": [
+    {
+      "executables": [
+        "ShippingPC-BmGame.exe"
+      ]
+    }
+  ],
+  "config": [
+    {
+      "key": "ui.subtitleSize",
+      "type": "int",
+      "defaultValue": 1
+    }
+  ],
+  "features": [
+    {
+      "id": "subtitleSize",
+      "name": "Subtitle Size",
+      "kind": "enum",
+      "configKey": "ui.subtitleSize",
+      "defaultValue": 1
+    }
+  ],
+  "builds": [
+    "steam-goty-1.0"
+  ]
+})");
+
+        WriteAllText(
+            valid_build_root / "build.json",
+            R"({
+  "id": "steam-goty-1.0",
+  "executable": "ShippingPC-BmGame.exe",
+  "startupCommands": [
+    "applySavedSubtitleSize"
+  ],
+  "match": {
+    "fileSize": 38758728,
+    "sha256": "4DAC1F5E2AC6710B7378FDCE74601F616F4753E3756CB5FDA63C7519CC2EB028"
+  }
+})");
+
+        WriteAllText(
+            valid_build_root / "files.json",
+            R"({
+  "virtualFiles": [
+    {
+      "id": "bmgameGameplayPackage",
+      "path": "BmGame/CookedPC/BmGame.u",
+      "mode": "replace-on-read",
+      "source": "assets/packages/BmGame-subtitle-signal.u"
+    }
+  ]
+})");
+
+        WriteAllText(valid_build_root / "bindings.json", R"({ "bindings": [] })");
+
+        WriteAllText(
+            valid_build_root / "commands.json",
+            R"({
+  "commands": [
+    {
+      "id": "applySavedSubtitleSize",
+      "name": "Apply Saved Subtitle Size",
+      "steps": [
+        {
+          "kind": "run-command",
+          "command": "applySubtitleSize"
+        }
+      ]
+    },
+    {
+      "id": "applySubtitleSize",
+      "name": "Apply Subtitle Size",
+      "steps": [
+        {
+          "kind": "read-config-int",
+          "configKey": "ui.subtitleSize",
+          "valueName": "subtitleSizeState"
+        },
+        {
+          "kind": "map-int-to-double",
+          "inputValueName": "subtitleSizeState",
+          "outputValueName": "subtitleScale",
+          "mappings": [
+            {
+              "match": 0,
+              "value": 2.0
+            },
+            {
+              "match": 1,
+              "value": 4.0
+            },
+            {
+              "match": 2,
+              "value": 8.0
+            }
+          ]
+        },
+        {
+          "kind": "set-live-double",
+          "target": "subtitle.scale",
+          "valueName": "subtitleScale"
+        },
+        {
+          "kind": "log-message",
+          "message": "Applied Batman gameplay subtitle scale."
+        }
+      ]
+    }
+  ]
+})");
+
+        WriteAllText(
+            valid_build_root / "hooks.json",
+            R"({
+  "runtimeSlots": [
+    {
+      "id": "subtitle.scale",
+      "type": "float32",
+      "initialValue": 1.5
+    }
+  ],
+  "stateObservers": [
+    {
+      "id": "subtitleUiStateObserver",
+      "scanStartAddress": "0x28000000",
+      "scanEndAddress": "0x2C000000",
+      "scanStride": 4,
+      "valueOffset": 0,
+      "pollIntervalMs": 250,
+      "targetConfigKey": "ui.subtitleSize",
+      "command": "applySubtitleSize",
+      "checks": [
+        {
+          "comparison": "equals-constant",
+          "offset": -16,
+          "expectedValue": 50
+        },
+        {
+          "comparison": "equals-value-at-offset",
+          "offset": 16,
+          "compareOffset": 0
+        }
+      ],
+      "mappings": [
+        {
+          "match": 4101,
+          "value": 0
+        },
+        {
+          "match": 4102,
+          "value": 1
+        },
+        {
+          "match": 4103,
+          "value": 2
+        }
+      ]
+    }
+  ],
+  "hooks": [
+    {
+      "id": "subtitleTextScaleHook",
+      "module": "ShippingPC-BmGame.exe",
+      "rva": "0x006B00DA",
+      "expectedBytes": "D9E8D9542404D91C24",
+      "action": "inline-jump-to-pack-blob",
+      "overwriteLength": 9,
+      "resumeOffsetFromTarget": 45,
+      "blob": {
+        "assetPath": "assets/native/batman-global-text-scale.bin",
+        "entryOffset": 0,
+        "relocations": [
+          {
+            "offset": 2,
+            "encoding": "abs32",
+            "source": {
+              "kind": "runtime-slot",
+              "slot": "subtitle.scale"
+            }
+          },
+          {
+            "offset": 36,
+            "encoding": "abs32",
+            "source": {
+              "kind": "runtime-slot",
+              "slot": "subtitle.scale"
+            }
+          },
+          {
+            "offset": 58,
+            "encoding": "rel32",
+            "source": {
+              "kind": "hook-resume"
+            }
+          }
+        ]
+      }
+    }
+  ]
+})");
+
+        WriteAllText(
+            pack_root / "pack.json",
+            R"({
+  "schemaVersion": 1,
+  "id": "broken-pack",
+  "name": "Broken Pack",
+  "targets": [
+    {
+      "executables": [
+        "BrokenGame.exe"
+      ]
+    }
+  ],
+  "builds": [
+    "broken-build"
+  ]
+})");
+
+        WriteAllText(
+            build_root / "build.json",
+            R"({
+  "id": "broken-build",
+  "executable": "BrokenGame.exe",
+  "match": {
+    "fileSize": 1234,
+    "sha256": "ABCDEF"
+  }
+})");
+
+        WriteAllText(build_root / "hooks.json", "{");
+
+        const std::optional<helen::LoadedBuildPack> loaded_valid_pack = repository.LoadForExecutable(
+            packs_root,
+            "ShippingPC-BmGame.exe",
+            38758728,
+            "4dac1f5e2ac6710b7378fdce74601f616f4753e3756cb5fda63c7519cc2eb028");
+        Expect(loaded_valid_pack.has_value(), "Expected the synthetic Batman pack to load for the matching executable fingerprint.");
+        Expect(loaded_valid_pack->Pack.Id == "batman-aa-subtitles", "Loaded pack identifier mismatch.");
+        Expect(loaded_valid_pack->Build.Id == "steam-goty-1.0", "Loaded build identifier mismatch.");
+        Expect(loaded_valid_pack->Build.StartupCommandIds.size() == 1, "Loaded startup command count mismatch.");
+        Expect(loaded_valid_pack->Build.StartupCommandIds[0] == "applySavedSubtitleSize", "Loaded startup command identifier mismatch.");
+        Expect(loaded_valid_pack->Build.VirtualFiles.size() == 1, "Loaded virtual file count mismatch.");
+        Expect(loaded_valid_pack->Build.RuntimeSlots.size() == 1, "Loaded runtime slot count mismatch.");
+        Expect(loaded_valid_pack->Build.StateObservers.size() == 1, "Loaded state observer count mismatch.");
+        Expect(loaded_valid_pack->Build.Hooks.size() == 1, "Loaded hook count mismatch.");
+        Expect(loaded_valid_pack->Build.Commands.size() == 2, "Loaded command count mismatch.");
+        Expect(loaded_valid_pack->Build.Hooks[0].RelativeVirtualAddress.has_value(), "Loaded hook did not preserve its exact RVA target.");
+        Expect(*loaded_valid_pack->Build.Hooks[0].RelativeVirtualAddress == 0x006B00DA, "Loaded hook RVA mismatch.");
+
+        const std::optional<helen::LoadedBuildPack> mismatched_valid_pack = repository.LoadForExecutable(
+            packs_root,
+            "ShippingPC-BmGame.exe",
+            38758728,
+            "0000000000000000000000000000000000000000000000000000000000000000");
+        Expect(!mismatched_valid_pack.has_value(), "Pack repository unexpectedly loaded a pack for a mismatched executable hash.");
+
+        const std::optional<helen::LoadedBuildPack> malformed_pack = repository.LoadForExecutable(
+            packs_root,
+            "BrokenGame.exe",
+            1234,
+            "abcdef");
+        Expect(!malformed_pack.has_value(), "Pack repository unexpectedly loaded a build whose hooks.json was malformed.");
+    }
+    catch (...)
+    {
+        std::filesystem::remove_all(root);
+        throw;
+    }
+
+    std::filesystem::remove_all(root);
+}

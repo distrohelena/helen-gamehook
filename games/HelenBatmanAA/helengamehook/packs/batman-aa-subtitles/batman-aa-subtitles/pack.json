@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "batman-aa-subtitles",
+  "name": "Batman Arkham Asylum Gameplay Subtitle Slice",
+  "description": "Gameplay-only Helen sample pack for Batman subtitle experiments.",
+  "targets": [
+    {
+      "gameId": "batman-arkham-asylum",
+      "executables": [
+        "ShippingPC-BmGame.exe"
+      ]
+    }
+  ],
+  "config": [
+    {
+      "key": "ui.subtitleSize",
+      "type": "int",
+      "defaultValue": 1
+    }
+  ],
+  "features": [
+    {
+      "id": "subtitleSize",
+      "name": "Subtitle Size",
+      "kind": "enum",
+      "configKey": "ui.subtitleSize",
+      "defaultValue": 1
+    }
+  ],
+  "builds": [
+    "steam-goty-1.0"
+  ]
+}

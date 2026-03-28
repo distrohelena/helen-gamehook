@@ -1,0 +1,25 @@
+Repository Guidelines
+
+- One class per file.
+- Add Doxygen comments to every class, function, field, constructor, and property-like member. Comments must explain the role, behavior, and important constraints clearly.
+- Doxygen comments must be substantive. Do not use placeholder summaries.
+- Order members consistently using a predictable C++ layout: constants/static fields, fields, constructors/destructor, properties or accessors, methods.
+- Keep code easy for humans to read first.
+- Use PascalCase for class names, method names, and fields if you want to preserve the same project style across the port.
+- Place opening braces on the same line as declarations and control statements.
+- Do not use tuples. Prefer explicit structs or classes with meaningful names.
+- Follow MVC or equivalent separation of concerns: keep business logic in separate services/managers/controllers, and keep UI code focused on presentation and input wiring.
+- Do not patch broken state with runtime “helper” fixes. Initialize systems correctly or fix the underlying cause.
+- Do not hide failures with best-effort fallbacks unless explicitly requested. Preserve failure behavior and fix the root cause.
+- Prefer double math for calculations, and convert to float only where an API or engine requires it.
+- Do not create local helper functions inside methods. If helper logic is needed, move it to a utility class, namespace, or the related type.
+- Avoid repeated dynamic casts or unsafe casts. Prefer stronger typing, virtual dispatch, events, or better ownership boundaries.
+- Do not create default values when a valid value is required. Throw an exception or fail fast instead of silently constructing invalid state.
+- Do not use nullable-style patterns as a substitute for proper ownership and initialization. Represent optional data explicitly only when the domain truly allows absence.
+- Use a well-formatted if / else if chain for mutually exclusive null or validity checks.
+- Prefer explicit types and named abstractions over clever shorthand.
+- Keep ownership clear. Use references when a value is required, pointers only when absence or polymorphism is intended, and smart pointers only when they reflect real ownership semantics.
+- Favor RAII for resource lifetime management.
+- Keep headers minimal and implementation details in source files where possible.
+- Avoid putting heavy logic in constructors when a separate initialization flow makes failure handling and readability better.
+- Prefer standard library facilities over custom infrastructure unless there is a clear technical reason not to.

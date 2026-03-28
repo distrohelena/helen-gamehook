@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{4581376D-9A3C-4625-9174-38BA2E7EE05C}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>HelenRuntime</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <OutDir>$(SolutionDir)bin\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)obj\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <TargetName>HelenRuntime</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_LIB;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="BuildHookInstaller.cpp" />
+    <ClCompile Include="CommandDispatcher.cpp" />
+    <ClCompile Include="CommandExecutor.cpp" />
+    <ClCompile Include="DebugHookCallbacks.cpp" />
+    <ClCompile Include="DebugTraceService.cpp" />
+    <ClCompile Include="ExecutableFingerprint.cpp" />
+    <ClCompile Include="ExternalBindingService.cpp" />
+    <ClCompile Include="FileApiHookSet.cpp" />
+    <ClCompile Include="Hook.cpp" />
+    <ClCompile Include="HookBlobRelocator.cpp" />
+    <ClCompile Include="JsonConfigStore.cpp" />
+    <ClCompile Include="JsonParser.cpp" />
+    <ClCompile Include="JsonValue.cpp" />
+    <ClCompile Include="Log.cpp" />
+    <ClCompile Include="Memory.cpp" />
+    <ClCompile Include="MemoryStateObserverService.cpp" />
+    <ClCompile Include="PackAssetResolver.cpp" />
+    <ClCompile Include="PackRepository.cpp" />
+    <ClCompile Include="Pattern.cpp" />
+    <ClCompile Include="RuntimeLayout.cpp" />
+    <ClCompile Include="RuntimeValueStore.cpp" />
+    <ClCompile Include="VirtualFileService.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\include\HelenHook\BuildHookInstaller.h" />
+    <ClInclude Include="..\include\HelenHook\BuildDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\BuildMatchDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\CommandDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\CommandDispatcher.h" />
+    <ClInclude Include="..\include\HelenHook\CommandExecutor.h" />
+    <ClInclude Include="..\include\HelenHook\CommandMapEntryDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\CommandStepDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\ConfigEntryDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\DebugHookCallbacks.h" />
+    <ClInclude Include="..\include\HelenHook\DebugTraceService.h" />
+    <ClInclude Include="..\include\HelenHook\ExecutableFingerprint.h" />
+    <ClInclude Include="..\include\HelenHook\ExternalBindingService.h" />
+    <ClInclude Include="..\include\HelenHook\FeatureDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\FileApiHookSet.h" />
+    <ClInclude Include="..\include\HelenHook\Hook.h" />
+    <ClInclude Include="..\include\HelenHook\HookBlobRelocator.h" />
+    <ClInclude Include="..\include\HelenHook\HookDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\JsonConfigStore.h" />
+    <ClInclude Include="..\include\HelenHook\JsonParser.h" />
+    <ClInclude Include="..\include\HelenHook\JsonValue.h" />
+    <ClInclude Include="..\include\HelenHook\LoadedBuildPack.h" />
+    <ClInclude Include="..\include\HelenHook\Log.h" />
+    <ClInclude Include="..\include\HelenHook\Memory.h" />
+    <ClInclude Include="..\include\HelenHook\MemoryStateObserverCheckDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\MemoryStateObserverDebugView.h" />
+    <ClInclude Include="..\include\HelenHook\MemoryStateObserverDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\MemoryStateObserverMapEntryDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\MemoryStateObserverService.h" />
+    <ClInclude Include="..\include\HelenHook\MemoryStateObserverUpdate.h" />
+    <ClInclude Include="..\include\HelenHook\PackAssetResolver.h" />
+    <ClInclude Include="..\include\HelenHook\PackDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\PackRepository.h" />
+    <ClInclude Include="..\include\HelenHook\Pattern.h" />
+    <ClInclude Include="..\include\HelenHook\RuntimeLayout.h" />
+    <ClInclude Include="..\include\HelenHook\RuntimeValueStore.h" />
+    <ClInclude Include="..\include\HelenHook\VirtualFileDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\VirtualFileHandle.h" />
+    <ClInclude Include="..\include\HelenHook\VirtualFileService.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

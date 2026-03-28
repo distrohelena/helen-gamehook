@@ -1,0 +1,53 @@
+{
+  "commands": [
+    {
+      "id": "applySavedSubtitleSize",
+      "name": "Apply Saved Subtitle Size",
+      "steps": [
+        {
+          "kind": "run-command",
+          "command": "applySubtitleSize"
+        }
+      ]
+    },
+    {
+      "id": "applySubtitleSize",
+      "name": "Apply Subtitle Size",
+      "steps": [
+        {
+          "kind": "read-config-int",
+          "configKey": "ui.subtitleSize",
+          "valueName": "subtitleSizeState"
+        },
+        {
+          "kind": "map-int-to-double",
+          "inputValueName": "subtitleSizeState",
+          "outputValueName": "subtitleScale",
+          "mappings": [
+            {
+              "match": 0,
+              "value": 2.0
+            },
+            {
+              "match": 1,
+              "value": 4.0
+            },
+            {
+              "match": 2,
+              "value": 8.0
+            }
+          ]
+        },
+        {
+          "kind": "set-live-double",
+          "target": "subtitle.scale",
+          "valueName": "subtitleScale"
+        },
+        {
+          "kind": "log-message",
+          "message": "Applied Batman gameplay subtitle scale."
+        }
+      ]
+    }
+  ]
+}
