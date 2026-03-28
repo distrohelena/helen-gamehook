@@ -1,0 +1,10 @@
+{
+  "virtualFiles": [
+    {
+      "id": "bmgameGameplayPackage",
+      "path": "BmGame/CookedPC/BmGame.u",
+      "mode": "replace-on-read",
+      "source": "assets/packages/BmGame-subtitle-signal.u"
+    }
+  ]
+}

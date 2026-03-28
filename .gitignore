@@ -1,0 +1,15 @@
+.vs/
+**/bin/
+**/obj/
+/.dotnet/
+/.dotnet-home/
+/.dotnetcli/
+/.codex-temp/
+/artifacts/*.png
+/artifacts/*.json
+*.VC.db
+*.VC.opendb
+*.suo
+*.user
+*.log
+*.tmp

@@ -1,0 +1,132 @@
+{
+  "runtimeSlots": [
+    {
+      "id": "subtitle.scale",
+      "type": "float32",
+      "initialValue": 1.5
+    }
+  ],
+  "stateObservers": [
+    {
+      "id": "subtitleUiStateObserver",
+      "scanStartAddress": "0x28000000",
+      "scanEndAddress": "0x2C000000",
+      "scanStride": 4,
+      "valueOffset": 0,
+      "pollIntervalMs": 250,
+      "targetConfigKey": "ui.subtitleSize",
+      "command": "applySubtitleSize",
+      "checks": [
+        {
+          "comparison": "equals-constant",
+          "offset": -16,
+          "expectedValue": 50
+        },
+        {
+          "comparison": "equals-constant",
+          "offset": -12,
+          "expectedValue": 100
+        },
+        {
+          "comparison": "equals-constant",
+          "offset": -8,
+          "expectedValue": 100
+        },
+        {
+          "comparison": "equals-constant",
+          "offset": -4,
+          "expectedValue": 100
+        },
+        {
+          "comparison": "equals-constant",
+          "offset": 4,
+          "expectedValue": 1
+        },
+        {
+          "comparison": "equals-constant",
+          "offset": 8,
+          "expectedValue": 0
+        },
+        {
+          "comparison": "equals-constant",
+          "offset": 12,
+          "expectedValue": 1
+        },
+        {
+          "comparison": "equals-value-at-offset",
+          "offset": 16,
+          "compareOffset": 0
+        },
+        {
+          "comparison": "equals-constant",
+          "offset": 20,
+          "expectedValue": 2
+        },
+        {
+          "comparison": "equals-constant",
+          "offset": 28,
+          "expectedValue": 3
+        },
+        {
+          "comparison": "equals-constant",
+          "offset": 32,
+          "expectedValue": 3
+        }
+      ],
+      "mappings": [
+        {
+          "match": 4101,
+          "value": 0
+        },
+        {
+          "match": 4102,
+          "value": 1
+        },
+        {
+          "match": 4103,
+          "value": 2
+        }
+      ]
+    }
+  ],
+  "hooks": [
+    {
+      "id": "subtitleTextScaleHook",
+      "module": "ShippingPC-BmGame.exe",
+      "rva": "0x006B00DA",
+      "expectedBytes": "D9E8D9542404D91C24",
+      "action": "inline-jump-to-pack-blob",
+      "overwriteLength": 9,
+      "resumeOffsetFromTarget": 45,
+      "blob": {
+        "assetPath": "assets/native/batman-global-text-scale.bin",
+        "entryOffset": 0,
+        "relocations": [
+          {
+            "offset": 2,
+            "encoding": "abs32",
+            "source": {
+              "kind": "runtime-slot",
+              "slot": "subtitle.scale"
+            }
+          },
+          {
+            "offset": 36,
+            "encoding": "abs32",
+            "source": {
+              "kind": "runtime-slot",
+              "slot": "subtitle.scale"
+            }
+          },
+          {
+            "offset": 58,
+            "encoding": "rel32",
+            "source": {
+              "kind": "hook-resume"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
