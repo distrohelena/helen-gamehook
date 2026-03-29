@@ -41,18 +41,12 @@ powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Deploy-Ba
 powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Launch-Check-Batman.ps1
 ```
 
-After the process starts, load into gameplay and confirm at least one spoken line produces subtitles from the deployed pack. This is the end-to-end check that the runtime hook loaded, the shipped delta-backed pack mounted, and the game is actually using the deployed assets rather than just starting successfully.
+After the process starts, open the pause menu and confirm it still shows `Subtitle Size`. Change the value and verify the subtitle size updates live, then confirm `D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\helengamehook\config\runtime.json` is updated while `D:\steam\steamapps\common\Batman Arkham Asylum GOTY\BmGame\CookedPC\BmGame.u` remains unchanged.
 
 5. Verify the deployed pack is still the shipped delta-backed package:
 
 ```powershell
-$FilesJson = 'D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\helengamehook\packs\batman-aa-subtitles\builds\steam-goty-1.0\files.json'
-$DeltaPath = 'D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\helengamehook\packs\batman-aa-subtitles\builds\steam-goty-1.0\assets\deltas\BmGame-subtitle-signal.hgdelta'
-$Manifest = Get-Content -LiteralPath $FilesJson -Raw | ConvertFrom-Json
-$Manifest.virtualFiles[0].mode
-$Manifest.virtualFiles[0].source.kind
-$Manifest.virtualFiles[0].source.path
-Get-FileHash -LiteralPath $DeltaPath -Algorithm SHA256
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Test-BatmanKnownGoodGameplayPackage.ps1
 ```
 
 Important notes:
