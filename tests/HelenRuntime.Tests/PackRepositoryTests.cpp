@@ -138,16 +138,16 @@ void RunPackRepositoryTests()
       "id": "bmgameGameplayPackage",
       "path": "BmGame/CookedPC/BmGame.u",
       "mode": "delta-on-read",
-      "source": {
+        "source": {
         "kind": "delta-file",
         "path": "assets/deltas/BmGame-subtitle-signal.hgdelta",
         "base": {
           "size": 101403981,
-          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          "sha256": "AaBbCcDdEeFf00112233445566778899AaBbCcDdEeFf00112233445566778899"
         },
         "target": {
           "size": 101405329,
-          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          "sha256": "FfEeDdCcBbAa99887766554433221100FfEeDdCcBbAa99887766554433221100"
         },
         "chunkSize": 65536
       }
@@ -449,7 +449,9 @@ void RunPackRepositoryTests()
         Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Kind == helen::VirtualFileSourceKind::DeltaFile, "Virtual file source kind mismatch.");
         Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Path == std::filesystem::path("assets/deltas/BmGame-subtitle-signal.hgdelta"), "Virtual file source path mismatch.");
         Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Base.FileSize == 101403981, "Virtual file base size mismatch.");
+        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Base.Sha256 == "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899", "Virtual file base hash normalization mismatch.");
         Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Target.FileSize == 101405329, "Virtual file target size mismatch.");
+        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Target.Sha256 == "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100", "Virtual file target hash normalization mismatch.");
         Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.ChunkSize == 65536, "Virtual file chunk size mismatch.");
         Expect(loaded_valid_pack->Build.RuntimeSlots.size() == 1, "Loaded runtime slot count mismatch.");
         Expect(loaded_valid_pack->Build.StateObservers.size() == 1, "Loaded state observer count mismatch.");
