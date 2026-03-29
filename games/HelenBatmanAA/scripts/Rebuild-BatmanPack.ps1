@@ -14,16 +14,20 @@ $PackBuildRoot = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles\
 $BuildAssetsRoot = Join-Path $BuilderRoot 'build-assets\pause-runtime-scale'
 $FfdecPath = Join-Path $BuilderRoot 'ffdec\ffdec-cli.exe'
 $BasePackagePath = Join-Path $BuilderRoot 'bmgame-unpacked\BmGame.u'
+$FilesJsonPath = Join-Path $PackBuildRoot 'files.json'
 $ManifestPath = Join-Path $BuildAssetsRoot 'pause-runtime-scale.manifest.jsonc'
 $PauseListItemOverridePath = Join-Path $BatmanRoot 'patch-source\PauseRuntimeScaleListItem.as'
 $GeneratedPauseScriptsRoot = Join-Path $BuildAssetsRoot '_build\pause-scripts'
 $GeneratedPauseListItemPath = Join-Path $GeneratedPauseScriptsRoot '__Packages\rs\ui\ListItem.as'
 $PauseStructuralGfxPath = Join-Path $BuildAssetsRoot '_build\Pause-runtime-scale-structural.gfx'
 $PauseOutputGfxPath = Join-Path $BuildAssetsRoot 'Pause-runtime-scale.gfx'
-$GameplayPackagePath = Join-Path $PackBuildRoot 'assets\packages\BmGame-subtitle-signal.u'
+$GeneratedGameplayPackagePath = Join-Path $BuildAssetsRoot 'BmGame-subtitle-signal.u'
+$GameplayDeltaPath = Join-Path $PackBuildRoot 'assets\deltas\BmGame-subtitle-signal.hgdelta'
 $GlobalBlobPath = Join-Path $PackBuildRoot 'assets\native\batman-global-text-scale.bin'
+$BuildHgdeltaScriptPath = Join-Path $PSScriptRoot 'Build-Hgdelta.ps1'
 
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GameplayPackagePath) | Out-Null
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GeneratedGameplayPackagePath) | Out-Null
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GameplayDeltaPath) | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GlobalBlobPath) | Out-Null
 
 & dotnet build $SubtitleSizeModBuilderProjectPath -c $Configuration
@@ -73,10 +77,44 @@ if ($LASTEXITCODE -ne 0) {
     patch `
     --package $BasePackagePath `
     --manifest $ManifestPath `
-    --output $GameplayPackagePath
+    --output $GeneratedGameplayPackagePath
 if ($LASTEXITCODE -ne 0) {
     throw "BmGame package patch build failed."
 }
+
+$deltaInfo = & $BuildHgdeltaScriptPath `
+    -BaseFile $BasePackagePath `
+    -TargetFile $GeneratedGameplayPackagePath `
+    -OutputFile $GameplayDeltaPath `
+    -ChunkSize 65536
+if ($LASTEXITCODE -ne 0) {
+    throw "Batman gameplay hgdelta build failed."
+}
+
+$filesManifest = @{
+    virtualFiles = @(
+        @{
+            id = 'bmgameGameplayPackage'
+            path = 'BmGame/CookedPC/BmGame.u'
+            mode = 'delta-on-read'
+            source = @{
+                kind = 'delta-file'
+                path = 'assets/deltas/BmGame-subtitle-signal.hgdelta'
+                base = @{
+                    size = $deltaInfo.BaseSize
+                    sha256 = $deltaInfo.BaseSha256
+                }
+                target = @{
+                    size = $deltaInfo.TargetSize
+                    sha256 = $deltaInfo.TargetSha256
+                }
+                chunkSize = $deltaInfo.ChunkSize
+            }
+        }
+    )
+}
+
+$filesManifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $FilesJsonPath
 
 & dotnet run --project $NativeSubtitleExePatcherProjectPath -c $Configuration -- `
     export-global-text-scale-blob `
@@ -92,5 +130,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Output "Rebuilt Batman pack outputs:"
-Write-Output "  Gameplay package: $GameplayPackagePath"
+Write-Output "  Gameplay delta:   $GameplayDeltaPath"
+Write-Output "  Gameplay target:  $GeneratedGameplayPackagePath"
 Write-Output "  Native blob:      $GlobalBlobPath"

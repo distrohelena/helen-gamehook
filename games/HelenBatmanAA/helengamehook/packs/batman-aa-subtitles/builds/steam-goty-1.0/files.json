@@ -1,10 +1,22 @@
 {
-  "virtualFiles": [
-    {
-      "id": "bmgameGameplayPackage",
-      "path": "BmGame/CookedPC/BmGame.u",
-      "mode": "replace-on-read",
-      "source": "assets/packages/BmGame-subtitle-signal.u"
-    }
-  ]
+    "virtualFiles":  [
+                         {
+                             "path":  "BmGame/CookedPC/BmGame.u",
+                             "source":  {
+                                            "path":  "assets/deltas/BmGame-subtitle-signal.hgdelta",
+                                            "base":  {
+                                                         "sha256":  "621a5c8d99c9f7c7283531d05a4a6d56bdf15ad93ede0d5bf2f5d3e45117ff36",
+                                                         "size":  100365345
+                                                     },
+                                            "chunkSize":  65536,
+                                            "target":  {
+                                                           "sha256":  "b241625d604de97f7b7fda53ad6df2346992d8ef2b9be66fd45d395839080329",
+                                                           "size":  101117004
+                                                       },
+                                            "kind":  "delta-file"
+                                        },
+                             "id":  "bmgameGameplayPackage",
+                             "mode":  "delta-on-read"
+                         }
+                     ]
 }
