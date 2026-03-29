@@ -79,6 +79,7 @@
     <ClCompile Include="DebugTraceService.cpp" />
     <ClCompile Include="ExecutableFingerprint.cpp" />
     <ClCompile Include="ExternalBindingService.cpp" />
+    <ClCompile Include="FileFingerprint.cpp" />
     <ClCompile Include="FileApiHookSet.cpp" />
     <ClCompile Include="Hook.cpp" />
     <ClCompile Include="HookBlobRelocator.cpp" />
@@ -91,6 +92,7 @@
     <ClCompile Include="PackAssetResolver.cpp" />
     <ClCompile Include="PackRepository.cpp" />
     <ClCompile Include="Pattern.cpp" />
+    <ClCompile Include="HgdeltaFile.cpp" />
     <ClCompile Include="ProxyBootstrapCoordinator.cpp" />
     <ClCompile Include="RuntimeLayout.cpp" />
     <ClCompile Include="RuntimeValueStore.cpp" />
@@ -111,6 +113,7 @@
     <ClInclude Include="..\include\HelenHook\DebugTraceService.h" />
     <ClInclude Include="..\include\HelenHook\ExecutableFingerprint.h" />
     <ClInclude Include="..\include\HelenHook\ExternalBindingService.h" />
+    <ClInclude Include="..\include\HelenHook\FileFingerprint.h" />
     <ClInclude Include="..\include\HelenHook\FeatureDefinition.h" />
     <ClInclude Include="..\include\HelenHook\FileApiHookSet.h" />
     <ClInclude Include="..\include\HelenHook\Hook.h" />
@@ -132,6 +135,9 @@
     <ClInclude Include="..\include\HelenHook\PackDefinition.h" />
     <ClInclude Include="..\include\HelenHook\PackRepository.h" />
     <ClInclude Include="..\include\HelenHook\Pattern.h" />
+    <ClInclude Include="..\include\HelenHook\HgdeltaChunkDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\HgdeltaChunkKind.h" />
+    <ClInclude Include="..\include\HelenHook\HgdeltaFile.h" />
     <ClInclude Include="..\include\HelenHook\ProxyBootstrapCoordinator.h" />
     <ClInclude Include="..\include\HelenHook\RuntimeLayout.h" />
     <ClInclude Include="..\include\HelenHook\RuntimeValueStore.h" />

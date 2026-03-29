@@ -37,6 +37,11 @@ void RunCommandDispatcherTests();
 void RunExecutableFingerprintTests();
 
 /**
+ * @brief Runs the generic file fingerprint test coverage for arbitrary file hashing.
+ */
+void RunFileFingerprintTests();
+
+/**
  * @brief Runs the external binding service test coverage for patched gameplay callback resolution.
  */
 void RunExternalBindingServiceTests();
@@ -82,6 +87,11 @@ void RunRuntimeLayoutTests();
 void RunRuntimeValueStoreTests();
 
 /**
+ * @brief Runs the hgdelta container parsing test coverage used by future delta-backed file sources.
+ */
+void RunHgdeltaFileTests();
+
+/**
  * @brief Runs the virtual file service test coverage for RAM-backed exact-path replacement handles.
  */
 void RunVirtualFileServiceTests();
@@ -102,7 +112,9 @@ int main()
         RunBuildRuntimeCoordinatorTests();
         RunExternalBindingServiceTests();
         RunHelenGameHookExportTests();
+        RunFileFingerprintTests();
         RunExecutableFingerprintTests();
+        RunHgdeltaFileTests();
         RunPackAssetResolverTests();
         RunPackRepositoryTests();
         RunProxyBootstrapCoordinatorTests();
