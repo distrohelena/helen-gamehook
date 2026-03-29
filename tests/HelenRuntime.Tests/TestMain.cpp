@@ -92,6 +92,11 @@ void RunRuntimeValueStoreTests();
 void RunHgdeltaFileTests();
 
 /**
+ * @brief Runs the delta-backed virtual file source coverage for exact base-file reconstruction.
+ */
+void RunDeltaVirtualFileSourceTests();
+
+/**
  * @brief Runs the virtual file service test coverage for RAM-backed exact-path replacement handles.
  */
 void RunVirtualFileServiceTests();
@@ -115,6 +120,7 @@ int main()
         RunFileFingerprintTests();
         RunExecutableFingerprintTests();
         RunHgdeltaFileTests();
+        RunDeltaVirtualFileSourceTests();
         RunPackAssetResolverTests();
         RunPackRepositoryTests();
         RunProxyBootstrapCoordinatorTests();

@@ -138,4 +138,14 @@ namespace helen
 
         return resolved_path;
     }
+
+    const std::filesystem::path& PackAssetResolver::GetPackRoot() const noexcept
+    {
+        return pack_root_;
+    }
+
+    const std::filesystem::path& PackAssetResolver::GetBuildRoot() const noexcept
+    {
+        return build_root_;
+    }
 }

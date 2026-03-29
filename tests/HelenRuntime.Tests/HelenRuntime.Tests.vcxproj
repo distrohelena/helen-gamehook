@@ -81,6 +81,7 @@
     <ClCompile Include="CommandExecutorTests.cpp" />
     <ClCompile Include="CommandDispatcherTests.cpp" />
     <ClCompile Include="DebugTraceServiceTests.cpp" />
+    <ClCompile Include="DeltaVirtualFileSourceTests.cpp" />
     <ClCompile Include="FileFingerprintTests.cpp" />
     <ClCompile Include="ExecutableFingerprintTests.cpp" />
     <ClCompile Include="ExternalBindingServiceTests.cpp" />

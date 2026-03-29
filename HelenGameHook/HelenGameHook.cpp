@@ -351,10 +351,11 @@ namespace
 
     /**
      * @brief Creates and wires every runtime-owned service for one active build pack.
+     * @param layout Resolved runtime directory layout that owns writable cache and config directories.
      * @param active_pack Active loaded pack/build declaration set chosen for the host executable.
      * @return True when every service initializes successfully; otherwise false.
      */
-    bool InitializeActivePackRuntime(const helen::LoadedBuildPack& active_pack)
+    bool InitializeActivePackRuntime(const helen::RuntimeLayout& layout, const helen::LoadedBuildPack& active_pack)
     {
         if (!RegisterDeclaredConfigEntries(active_pack))
         {
@@ -395,7 +396,7 @@ namespace
             return false;
         }
 
-        g_virtual_files = std::make_unique<helen::VirtualFileService>(*g_asset_resolver);
+        g_virtual_files = std::make_unique<helen::VirtualFileService>(*g_asset_resolver, layout.CacheDirectory);
         if (!RegisterDeclaredVirtualFiles(active_pack))
         {
             return false;
@@ -525,7 +526,7 @@ extern "C" __declspec(dllexport) BOOL __stdcall HelenInitialize()
         return FALSE;
     }
 
-    if (g_active_pack && !InitializeActivePackRuntime(*g_active_pack))
+    if (g_active_pack && !InitializeActivePackRuntime(layout, *g_active_pack))
     {
         ResetRuntimeState();
         return FALSE;

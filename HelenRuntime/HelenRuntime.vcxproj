@@ -77,6 +77,7 @@
     <ClCompile Include="CommandExecutor.cpp" />
     <ClCompile Include="DebugHookCallbacks.cpp" />
     <ClCompile Include="DebugTraceService.cpp" />
+    <ClCompile Include="DeltaVirtualFileSource.cpp" />
     <ClCompile Include="ExecutableFingerprint.cpp" />
     <ClCompile Include="ExternalBindingService.cpp" />
     <ClCompile Include="FileFingerprint.cpp" />
@@ -112,6 +113,7 @@
     <ClInclude Include="..\include\HelenHook\ConfigEntryDefinition.h" />
     <ClInclude Include="..\include\HelenHook\DebugHookCallbacks.h" />
     <ClInclude Include="..\include\HelenHook\DebugTraceService.h" />
+    <ClInclude Include="..\include\HelenHook\DeltaVirtualFileSource.h" />
     <ClInclude Include="..\include\HelenHook\ExecutableFingerprint.h" />
     <ClInclude Include="..\include\HelenHook\ExternalBindingService.h" />
     <ClInclude Include="..\include\HelenHook\FileFingerprint.h" />
@@ -137,6 +139,7 @@
     <ClInclude Include="..\include\HelenHook\PackDefinition.h" />
     <ClInclude Include="..\include\HelenHook\PackRepository.h" />
     <ClInclude Include="..\include\HelenHook\Pattern.h" />
+    <ClInclude Include="..\include\HelenHook\RegisteredVirtualFile.h" />
     <ClInclude Include="..\include\HelenHook\HgdeltaChunkDefinition.h" />
     <ClInclude Include="..\include\HelenHook\HgdeltaChunkKind.h" />
     <ClInclude Include="..\include\HelenHook\HgdeltaFile.h" />
