@@ -24,12 +24,17 @@ Recommended Batman workflow:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Prepare-BatmanBuilderWorkspace.ps1 `
   -BasePackagePath D:\trusted\BmGame.u `
+  -FrontendBasePackagePath D:\trusted\Startup_INT.upk `
   -FfdecCliPath C:\tools\ffdec\ffdec-cli.exe
 ```
 
 This populates the local ignored builder inputs:
 
 - `builder\extracted\bmgame-unpacked\BmGame.u`
+- `builder\extracted\frontend\startup-int-unpacked\Startup_INT.upk`
+- `builder\extracted\frontend\mainv2\frontend-mainv2.gfx`
+- `builder\extracted\frontend\mainv2\frontend-mainv2.xml`
+- `builder\extracted\frontend\mainv2\frontend-mainv2-export\scripts`
 - `builder\extracted\ffdec\...`
 - `builder\extracted\pause\Pause-extracted.gfx`
 - `builder\extracted\pause\Pause.xml`

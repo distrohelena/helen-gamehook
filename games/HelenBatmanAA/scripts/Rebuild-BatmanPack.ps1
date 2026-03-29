@@ -59,7 +59,7 @@ $missingBuilderWorkspacePaths = @(
 
 if ($missingBuilderWorkspacePaths.Count -gt 0) {
     $missingBuilderWorkspaceText = ($missingBuilderWorkspacePaths | ForEach-Object { "  - $_" }) -join [Environment]::NewLine
-    throw "Batman builder workspace is incomplete. Run `"$PrepareBuilderWorkspaceScriptPath`" with a trusted BmGame.u and FFDec before rebuilding.$([Environment]::NewLine)Missing paths:$([Environment]::NewLine)$missingBuilderWorkspaceText"
+    throw "Batman builder workspace is incomplete. Run `"$PrepareBuilderWorkspaceScriptPath`" with trusted BmGame.u, trusted Startup_INT.upk, and FFDec before rebuilding.$([Environment]::NewLine)Missing paths:$([Environment]::NewLine)$missingBuilderWorkspaceText"
 }
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GeneratedGameplayPackagePath) | Out-Null
