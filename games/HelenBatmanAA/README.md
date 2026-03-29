@@ -19,7 +19,7 @@ Current layout:
 
 Recommended Batman workflow:
 
-1. Prepare the ignored local builder workspace from a trusted Batman base package and FFDec:
+1. Prepare the ignored local builder workspace from trusted Batman base packages plus FFDec:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Prepare-BatmanBuilderWorkspace.ps1 `
