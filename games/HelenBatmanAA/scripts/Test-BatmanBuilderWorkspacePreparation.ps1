@@ -12,6 +12,7 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
 }
 $PrepareScriptPath = Join-Path $BatmanRoot 'scripts\Prepare-BatmanBuilderWorkspace.ps1'
 $BasePackagePath = Join-Path $BatmanRoot 'builder\extracted\bmgame-unpacked\BmGame.u'
+$FrontendBasePackagePath = Join-Path $BatmanRoot 'builder\extracted\frontend\startup-int-unpacked\Startup_INT.upk'
 $FfdecCliPath = Join-Path $BatmanRoot 'builder\extracted\ffdec\ffdec-cli.exe'
 $ExpectedBaseSha256 = '621A5C8D99C9F7C7283531D05A4A6D56BDF15AD93EDE0D5BF2F5D3E45117FF36'
 $ExpectedPauseGfxSha256 = '0426443F03642194D888199D7BB190DE48E3F7C7EB589FB9E8D732728330A630'
@@ -19,6 +20,10 @@ $ExpectedHudGfxSha256 = 'EF62EB89EB090E607B45AAF4AE46922CB2A78B678452F652F042480
 $TemporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("BatmanBuilderPrep-" + [System.Guid]::NewGuid().ToString('N'))
 $BuilderRoot = Join-Path $TemporaryRoot 'builder'
 $PreparedBasePackagePath = Join-Path $BuilderRoot 'extracted\bmgame-unpacked\BmGame.u'
+$PreparedFrontendBasePackagePath = Join-Path $BuilderRoot 'extracted\frontend\startup-int-unpacked\Startup_INT.upk'
+$PreparedFrontendGfxPath = Join-Path $BuilderRoot 'extracted\frontend\mainv2\frontend-mainv2.gfx'
+$PreparedFrontendXmlPath = Join-Path $BuilderRoot 'extracted\frontend\mainv2\frontend-mainv2.xml'
+$PreparedFrontendScriptsRoot = Join-Path $BuilderRoot 'extracted\frontend\mainv2\frontend-mainv2-export\scripts'
 $PreparedPauseGfxPath = Join-Path $BuilderRoot 'extracted\pause\Pause-extracted.gfx'
 $PreparedPauseXmlPath = Join-Path $BuilderRoot 'extracted\pause\Pause.xml'
 $PreparedPauseScriptsRoot = Join-Path $BuilderRoot 'extracted\pause\pause-ffdec-export\scripts'
@@ -26,6 +31,7 @@ $PreparedHudGfxPath = Join-Path $BuilderRoot 'extracted\hud\HUD-extracted.gfx'
 $PreparedHudXmlPath = Join-Path $BuilderRoot 'extracted\hud\HUD.xml'
 $PreparedHudScriptsRoot = Join-Path $BuilderRoot 'extracted\hud\hud-ffdec-scripts\scripts'
 $PreparedFfdecCliPath = Join-Path $BuilderRoot 'extracted\ffdec\ffdec-cli.exe'
+$FrontendAudioActionPath = Join-Path $PreparedFrontendScriptsRoot 'DefineSprite_359_ScreenOptionsAudio\frame_1\DoAction.as'
 $PauseScreenActionPath = Join-Path $PreparedPauseScriptsRoot 'DefineSprite_394_ScreenOptionsAudio\frame_1\DoAction.as'
 $HudFrameActionPath = Join-Path $PreparedHudScriptsRoot 'DefineSprite_987\frame_1\DoAction.as'
 
@@ -34,6 +40,7 @@ try {
         -BatmanRoot $BatmanRoot `
         -BuilderRoot $BuilderRoot `
         -BasePackagePath $BasePackagePath `
+        -FrontendBasePackagePath $FrontendBasePackagePath `
         -FfdecCliPath $FfdecCliPath `
         -Configuration $Configuration
     if ($LASTEXITCODE -ne 0) {
@@ -42,6 +49,11 @@ try {
 
     $requiredPaths = @(
         $PreparedBasePackagePath,
+        $PreparedFrontendBasePackagePath,
+        $PreparedFrontendGfxPath,
+        $PreparedFrontendXmlPath,
+        $PreparedFrontendScriptsRoot,
+        $FrontendAudioActionPath,
         $PreparedPauseGfxPath,
         $PreparedPauseXmlPath,
         $PreparedPauseScriptsRoot,
@@ -62,6 +74,11 @@ try {
     $preparedBaseSha256 = (Get-FileHash -LiteralPath $PreparedBasePackagePath -Algorithm SHA256).Hash
     if ($preparedBaseSha256 -ne $ExpectedBaseSha256) {
         throw "Prepared base package hash mismatch. Expected $ExpectedBaseSha256, found $preparedBaseSha256."
+    }
+
+    $frontendXmlContents = Get-Content -LiteralPath $PreparedFrontendXmlPath -Raw
+    if ($frontendXmlContents.IndexOf('swfName="MainV2"', [System.StringComparison]::Ordinal) -lt 0) {
+        throw 'Prepared frontend XML is missing the MainV2 movie marker.'
     }
 
     $preparedPauseGfxSha256 = (Get-FileHash -LiteralPath $PreparedPauseGfxPath -Algorithm SHA256).Hash
@@ -87,6 +104,11 @@ try {
     $pauseActionContents = Get-Content -LiteralPath $PauseScreenActionPath -Raw
     if ($pauseActionContents.IndexOf('Subtitles', [System.StringComparison]::Ordinal) -lt 0) {
         throw "Prepared pause FFDec export does not contain the audio screen action script."
+    }
+
+    $frontendActionContents = Get-Content -LiteralPath $FrontendAudioActionPath -Raw
+    if ($frontendActionContents.IndexOf('Options Audio', [System.StringComparison]::Ordinal) -lt 0) {
+        throw 'Prepared frontend FFDec export does not contain the MainV2 audio action script.'
     }
 
     $hudActionContents = Get-Content -LiteralPath $HudFrameActionPath -Raw

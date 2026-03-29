@@ -4,6 +4,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$BasePackagePath,
     [Parameter(Mandatory = $true)]
+    [string]$FrontendBasePackagePath,
+    [Parameter(Mandatory = $true)]
     [string]$FfdecCliPath,
     [string]$Configuration = 'Release'
 )
@@ -69,12 +71,18 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
 }
 $BuilderRoot = Resolve-OptionalBuilderRoot -BatmanRootPath $BatmanRoot -BuilderRootPath $BuilderRoot
 $BasePackagePath = (Resolve-Path $BasePackagePath).Path
+$FrontendBasePackagePath = (Resolve-Path $FrontendBasePackagePath).Path
 $FfdecCliPath = (Resolve-Path $FfdecCliPath).Path
 $SourceBuilderRoot = Join-Path $BatmanRoot 'builder'
 $ExtractedRoot = Join-Path $BuilderRoot 'extracted'
 $ToolRoot = Join-Path $SourceBuilderRoot 'tools\NativeSubtitleExePatcher'
 $BmGameGfxPatcherProjectPath = Join-Path $ToolRoot 'BmGameGfxPatcher\BmGameGfxPatcher.csproj'
 $PreparedBasePackagePath = Join-Path $ExtractedRoot 'bmgame-unpacked\BmGame.u'
+$PreparedFrontendBasePackagePath = Join-Path $ExtractedRoot 'frontend\startup-int-unpacked\Startup_INT.upk'
+$PreparedFrontendRoot = Join-Path $ExtractedRoot 'frontend\mainv2'
+$PreparedFrontendGfxPath = Join-Path $PreparedFrontendRoot 'frontend-mainv2.gfx'
+$PreparedFrontendXmlPath = Join-Path $PreparedFrontendRoot 'frontend-mainv2.xml'
+$PreparedFrontendExportRoot = Join-Path $PreparedFrontendRoot 'frontend-mainv2-export'
 $PreparedFfdecRoot = Join-Path $ExtractedRoot 'ffdec'
 $PreparedFfdecCliPath = Join-Path $PreparedFfdecRoot 'ffdec-cli.exe'
 $PreparedPauseGfxPath = Join-Path $ExtractedRoot 'pause\Pause-extracted.gfx'
@@ -86,6 +94,8 @@ $PreparedHudExportRoot = Join-Path $ExtractedRoot 'hud\hud-ffdec-scripts'
 $SourceFfdecRoot = Split-Path -Parent $FfdecCliPath
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PreparedBasePackagePath) | Out-Null
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PreparedFrontendBasePackagePath) | Out-Null
+New-Item -ItemType Directory -Force -Path $PreparedFrontendRoot | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PreparedPauseGfxPath) | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PreparedHudGfxPath) | Out-Null
 
@@ -95,6 +105,10 @@ if (-not (Test-Path -LiteralPath $BmGameGfxPatcherProjectPath)) {
 
 if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($BasePackagePath, $PreparedBasePackagePath)) {
     Copy-Item -LiteralPath $BasePackagePath -Destination $PreparedBasePackagePath -Force
+}
+
+if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($FrontendBasePackagePath, $PreparedFrontendBasePackagePath)) {
+    Copy-Item -LiteralPath $FrontendBasePackagePath -Destination $PreparedFrontendBasePackagePath -Force
 }
 
 if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($SourceFfdecRoot, $PreparedFfdecRoot)) {
@@ -136,6 +150,33 @@ Invoke-CheckedCommand `
     ) `
     -FailureMessage 'Failed to extract GameHUD.HUD from the trusted Batman package.'
 
+Reset-Directory -Path $PreparedFrontendExportRoot
+
+Invoke-CheckedCommand `
+    -FilePath 'dotnet' `
+    -Arguments @(
+        'run',
+        '--project', $BmGameGfxPatcherProjectPath,
+        '-c', $Configuration,
+        '--',
+        'extract-gfx',
+        '--package', $PreparedFrontendBasePackagePath,
+        '--owner', 'MainMenu',
+        '--name', 'MainV2',
+        '--output', $PreparedFrontendGfxPath
+    ) `
+    -FailureMessage 'Failed to extract MainMenu.MainV2 from the trusted frontend package.'
+
+Invoke-CheckedCommand `
+    -FilePath $PreparedFfdecCliPath `
+    -Arguments @('-swf2xml', $PreparedFrontendGfxPath, $PreparedFrontendXmlPath) `
+    -FailureMessage 'FFDec failed to convert frontend-mainv2.gfx into frontend-mainv2.xml.'
+
+Invoke-CheckedCommand `
+    -FilePath $PreparedFfdecCliPath `
+    -Arguments @('-export', 'script', $PreparedFrontendExportRoot, $PreparedFrontendGfxPath) `
+    -FailureMessage 'FFDec failed to export the MainV2 ActionScript tree.'
+
 Reset-Directory -Path $PreparedPauseExportRoot
 Reset-Directory -Path $PreparedHudExportRoot
 
@@ -162,6 +203,10 @@ Invoke-CheckedCommand `
 Write-Output 'Prepared Batman builder workspace:'
 Write-Output "  Builder root:    $BuilderRoot"
 Write-Output "  Base package:    $PreparedBasePackagePath"
+Write-Output "  Frontend base:   $PreparedFrontendBasePackagePath"
+Write-Output "  Frontend GFX:    $PreparedFrontendGfxPath"
+Write-Output "  Frontend XML:    $PreparedFrontendXmlPath"
+Write-Output "  Frontend scripts: $(Join-Path $PreparedFrontendExportRoot 'scripts')"
 Write-Output "  Pause GFX:       $PreparedPauseGfxPath"
 Write-Output "  Pause XML:       $PreparedPauseXmlPath"
 Write-Output "  Pause scripts:   $(Join-Path $PreparedPauseExportRoot 'scripts')"
