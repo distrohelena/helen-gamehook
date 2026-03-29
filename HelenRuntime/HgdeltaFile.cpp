@@ -161,6 +161,7 @@ namespace
      * @param chunk_size Nominal chunk size from the delta header.
      * @param chunk_index Position of the chunk within the target file.
      * @param chunk_count Total number of chunks in the container.
+     * @param base_size Exact base file size recorded in the header.
      * @param target_size Exact reconstructed target size recorded in the header.
      * @param target_chunk_size Exact size of this chunk in the chunk table.
      * @param payload_offset Byte offset within the payload block.
@@ -172,6 +173,7 @@ namespace
         std::uint32_t chunk_size,
         std::size_t chunk_index,
         std::size_t chunk_count,
+        std::uint64_t base_size,
         std::uint64_t target_size,
         std::uint32_t target_chunk_size,
         std::uint64_t payload_offset,
@@ -208,6 +210,11 @@ namespace
 
         if (kind == 0)
         {
+            if (target_offset > base_size || base_size - target_offset < target_chunk_size)
+            {
+                throw std::runtime_error("Hgdelta base-copy chunk describes bytes outside the base file.");
+            }
+
             if (payload_offset != 0 || payload_size != 0)
             {
                 throw std::runtime_error("Hgdelta base-copy chunks must not reference payload bytes.");
@@ -216,6 +223,10 @@ namespace
         else if (payload_size == 0)
         {
             throw std::runtime_error("Hgdelta delta-byte chunks must reference payload bytes.");
+        }
+        else if (payload_size != target_chunk_size)
+        {
+            throw std::runtime_error("Hgdelta delta-byte chunks must store the full target chunk bytes.");
         }
 
         if (payload_offset > payload_bytes.size() || payload_bytes.size() - payload_offset < payload_size)
@@ -283,11 +294,6 @@ namespace helen
             throw std::runtime_error("Hgdelta file contains an invalid chunk size.");
         }
 
-        if (chunk_count == 0)
-        {
-            throw std::runtime_error("Hgdelta file contains no chunks.");
-        }
-
         if (chunk_table_offset < HgdeltaHeaderSize)
         {
             throw std::runtime_error("Hgdelta chunk table overlaps the fixed header.");
@@ -338,6 +344,7 @@ namespace helen
                 chunk_size,
                 chunk_index,
                 chunk_count,
+                base_file_size,
                 target_file_size,
                 target_chunk_size,
                 entry_payload_offset,
