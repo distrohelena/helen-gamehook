@@ -2,6 +2,11 @@
 #include <iostream>
 
 /**
+ * @brief Runs the build runtime coordinator coverage for startup commands and state-observer driven command dispatch.
+ */
+void RunBuildRuntimeCoordinatorTests();
+
+/**
  * @brief Runs the debug trace service coverage for structured runtime snapshots and JSONL event output.
  */
 void RunDebugTraceServiceTests();
@@ -62,6 +67,11 @@ void RunPackAssetResolverTests();
 void RunPackRepositoryTests();
 
 /**
+ * @brief Runs the proxy bootstrap coordinator coverage for early asynchronous Helen startup.
+ */
+void RunProxyBootstrapCoordinatorTests();
+
+/**
  * @brief Runs the runtime layout test coverage for the filesystem paths used by the runtime.
  */
 void RunRuntimeLayoutTests();
@@ -89,11 +99,13 @@ int main()
         RunCommandDispatcherTests();
         RunRuntimeValueStoreTests();
         RunCommandExecutorTests();
+        RunBuildRuntimeCoordinatorTests();
         RunExternalBindingServiceTests();
         RunHelenGameHookExportTests();
         RunExecutableFingerprintTests();
         RunPackAssetResolverTests();
         RunPackRepositoryTests();
+        RunProxyBootstrapCoordinatorTests();
         RunHookBlobRelocatorTests();
         RunMemoryStateObserverServiceTests();
         RunVirtualFileServiceTests();

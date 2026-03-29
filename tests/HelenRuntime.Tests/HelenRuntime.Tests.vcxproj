@@ -77,6 +77,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="BuildHookInstallerTests.cpp" />
+    <ClCompile Include="BuildRuntimeCoordinatorTests.cpp" />
     <ClCompile Include="CommandExecutorTests.cpp" />
     <ClCompile Include="CommandDispatcherTests.cpp" />
     <ClCompile Include="DebugTraceServiceTests.cpp" />
@@ -88,6 +89,7 @@
     <ClCompile Include="MemoryStateObserverServiceTests.cpp" />
     <ClCompile Include="PackAssetResolverTests.cpp" />
     <ClCompile Include="PackRepositoryTests.cpp" />
+    <ClCompile Include="ProxyBootstrapCoordinatorTests.cpp" />
     <ClCompile Include="RuntimeValueStoreTests.cpp" />
     <ClCompile Include="RuntimeLayoutTests.cpp" />
     <ClCompile Include="VirtualFileServiceTests.cpp" />

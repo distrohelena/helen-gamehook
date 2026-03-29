@@ -1,3 +1,4 @@
+#include <HelenHook/BuildRuntimeCoordinator.h>
 #include <HelenHook/BuildHookInstaller.h>
 #include <HelenHook/CommandDispatcher.h>
 #include <HelenHook/CommandExecutor.h>
@@ -43,6 +44,8 @@ namespace
     std::unique_ptr<helen::RuntimeValueStore> g_runtime_values;
     /** @brief Declarative command executor for the active build declarations. */
     std::unique_ptr<helen::CommandExecutor> g_command_executor;
+    /** @brief Generic coordinator that runs build startup commands and hosts declared live state observers. */
+    std::unique_ptr<helen::BuildRuntimeCoordinator> g_build_runtime_coordinator;
     /** @brief External callback bridge exported to patched gameplay assets. */
     std::unique_ptr<helen::ExternalBindingService> g_external_bindings;
     /** @brief Build-scoped asset resolver rooted at the active pack and build directories. */
@@ -412,6 +415,17 @@ namespace
             return false;
         }
 
+        g_build_runtime_coordinator = std::make_unique<helen::BuildRuntimeCoordinator>(
+            active_pack.Build.StartupCommandIds,
+            active_pack.Build.StateObservers,
+            *g_command_dispatcher,
+            *g_command_executor);
+        if (!g_build_runtime_coordinator->Start())
+        {
+            helen::Log(L"[runtime] failed to start build runtime coordinator.");
+            return false;
+        }
+
         return true;
     }
 
@@ -420,6 +434,7 @@ namespace
      */
     void ResetPackRuntimeState()
     {
+        g_build_runtime_coordinator.reset();
         g_build_hooks.reset();
         g_file_hooks.reset();
         g_virtual_files.reset();
@@ -451,6 +466,7 @@ namespace
      */
     void HandleProcessDetach()
     {
+        static_cast<void>(g_build_runtime_coordinator.release());
         static_cast<void>(g_build_hooks.release());
         static_cast<void>(g_file_hooks.release());
         static_cast<void>(g_virtual_files.release());
