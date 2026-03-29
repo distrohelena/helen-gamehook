@@ -218,7 +218,10 @@ namespace
 
         for (const char character : value)
         {
-            if (!std::isxdigit(static_cast<unsigned char>(character)))
+            const bool is_decimal_digit = character >= '0' && character <= '9';
+            const bool is_lower_hex = character >= 'a' && character <= 'f';
+            const bool is_upper_hex = character >= 'A' && character <= 'F';
+            if (!is_decimal_digit && !is_lower_hex && !is_upper_hex)
             {
                 return false;
             }
