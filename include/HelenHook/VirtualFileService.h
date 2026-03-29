@@ -17,12 +17,13 @@
 
 namespace helen
 {
+    class VirtualFileSource;
+
     /**
-     * @brief Owns RAM-backed replacements for exact game-relative file paths.
+     * @brief Owns virtual-file sources for exact game-relative file paths.
      *
-     * Each registered virtual file loads its replacement payload through the active pack asset
-     * resolver on demand and
-     * exposes a synthetic handle whose read cursor is tracked independently from all other opens.
+     * Each registered virtual file resolves its declared source through the active pack asset resolver and exposes a
+     * synthetic handle whose read cursor is tracked independently from all other opens.
      */
     class VirtualFileService
     {
@@ -34,9 +35,9 @@ namespace helen
         explicit VirtualFileService(const PackAssetResolver& resolver);
 
         /**
-         * @brief Registers one declared virtual file and loads its replacement bytes into memory.
+         * @brief Registers one declared virtual file and creates its backing source object.
          * @param definition Virtual file declaration loaded from the active build.
-         * @return True when the file path is valid, the asset exists, and the replacement bytes were loaded.
+         * @return True when the file path is valid and the backing source could be created.
          */
         bool RegisterVirtualFile(const VirtualFileDefinition& definition);
 
@@ -48,7 +49,7 @@ namespace helen
         std::optional<HANDLE> OpenVirtualFile(const std::filesystem::path& game_relative_path);
 
         /**
-         * @brief Creates one real file-mapping handle backed by the replacement bytes for a virtual file handle.
+         * @brief Creates one real file-mapping handle backed by the source registered for a virtual file handle.
          * @param handle Virtual handle returned by OpenVirtualFile.
          * @param protection Requested page protection flags from CreateFileMapping.
          * @param maximum_size_high High-order requested mapping size.
@@ -71,7 +72,7 @@ namespace helen
         /**
          * @brief Reads bytes from one synthetic handle at its current read position.
          * @param handle Virtual handle returned by OpenVirtualFile.
-         * @param buffer Destination buffer that receives the replacement bytes.
+         * @param buffer Destination buffer that receives source bytes.
          * @param bytes_to_read Maximum number of bytes the caller requested.
          * @param bytes_read Receives the actual byte count copied into buffer.
          * @return True when the handle is valid and the read completed.
@@ -89,9 +90,9 @@ namespace helen
         bool Seek(HANDLE handle, LARGE_INTEGER distance_to_move, DWORD move_method, LARGE_INTEGER* new_file_pointer);
 
         /**
-         * @brief Reports the payload size for one synthetic handle.
+         * @brief Reports the source size for one synthetic handle.
          * @param handle Virtual handle returned by OpenVirtualFile.
-         * @param file_size Receives the payload size in bytes.
+         * @param file_size Receives the source size in bytes.
          * @return True when the handle is valid and the size could be reported.
          */
         bool GetSize(HANDLE handle, LARGE_INTEGER* file_size) const;
@@ -131,7 +132,7 @@ namespace helen
             const std::wstring& normalized_declared_path);
 
         /**
-         * @brief Loads one replacement payload through the active pack asset resolver.
+         * @brief Loads one full replacement payload through the active pack asset resolver.
          * @param asset_path Resolver-relative source path declared by the virtual file definition.
          * @param bytes Receives the replacement bytes when the file can be read.
          * @return True when the asset exists and the bytes were loaded completely.
@@ -139,18 +140,26 @@ namespace helen
         bool LoadReplacementBytes(const std::filesystem::path& asset_path, std::vector<std::uint8_t>& bytes) const;
 
         /**
-         * @brief Returns a registered replacement payload for one normalized incoming lookup path when any suffix matches.
-         * @param normalized_lookup_path Normalized incoming file request path.
-         * @return Shared replacement payload when the lookup path matches a registered virtual file; otherwise no value.
+         * @brief Creates one backing source object for the supplied virtual file definition.
+         * @param definition Virtual file definition that should be converted into a source object.
+         * @param source Receives the created source object on success.
+         * @return True when the definition is supported and the source could be created.
          */
-        std::optional<std::shared_ptr<const std::vector<std::uint8_t>>> FindReplacementBytes(
+        bool CreateSource(const VirtualFileDefinition& definition, std::shared_ptr<VirtualFileSource>& source) const;
+
+        /**
+         * @brief Returns a registered source for one normalized incoming lookup path when any suffix matches.
+         * @param normalized_lookup_path Normalized incoming file request path.
+         * @return Shared source object when the lookup path matches a registered virtual file; otherwise no value.
+         */
+        std::optional<std::shared_ptr<VirtualFileSource>> FindSource(
             const std::wstring& normalized_lookup_path) const;
 
         /** @brief Resolver used to map declared replacement asset paths into validated filesystem paths. */
         PackAssetResolver resolver_;
 
-        /** @brief Registered replacement payloads keyed by normalized wide-string game-relative path. */
-        std::map<std::wstring, std::shared_ptr<const std::vector<std::uint8_t>>> virtual_files_;
+        /** @brief Registered source objects keyed by normalized wide-string game-relative path. */
+        std::map<std::wstring, std::shared_ptr<VirtualFileSource>> virtual_files_;
 
         /** @brief Live synthetic handles keyed by their opaque kernel handle value. */
         std::map<HANDLE, VirtualFileHandle> open_handles_;

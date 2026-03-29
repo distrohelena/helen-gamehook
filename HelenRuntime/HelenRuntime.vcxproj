@@ -81,6 +81,7 @@
     <ClCompile Include="ExternalBindingService.cpp" />
     <ClCompile Include="FileFingerprint.cpp" />
     <ClCompile Include="FileApiHookSet.cpp" />
+    <ClCompile Include="FullFileVirtualFileSource.cpp" />
     <ClCompile Include="Hook.cpp" />
     <ClCompile Include="HookBlobRelocator.cpp" />
     <ClCompile Include="JsonConfigStore.cpp" />
@@ -116,6 +117,7 @@
     <ClInclude Include="..\include\HelenHook\FileFingerprint.h" />
     <ClInclude Include="..\include\HelenHook\FeatureDefinition.h" />
     <ClInclude Include="..\include\HelenHook\FileApiHookSet.h" />
+    <ClInclude Include="..\include\HelenHook\FullFileVirtualFileSource.h" />
     <ClInclude Include="..\include\HelenHook\Hook.h" />
     <ClInclude Include="..\include\HelenHook\HookBlobRelocator.h" />
     <ClInclude Include="..\include\HelenHook\HookDefinition.h" />
@@ -144,6 +146,7 @@
     <ClInclude Include="..\include\HelenHook\VirtualFileDefinition.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileHashDefinition.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileHandle.h" />
+    <ClInclude Include="..\include\HelenHook\VirtualFileSource.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileSourceDefinition.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileSourceKind.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileService.h" />
