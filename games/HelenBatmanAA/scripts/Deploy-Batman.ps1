@@ -9,8 +9,11 @@ $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $RepoRoot = (Resolve-Path (Join-Path $BatmanRoot '..\..')).Path
 $PackSource = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles'
 $PackDestination = Join-Path $GameBin 'helengamehook\packs\batman-aa-subtitles'
+$VerifierPath = Join-Path $PSScriptRoot 'Test-BatmanKnownGoodGameplayPackage.ps1'
 $HelenGameHookPath = Join-Path $RepoRoot "bin\Win32\$Configuration\HelenGameHook.dll"
 $ProxyPath = Join-Path $RepoRoot "bin\Win32\$Configuration\dinput8.dll"
+
+& $VerifierPath -BatmanRoot $BatmanRoot
 
 Get-Process ShippingPC-BmGame -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
