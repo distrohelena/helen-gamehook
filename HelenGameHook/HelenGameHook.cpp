@@ -341,7 +341,7 @@ namespace
                     L"[runtime] failed to register virtual file id=%ls gamePath=%ls source=%ls",
                     ToWideString(definition.Id).c_str(),
                     definition.GamePath.c_str(),
-                    definition.Source.c_str());
+                    definition.Source.Path.c_str());
                 return false;
             }
         }

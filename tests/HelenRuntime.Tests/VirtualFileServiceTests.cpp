@@ -58,7 +58,7 @@ namespace
         definition.Id = "bmgameGameplayPackage";
         definition.GamePath = game_path;
         definition.Mode = "replace-on-read";
-        definition.Source = asset_path;
+        definition.Source.Path = asset_path;
         return definition;
     }
 }
