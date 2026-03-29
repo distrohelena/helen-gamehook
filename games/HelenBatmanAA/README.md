@@ -5,7 +5,8 @@ This folder now contains the Batman-specific runtime pack, the Batman-specific b
 Current layout:
 
 - `helengamehook\packs\batman-aa-subtitles`
-  - current runtime pack used by `HelenGameHook.dll`
+  - current delta-backed runtime pack used by `HelenGameHook.dll`
+  - ships `files.json` with `mode = "delta-on-read"`, `assets\deltas\BmGame-subtitle-signal.hgdelta`, and the native blob assets under `assets\native`
 - `builder`
   - self-contained mirror of the Batman subtitle build workspace
   - includes `tools\NativeSubtitleExePatcher`, `ffdec`, `bmgame-unpacked\BmGame.u`, and the source GFx/XML/script inputs needed by the current builders
@@ -22,13 +23,19 @@ Recommended Batman workflow:
 powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Rebuild-BatmanPack.ps1
 ```
 
-2. Deploy the rebuilt runtime and pack to the game:
+2. Verify the shipped gameplay package before deployment:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Test-BatmanKnownGoodGameplayPackage.ps1
+```
+
+3. Deploy the validated runtime and pack to the game:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Deploy-Batman.ps1
 ```
 
-3. Launch the game:
+4. Launch the game:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Launch-Batman.ps1
@@ -36,6 +43,7 @@ powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Launch-Ba
 
 Important notes:
 
-- The current supported runtime pack is the gameplay `BmGame.u` slice plus the native text-scale blob.
+- The deploy script now validates the shipped delta-backed gameplay package before it copies anything into the game directory.
+- The current supported runtime pack is the gameplay `BmGame.u` slice plus the native text-scale and subtitle-signal blobs.
 - The builder mirror keeps the original relative path assumptions intact so the old C# toolchain can run without being rewritten first.
 - Legacy debug scripts from the old `artifacts` folder were copied into `scripts` for reference, but the recommended entry points are the PascalCase scripts above.
