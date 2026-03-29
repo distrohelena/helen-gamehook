@@ -12,6 +12,7 @@ $PackDestination = Join-Path $GameBin 'helengamehook\packs\batman-aa-subtitles'
 $PackBuildRoot = Join-Path $PackDestination 'builds\steam-goty-1.0'
 $DeployedFilesJsonPath = Join-Path $PackBuildRoot 'files.json'
 $DeployedDeltaPath = Join-Path $PackBuildRoot 'assets\deltas\BmGame-subtitle-signal.hgdelta'
+$DeployedPackagesPath = Join-Path $PackBuildRoot 'assets\packages'
 $SourceDeltaPath = Join-Path $PackSource 'builds\steam-goty-1.0\assets\deltas\BmGame-subtitle-signal.hgdelta'
 $VerifierPath = Join-Path $PSScriptRoot 'Test-BatmanKnownGoodGameplayPackage.ps1'
 $HelenGameHookPath = Join-Path $RepoRoot "bin\Win32\$Configuration\HelenGameHook.dll"
@@ -28,11 +29,23 @@ $ExpectedGameplayDeltaHash = (Get-FileHash -LiteralPath $SourceDeltaPath -Algori
 Get-Process ShippingPC-BmGame -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
 
+if (Test-Path -LiteralPath $PackDestination) {
+    Remove-Item -LiteralPath $PackDestination -Recurse -Force
+}
+
 New-Item -ItemType Directory -Force -Path $PackDestination | Out-Null
 Copy-Item -LiteralPath $HelenGameHookPath -Destination (Join-Path $GameBin 'HelenGameHook.dll') -Force
 Copy-Item -LiteralPath $ProxyPath -Destination (Join-Path $GameBin 'dinput8.dll') -Force
 Copy-Item -Path (Join-Path $PackSource '*') -Destination $PackDestination -Recurse -Force
 Get-ChildItem (Join-Path $GameBin 'helengamehook\logs') -ErrorAction SilentlyContinue | Remove-Item -Force
+
+if (Test-Path -LiteralPath $DeployedPackagesPath) {
+    Remove-Item -LiteralPath $DeployedPackagesPath -Recurse -Force
+}
+
+if (Test-Path -LiteralPath $DeployedPackagesPath) {
+    throw "Batman deployment should not contain legacy packages after copy: $DeployedPackagesPath"
+}
 
 if (-not (Test-Path -LiteralPath $DeployedFilesJsonPath)) {
     throw "Batman deployment manifest not found: $DeployedFilesJsonPath"
