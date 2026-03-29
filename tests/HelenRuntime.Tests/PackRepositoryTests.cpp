@@ -1,5 +1,6 @@
 #include <HelenHook/LoadedBuildPack.h>
 #include <HelenHook/PackRepository.h>
+#include <HelenHook/VirtualFileSourceKind.h>
 
 #include <filesystem>
 #include <fstream>
@@ -130,8 +131,20 @@ void RunPackRepositoryTests()
     {
       "id": "bmgameGameplayPackage",
       "path": "BmGame/CookedPC/BmGame.u",
-      "mode": "replace-on-read",
-      "source": "assets/packages/BmGame-subtitle-signal.u"
+      "mode": "delta-on-read",
+      "source": {
+        "kind": "delta-file",
+        "path": "assets/deltas/BmGame-subtitle-signal.hgdelta",
+        "base": {
+          "size": 101403981,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "target": {
+          "size": 101405329,
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "chunkSize": 65536
+      }
     }
   ]
 })");
@@ -326,6 +339,12 @@ void RunPackRepositoryTests()
         Expect(loaded_valid_pack->Build.StartupCommandIds.size() == 1, "Loaded startup command count mismatch.");
         Expect(loaded_valid_pack->Build.StartupCommandIds[0] == "applySavedSubtitleSize", "Loaded startup command identifier mismatch.");
         Expect(loaded_valid_pack->Build.VirtualFiles.size() == 1, "Loaded virtual file count mismatch.");
+        Expect(loaded_valid_pack->Build.VirtualFiles[0].Mode == "delta-on-read", "Virtual file mode mismatch.");
+        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Kind == helen::VirtualFileSourceKind::DeltaFile, "Virtual file source kind mismatch.");
+        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Path == std::filesystem::path("assets/deltas/BmGame-subtitle-signal.hgdelta"), "Virtual file source path mismatch.");
+        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Base.FileSize == 101403981, "Virtual file base size mismatch.");
+        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Target.FileSize == 101405329, "Virtual file target size mismatch.");
+        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.ChunkSize == 65536, "Virtual file chunk size mismatch.");
         Expect(loaded_valid_pack->Build.RuntimeSlots.size() == 1, "Loaded runtime slot count mismatch.");
         Expect(loaded_valid_pack->Build.StateObservers.size() == 1, "Loaded state observer count mismatch.");
         Expect(loaded_valid_pack->Build.Hooks.size() == 1, "Loaded hook count mismatch.");

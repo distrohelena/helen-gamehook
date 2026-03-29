@@ -142,7 +142,10 @@
     <ClInclude Include="..\include\HelenHook\RuntimeLayout.h" />
     <ClInclude Include="..\include\HelenHook\RuntimeValueStore.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\VirtualFileHashDefinition.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileHandle.h" />
+    <ClInclude Include="..\include\HelenHook\VirtualFileSourceDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\VirtualFileSourceKind.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileService.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

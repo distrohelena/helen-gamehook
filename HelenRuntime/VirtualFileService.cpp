@@ -147,7 +147,7 @@ namespace helen
         }
 
         std::vector<std::uint8_t> replacement_bytes;
-        if (!LoadReplacementBytes(definition.Source, replacement_bytes))
+        if (!LoadReplacementBytes(definition.Source.Path, replacement_bytes))
         {
             return false;
         }

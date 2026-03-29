@@ -11,6 +11,9 @@
 #include <HelenHook/JsonParser.h>
 #include <HelenHook/MemoryStateObserverCheckDefinition.h>
 #include <HelenHook/RuntimeSlotDefinition.h>
+#include <HelenHook/VirtualFileHashDefinition.h>
+#include <HelenHook/VirtualFileSourceDefinition.h>
+#include <HelenHook/VirtualFileSourceKind.h>
 
 #include <algorithm>
 #include <cctype>
@@ -197,6 +200,111 @@ namespace
         }
 
         return static_cast<std::uintmax_t>(*size_value);
+    }
+
+    std::optional<std::uint32_t> TryGetUnsigned32Value(const helen::JsonValue* value);
+
+    /**
+     * @brief Parses one exact file hash declaration from a nested JSON object.
+     * @param value JSON object that should contain `size` and `sha256`.
+     * @param definition Receives the parsed hash metadata on success.
+     * @return True when both fields are present and valid; otherwise false.
+     */
+    bool ParseVirtualFileHash(const helen::JsonValue& value, helen::VirtualFileHashDefinition& definition)
+    {
+        const std::optional<std::uintmax_t> file_size = TryGetFileSizeValue(FindObjectMember(value, "size"));
+        const std::optional<std::string> sha256 = TryGetString(FindObjectMember(value, "sha256"));
+        if (!file_size.has_value() || !sha256.has_value() || sha256->empty())
+        {
+            return false;
+        }
+
+        definition.FileSize = *file_size;
+        definition.Sha256 = *sha256;
+        return true;
+    }
+
+    /**
+     * @brief Converts one optional virtual-file source kind text into the typed enum value.
+     * @param value JSON value that should contain a source kind string when present.
+     * @param kind Receives the parsed source kind on success.
+     * @return True when the value is absent or one of the supported source kinds; otherwise false.
+     */
+    bool TryParseVirtualFileSourceKind(const helen::JsonValue* value, helen::VirtualFileSourceKind& kind)
+    {
+        const std::optional<std::string> kind_text = TryGetString(value);
+        if (!kind_text.has_value())
+        {
+            kind = helen::VirtualFileSourceKind::FullFile;
+            return true;
+        }
+
+        if (*kind_text == "full-file")
+        {
+            kind = helen::VirtualFileSourceKind::FullFile;
+            return true;
+        }
+
+        if (*kind_text == "delta-file")
+        {
+            kind = helen::VirtualFileSourceKind::DeltaFile;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @brief Parses one explicit virtual-file source declaration from a JSON object.
+     * @param value JSON object that should describe the source metadata.
+     * @param definition Receives the parsed source metadata on success.
+     * @return True when the source declaration is valid; otherwise false.
+     */
+    bool ParseVirtualFileSource(const helen::JsonValue& value, helen::VirtualFileSourceDefinition& definition)
+    {
+        definition.Kind = helen::VirtualFileSourceKind::FullFile;
+        if (!TryParseVirtualFileSourceKind(FindObjectMember(value, "kind"), definition.Kind))
+        {
+            return false;
+        }
+
+        const std::optional<std::string> source_path = TryGetString(FindObjectMember(value, "path"));
+        if (!source_path.has_value() || source_path->empty())
+        {
+            return false;
+        }
+
+        definition.Path = std::filesystem::path(*source_path);
+
+        if (definition.Kind == helen::VirtualFileSourceKind::DeltaFile)
+        {
+            const helen::JsonValue* base_value = FindObjectMember(value, "base");
+            const helen::JsonValue* target_value = FindObjectMember(value, "target");
+            const std::optional<std::uint32_t> chunk_size = TryGetUnsigned32Value(FindObjectMember(value, "chunkSize"));
+            if (base_value == nullptr || target_value == nullptr || !chunk_size.has_value())
+            {
+                return false;
+            }
+
+            if (!base_value->IsObject() || !target_value->IsObject())
+            {
+                return false;
+            }
+
+            if (!ParseVirtualFileHash(*base_value, definition.Base) || !ParseVirtualFileHash(*target_value, definition.Target))
+            {
+                return false;
+            }
+
+            if (*chunk_size == 0)
+            {
+                return false;
+            }
+
+            definition.ChunkSize = *chunk_size;
+        }
+
+        return true;
     }
 
     /**
@@ -529,19 +637,17 @@ namespace
 
         if (const std::optional<std::string> source_text = TryGetString(source_value))
         {
-            definition.Source = std::filesystem::path(*source_text);
-            return !definition.Source.empty();
+            definition.Source.Kind = helen::VirtualFileSourceKind::FullFile;
+            definition.Source.Path = std::filesystem::path(*source_text);
+            return !definition.Source.Path.empty();
         }
 
-        const helen::JsonValue* source_path_value = FindObjectMember(*source_value, "path");
-        const std::optional<std::string> source_path = TryGetString(source_path_value);
-        if (!source_path.has_value() || source_path->empty())
+        if (!source_value->IsObject())
         {
             return false;
         }
 
-        definition.Source = std::filesystem::path(*source_path);
-        return true;
+        return ParseVirtualFileSource(*source_value, definition.Source);
     }
 
     /**
