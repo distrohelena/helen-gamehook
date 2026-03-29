@@ -73,8 +73,14 @@ void RunPackRepositoryTests()
         const std::filesystem::path valid_build_root = valid_pack_root / "builds" / "steam-goty-1.0";
         const std::filesystem::path pack_root = packs_root / "broken-pack";
         const std::filesystem::path build_root = pack_root / "builds" / "broken-build";
+        const std::filesystem::path mode_mismatch_pack_root = packs_root / "mode-mismatch-pack";
+        const std::filesystem::path mode_mismatch_build_root = mode_mismatch_pack_root / "builds" / "mode-mismatch-build";
+        const std::filesystem::path malformed_delta_hash_pack_root = packs_root / "malformed-delta-hash-pack";
+        const std::filesystem::path malformed_delta_hash_build_root = malformed_delta_hash_pack_root / "builds" / "malformed-delta-hash-build";
         std::filesystem::create_directories(valid_build_root);
         std::filesystem::create_directories(build_root);
+        std::filesystem::create_directories(mode_mismatch_build_root);
+        std::filesystem::create_directories(malformed_delta_hash_build_root);
 
         WriteAllText(
             valid_pack_root / "pack.json",
@@ -328,6 +334,106 @@ void RunPackRepositoryTests()
 
         WriteAllText(build_root / "hooks.json", "{");
 
+        WriteAllText(
+            mode_mismatch_pack_root / "pack.json",
+            R"({
+  "schemaVersion": 1,
+  "id": "mode-mismatch-pack",
+  "name": "Mode Mismatch Pack",
+  "targets": [
+    {
+      "executables": [
+        "ModeMismatchGame.exe"
+      ]
+    }
+  ],
+  "builds": [
+    "mode-mismatch-build"
+  ]
+})");
+
+        WriteAllText(
+            mode_mismatch_build_root / "build.json",
+            R"({
+  "id": "mode-mismatch-build",
+  "executable": "ModeMismatchGame.exe",
+  "match": {
+    "fileSize": 4321,
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  }
+})");
+
+        WriteAllText(
+            mode_mismatch_build_root / "files.json",
+            R"({
+  "virtualFiles": [
+    {
+      "id": "mismatchVirtualFile",
+      "path": "Game/Content/Test.bin",
+      "mode": "delta-on-read",
+      "source": "assets/packages/Test.bin"
+    }
+  ]
+})");
+
+        WriteAllText(mode_mismatch_build_root / "hooks.json", "{}");
+
+        WriteAllText(
+            malformed_delta_hash_pack_root / "pack.json",
+            R"({
+  "schemaVersion": 1,
+  "id": "malformed-delta-hash-pack",
+  "name": "Malformed Delta Hash Pack",
+  "targets": [
+    {
+      "executables": [
+        "MalformedDeltaHashGame.exe"
+      ]
+    }
+  ],
+  "builds": [
+    "malformed-delta-hash-build"
+  ]
+})");
+
+        WriteAllText(
+            malformed_delta_hash_build_root / "build.json",
+            R"({
+  "id": "malformed-delta-hash-build",
+  "executable": "MalformedDeltaHashGame.exe",
+  "match": {
+    "fileSize": 8765,
+    "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  }
+})");
+
+        WriteAllText(
+            malformed_delta_hash_build_root / "files.json",
+            R"({
+  "virtualFiles": [
+    {
+      "id": "badHashVirtualFile",
+      "path": "Game/Content/Test.bin",
+      "mode": "delta-on-read",
+      "source": {
+        "kind": "delta-file",
+        "path": "assets/deltas/Test.hgdelta",
+        "base": {
+          "size": 16,
+          "sha256": "ABCDEF"
+        },
+        "target": {
+          "size": 24,
+          "sha256": "12345Z"
+        },
+        "chunkSize": 4096
+      }
+    }
+  ]
+})");
+
+        WriteAllText(malformed_delta_hash_build_root / "hooks.json", "{}");
+
         const std::optional<helen::LoadedBuildPack> loaded_valid_pack = repository.LoadForExecutable(
             packs_root,
             "ShippingPC-BmGame.exe",
@@ -365,6 +471,20 @@ void RunPackRepositoryTests()
             1234,
             "abcdef");
         Expect(!malformed_pack.has_value(), "Pack repository unexpectedly loaded a build whose hooks.json was malformed.");
+
+        const std::optional<helen::LoadedBuildPack> mode_mismatch_pack = repository.LoadForExecutable(
+            packs_root,
+            "ModeMismatchGame.exe",
+            4321,
+            "1111111111111111111111111111111111111111111111111111111111111111");
+        Expect(!mode_mismatch_pack.has_value(), "Pack repository unexpectedly loaded a delta-on-read virtual file without a delta-file source.");
+
+        const std::optional<helen::LoadedBuildPack> malformed_delta_hash_pack = repository.LoadForExecutable(
+            packs_root,
+            "MalformedDeltaHashGame.exe",
+            8765,
+            "2222222222222222222222222222222222222222222222222222222222222222");
+        Expect(!malformed_delta_hash_pack.has_value(), "Pack repository unexpectedly loaded a delta-backed virtual file with malformed SHA-256 metadata.");
 
         const std::optional<helen::LoadedBuildPack> loaded_batman_pack = repository.LoadForExecutable(
             GetBatmanPackRoot(),
