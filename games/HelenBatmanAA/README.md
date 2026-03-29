@@ -43,10 +43,23 @@ powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Launch-Ch
 
 After the process starts, open the pause menu and confirm it still shows `Subtitle Size`. Change the value and verify the subtitle size updates live, then confirm `D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\helengamehook\config\runtime.json` is updated while `D:\steam\steamapps\common\Batman Arkham Asylum GOTY\BmGame\CookedPC\BmGame.u` remains unchanged.
 
-5. Verify the deployed pack is still the shipped delta-backed package:
+5. Verify the deployed pack copy under the game directory is still the shipped delta-backed package:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Test-BatmanKnownGoodGameplayPackage.ps1
+$PackBuildRoot = 'D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\helengamehook\packs\batman-aa-subtitles\builds\steam-goty-1.0'
+$FilesJsonPath = Join-Path $PackBuildRoot 'files.json'
+$DeployedDeltaPath = Join-Path $PackBuildRoot 'assets\deltas\BmGame-subtitle-signal.hgdelta'
+
+$Manifest = Get-Content -LiteralPath $FilesJsonPath -Raw | ConvertFrom-Json
+$GameplayFile = @($Manifest.virtualFiles)[0]
+if ($GameplayFile.path -ne 'BmGame/CookedPC/BmGame.u') { throw "Unexpected deployed virtual file path: $($GameplayFile.path)" }
+if ($GameplayFile.mode -ne 'delta-on-read') { throw "Unexpected deployed virtual file mode: $($GameplayFile.mode)" }
+if ($GameplayFile.source.path -ne 'assets/deltas/BmGame-subtitle-signal.hgdelta') { throw "Unexpected deployed delta path: $($GameplayFile.source.path)" }
+
+$DeployedDeltaHash = (Get-FileHash -LiteralPath $DeployedDeltaPath -Algorithm SHA256).Hash
+if ($DeployedDeltaHash -ne '2A4988D7BC655C8779C0B3718F60226119AFEC386AB56C22F14CBFC2454FC3C1') {
+    throw "Batman deployment delta hash mismatch: $DeployedDeltaHash"
+}
 ```
 
 Important notes:
