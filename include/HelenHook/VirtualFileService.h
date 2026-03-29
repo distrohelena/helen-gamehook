@@ -12,6 +12,7 @@
 #include <windows.h>
 
 #include <HelenHook/PackAssetResolver.h>
+#include <HelenHook/RegisteredVirtualFile.h>
 #include <HelenHook/VirtualFileDefinition.h>
 #include <HelenHook/VirtualFileHandle.h>
 
@@ -31,8 +32,9 @@ namespace helen
         /**
          * @brief Creates a virtual file service bound to the active pack asset resolver.
          * @param resolver Resolver that translates declared asset paths into normalized filesystem locations.
+         * @param cache_directory Writable helengamehook cache directory used by source implementations that materialize files.
          */
-        explicit VirtualFileService(const PackAssetResolver& resolver);
+        VirtualFileService(const PackAssetResolver& resolver, const std::filesystem::path& cache_directory);
 
         /**
          * @brief Registers one declared virtual file and creates its backing source object.
@@ -140,26 +142,33 @@ namespace helen
         bool LoadReplacementBytes(const std::filesystem::path& asset_path, std::vector<std::uint8_t>& bytes) const;
 
         /**
-         * @brief Creates one backing source object for the supplied virtual file definition.
+         * @brief Creates one backing source object for the supplied virtual file definition and opened game path.
          * @param definition Virtual file definition that should be converted into a source object.
+         * @param opened_game_path Actual game file path being opened when a source needs per-open context.
          * @param source Receives the created source object on success.
          * @return True when the definition is supported and the source could be created.
          */
-        bool CreateSource(const VirtualFileDefinition& definition, std::shared_ptr<VirtualFileSource>& source) const;
+        bool CreateSource(
+            const VirtualFileDefinition& definition,
+            const std::filesystem::path& opened_game_path,
+            std::shared_ptr<VirtualFileSource>& source) const;
 
         /**
-         * @brief Returns a registered source for one normalized incoming lookup path when any suffix matches.
+         * @brief Returns one registered virtual-file record for one normalized incoming lookup path when any suffix matches.
          * @param normalized_lookup_path Normalized incoming file request path.
-         * @return Shared source object when the lookup path matches a registered virtual file; otherwise no value.
+         * @return Registered virtual-file record when the lookup path matches a registered virtual file; otherwise no value.
          */
-        std::optional<std::shared_ptr<VirtualFileSource>> FindSource(
+        std::optional<RegisteredVirtualFile> FindRegisteredVirtualFile(
             const std::wstring& normalized_lookup_path) const;
 
         /** @brief Resolver used to map declared replacement asset paths into validated filesystem paths. */
         PackAssetResolver resolver_;
 
-        /** @brief Registered source objects keyed by normalized wide-string game-relative path. */
-        std::map<std::wstring, std::shared_ptr<VirtualFileSource>> virtual_files_;
+        /** @brief Writable helengamehook cache directory used by source implementations that materialize files. */
+        std::filesystem::path cache_directory_;
+
+        /** @brief Registered virtual-file records keyed by normalized wide-string game-relative path. */
+        std::map<std::wstring, RegisteredVirtualFile> virtual_files_;
 
         /** @brief Live synthetic handles keyed by their opaque kernel handle value. */
         std::map<HANDLE, VirtualFileHandle> open_handles_;

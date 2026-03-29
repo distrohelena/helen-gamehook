@@ -494,6 +494,10 @@ void RunPackRepositoryTests()
             38758728,
             "4dac1f5e2ac6710b7378fdce74601f616f4753e3756cb5fda63c7519cc2eb028");
         Expect(loaded_batman_pack.has_value(), "Expected the checked-in Batman pack to load for the matching executable fingerprint.");
+        Expect(loaded_batman_pack->Build.VirtualFiles.size() == 1, "Checked-in Batman pack virtual file count mismatch.");
+        Expect(loaded_batman_pack->Build.VirtualFiles[0].Mode == "replace-on-read", "Checked-in Batman gameplay package unexpectedly drifted away from the current full-file pack asset before Task 6.");
+        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Kind == helen::VirtualFileSourceKind::FullFile, "Checked-in Batman gameplay package source kind unexpectedly drifted away from the current full-file pack asset before Task 6.");
+        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Path == std::filesystem::path("assets/packages/BmGame-subtitle-signal.u"), "Checked-in Batman gameplay package source path mismatch.");
         Expect(loaded_batman_pack->Build.StateObservers.size() == 1, "Checked-in Batman pack state observer count mismatch.");
         Expect(loaded_batman_pack->Build.StateObservers[0].ScanStartAddress == 0x2B000000, "Checked-in Batman observer scan start drifted from the investigated hot heap window.");
         Expect(loaded_batman_pack->Build.StateObservers[0].ScanEndAddress == 0x30000000, "Checked-in Batman observer scan end drifted from the investigated hot heap window.");

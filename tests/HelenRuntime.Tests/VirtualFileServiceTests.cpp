@@ -2,6 +2,7 @@
 #include <HelenHook/PackAssetResolver.h>
 #include <HelenHook/VirtualFileDefinition.h>
 #include <HelenHook/VirtualFileService.h>
+#include <HelenHook/VirtualFileSourceKind.h>
 
 #include <Windows.h>
 
@@ -62,6 +63,28 @@ namespace
         definition.Source.Path = asset_path;
         return definition;
     }
+
+    /**
+     * @brief Builds one delta-on-read virtual-file definition for registration validation scenarios.
+     * @param game_path Game-relative path that should be virtualized.
+     * @param asset_path Build-relative hgdelta asset path declared by the virtual file.
+     * @return Fully populated delta-backed virtual-file definition with exact placeholder fingerprints.
+     */
+    helen::VirtualFileDefinition CreateDeltaVirtualFileDefinition(const char* game_path, const char* asset_path)
+    {
+        helen::VirtualFileDefinition definition;
+        definition.Id = "bmgameGameplayPackageDelta";
+        definition.GamePath = game_path;
+        definition.Mode = "delta-on-read";
+        definition.Source.Kind = helen::VirtualFileSourceKind::DeltaFile;
+        definition.Source.Path = asset_path;
+        definition.Source.Base.FileSize = 8;
+        definition.Source.Base.Sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        definition.Source.Target.FileSize = 8;
+        definition.Source.Target.Sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        definition.Source.ChunkSize = 4;
+        return definition;
+    }
 }
 
 /**
@@ -77,12 +100,13 @@ void RunVirtualFileServiceTests()
     {
         const std::filesystem::path pack_root = root / "pack";
         const std::filesystem::path build_root = pack_root / "builds" / "steam-goty-1.0";
+        const std::filesystem::path cache_directory = root / "helengamehook" / "cache";
         const std::filesystem::path asset_path = build_root / "assets" / "packages" / "BmGame-subtitle-signal.u";
         std::filesystem::create_directories(asset_path.parent_path());
         WriteAllBytes(asset_path, "ABCDE");
 
         const helen::PackAssetResolver resolver(pack_root, build_root);
-        helen::VirtualFileService service(resolver);
+        helen::VirtualFileService service(resolver, cache_directory);
 
         const helen::VirtualFileDefinition definition = CreateVirtualFileDefinition(
             "BmGame/CookedPC/BmGame.u",
@@ -93,6 +117,19 @@ void RunVirtualFileServiceTests()
         helen::VirtualFileDefinition invalid_definition = definition;
         invalid_definition.GamePath = "../escape.u";
         Expect(!service.RegisterVirtualFile(invalid_definition), "Escaping virtual file path unexpectedly registered.");
+
+        const helen::VirtualFileDefinition missing_delta_definition = CreateDeltaVirtualFileDefinition(
+            "BmGame/CookedPC/BmGame-Delta-Missing.u",
+            "assets/deltas/Missing.hgdelta");
+        Expect(!service.RegisterVirtualFile(missing_delta_definition), "Missing delta asset unexpectedly registered as a virtual file.");
+
+        const std::filesystem::path malformed_delta_path = build_root / "assets" / "deltas" / "Malformed.hgdelta";
+        std::filesystem::create_directories(malformed_delta_path.parent_path());
+        WriteAllBytes(malformed_delta_path, "BAD");
+        const helen::VirtualFileDefinition malformed_delta_definition = CreateDeltaVirtualFileDefinition(
+            "BmGame/CookedPC/BmGame-Delta-Malformed.u",
+            "assets/deltas/Malformed.hgdelta");
+        Expect(!service.RegisterVirtualFile(malformed_delta_definition), "Malformed delta asset unexpectedly registered as a virtual file.");
 
         const std::optional<HANDLE> missing_handle = service.OpenVirtualFile("BmGame/CookedPC/Missing.u");
         Expect(!missing_handle.has_value(), "Missing virtual file path unexpectedly opened.");

@@ -1,10 +1,13 @@
+#include <HelenHook/DeltaVirtualFileSource.h>
 #include <HelenHook/FullFileVirtualFileSource.h>
+#include <HelenHook/HgdeltaFile.h>
 #include <HelenHook/VirtualFileService.h>
 
 #include <HelenHook/VirtualFileSource.h>
 #include <HelenHook/Log.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cwctype>
 #include <cstddef>
 #include <cstdint>
@@ -16,10 +19,69 @@
 #include <mutex>
 #include <system_error>
 
+namespace
+{
+    /**
+     * @brief Converts ASCII text into lowercase so manifest digests compare consistently.
+     * @param text ASCII text that should be normalized.
+     * @return Lowercase copy of the supplied text.
+     */
+    std::string ToLowerAscii(std::string text)
+    {
+        for (char& character : text)
+        {
+            character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+        }
+
+        return text;
+    }
+
+    /**
+     * @brief Returns whether one parsed hgdelta container matches the exact manifest metadata declaration.
+     * @param delta Parsed hgdelta container loaded from the declared asset path.
+     * @param definition Virtual file definition whose source metadata should match the container.
+     * @return True when chunk size and exact base/target fingerprints match the manifest; otherwise false.
+     */
+    bool MatchesDeclaredDeltaMetadata(const helen::HgdeltaFile& delta, const helen::VirtualFileDefinition& definition)
+    {
+        return delta.ChunkSize == definition.Source.ChunkSize &&
+            delta.BaseFileSize == definition.Source.Base.FileSize &&
+            delta.TargetFileSize == definition.Source.Target.FileSize &&
+            delta.BaseSha256 == ToLowerAscii(definition.Source.Base.Sha256) &&
+            delta.TargetSha256 == ToLowerAscii(definition.Source.Target.Sha256);
+    }
+
+    /**
+     * @brief Validates that one delta-backed source asset exists and contains a parseable hgdelta container.
+     * @param resolver Active pack asset resolver that locates the declared hgdelta asset.
+     * @param definition Delta-backed virtual file definition whose declared asset should be validated.
+     * @return True when the asset exists, parses successfully, and matches the declared metadata; otherwise false.
+     */
+    bool ValidateDeltaSourceAsset(const helen::PackAssetResolver& resolver, const helen::VirtualFileDefinition& definition)
+    {
+        const std::optional<std::filesystem::path> delta_file_path = resolver.Resolve(definition.Source.Path);
+        if (!delta_file_path.has_value())
+        {
+            return false;
+        }
+
+        try
+        {
+            const helen::HgdeltaFile delta = helen::HgdeltaFile::Load(*delta_file_path);
+            return MatchesDeclaredDeltaMetadata(delta, definition);
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+}
+
 namespace helen
 {
-    VirtualFileService::VirtualFileService(const PackAssetResolver& resolver)
-        : resolver_(resolver)
+    VirtualFileService::VirtualFileService(const PackAssetResolver& resolver, const std::filesystem::path& cache_directory)
+        : resolver_(resolver),
+          cache_directory_(cache_directory)
     {
     }
 
@@ -143,49 +205,82 @@ namespace helen
             return false;
         }
 
-        std::shared_ptr<VirtualFileSource> source;
-        if (!CreateSource(definition, source))
+        RegisteredVirtualFile registered_virtual_file;
+        registered_virtual_file.Definition = definition;
+        if (definition.Mode == "replace-on-read")
+        {
+            if (!CreateSource(definition, std::filesystem::path(), registered_virtual_file.SharedSource))
+            {
+                return false;
+            }
+        }
+        else if (definition.Mode != "delta-on-read" || definition.Source.Kind != VirtualFileSourceKind::DeltaFile)
+        {
+            return false;
+        }
+        else if (!ValidateDeltaSourceAsset(resolver_, definition))
         {
             return false;
         }
 
         std::lock_guard<std::mutex> lock(mutex_);
-        const auto inserted = virtual_files_.emplace(normalized_game_path, source);
+        const auto inserted = virtual_files_.emplace(normalized_game_path, std::move(registered_virtual_file));
         if (inserted.second)
         {
+            const RegisteredVirtualFile& inserted_virtual_file = inserted.first->second;
+            const std::uint64_t registered_size = inserted_virtual_file.SharedSource != nullptr ?
+                inserted_virtual_file.SharedSource->GetSize() :
+                inserted_virtual_file.Definition.Source.Target.FileSize;
             Logf(
                 L"[runtime] registered virtual file path=%ls bytes=%llu",
                 normalized_game_path.c_str(),
-                static_cast<unsigned long long>(source->GetSize()));
+                static_cast<unsigned long long>(registered_size));
         }
 
         return inserted.second;
     }
 
-    bool VirtualFileService::CreateSource(const VirtualFileDefinition& definition, std::shared_ptr<VirtualFileSource>& source) const
+    bool VirtualFileService::CreateSource(
+        const VirtualFileDefinition& definition,
+        const std::filesystem::path& opened_game_path,
+        std::shared_ptr<VirtualFileSource>& source) const
     {
         source.reset();
-        if (definition.Mode != "replace-on-read")
+        if (definition.Mode == "replace-on-read")
+        {
+            if (definition.Source.Kind != VirtualFileSourceKind::FullFile)
+            {
+                return false;
+            }
+
+            std::vector<std::uint8_t> replacement_bytes;
+            if (!LoadReplacementBytes(definition.Source.Path, replacement_bytes))
+            {
+                return false;
+            }
+
+            source = std::make_shared<FullFileVirtualFileSource>(std::move(replacement_bytes));
+            return true;
+        }
+
+        if (definition.Mode != "delta-on-read" || definition.Source.Kind != VirtualFileSourceKind::DeltaFile)
         {
             return false;
         }
 
-        if (definition.Source.Kind != VirtualFileSourceKind::FullFile)
+        try
         {
+            source = std::make_shared<DeltaVirtualFileSource>(resolver_, cache_directory_, opened_game_path, definition);
+            return true;
+        }
+        catch (...)
+        {
+            source.reset();
             return false;
         }
-
-        std::vector<std::uint8_t> replacement_bytes;
-        if (!LoadReplacementBytes(definition.Source.Path, replacement_bytes))
-        {
-            return false;
-        }
-
-        source = std::make_shared<FullFileVirtualFileSource>(std::move(replacement_bytes));
-        return true;
     }
 
-    std::optional<std::shared_ptr<VirtualFileSource>> VirtualFileService::FindSource(
+    std::optional<RegisteredVirtualFile> VirtualFileService::FindRegisteredVirtualFile(
         const std::wstring& normalized_lookup_path) const
     {
         const auto exact_match = virtual_files_.find(normalized_lookup_path);
@@ -219,27 +314,34 @@ namespace helen
             return std::nullopt;
         }
 
-        bool inserted = false;
-        bool found_matching_file = false;
+        std::optional<RegisteredVirtualFile> registered_virtual_file;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            const std::optional<std::shared_ptr<VirtualFileSource>> source = FindSource(normalized_game_path);
-            if (source.has_value())
-            {
-                found_matching_file = true;
-
-                VirtualFileHandle virtual_handle;
-                virtual_handle.Source = *source;
-                virtual_handle.ReadPosition = 0;
-
-                inserted = open_handles_.emplace(handle, std::move(virtual_handle)).second;
-            }
+            registered_virtual_file = FindRegisteredVirtualFile(normalized_game_path);
         }
 
-        if (!found_matching_file)
+        if (!registered_virtual_file.has_value())
         {
             CloseHandle(handle);
             return std::nullopt;
+        }
+
+        std::shared_ptr<VirtualFileSource> source = registered_virtual_file->SharedSource;
+        if (source == nullptr &&
+            !CreateSource(registered_virtual_file->Definition, game_relative_path, source))
+        {
+            CloseHandle(handle);
+            return std::nullopt;
+        }
+
+        VirtualFileHandle virtual_handle;
+        virtual_handle.Source = std::move(source);
+        virtual_handle.ReadPosition = 0;
+
+        bool inserted = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            inserted = open_handles_.emplace(handle, std::move(virtual_handle)).second;
         }
 
         if (!inserted)

@@ -26,6 +26,18 @@ namespace helen
          */
         std::optional<std::filesystem::path> Resolve(const std::filesystem::path& relative_path) const;
 
+        /**
+         * @brief Returns the normalized top-level pack directory that bounds all resolved asset paths.
+         * @return Normalized pack root path used by this resolver.
+         */
+        const std::filesystem::path& GetPackRoot() const noexcept;
+
+        /**
+         * @brief Returns the normalized active build directory used to resolve build-local asset paths.
+         * @return Normalized build root path used by this resolver.
+         */
+        const std::filesystem::path& GetBuildRoot() const noexcept;
+
     private:
         /** @brief Normalized top-level pack directory used as the containment boundary for asset resolution. */
         std::filesystem::path pack_root_;
