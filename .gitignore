@@ -5,6 +5,7 @@
 /.dotnet-home/
 /.dotnetcli/
 /.codex-temp/
+/.worktree/
 /artifacts/*.png
 /artifacts/*.json
 /games/HelenBatmanAA/builder/
