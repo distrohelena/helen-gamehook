@@ -205,6 +205,29 @@ namespace
     std::optional<std::uint32_t> TryGetUnsigned32Value(const helen::JsonValue* value);
 
     /**
+     * @brief Returns whether the supplied text is an exact 64-character SHA-256 hexadecimal digest.
+     * @param value Text that should contain an ASCII hexadecimal digest.
+     * @return True when the value contains exactly 64 hexadecimal characters; otherwise false.
+     */
+    bool IsValidSha256Text(std::string_view value)
+    {
+        if (value.size() != 64)
+        {
+            return false;
+        }
+
+        for (const char character : value)
+        {
+            if (!std::isxdigit(static_cast<unsigned char>(character)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * @brief Parses one exact file hash declaration from a nested JSON object.
      * @param value JSON object that should contain `size` and `sha256`.
      * @param definition Receives the parsed hash metadata on success.
@@ -214,14 +237,35 @@ namespace
     {
         const std::optional<std::uintmax_t> file_size = TryGetFileSizeValue(FindObjectMember(value, "size"));
         const std::optional<std::string> sha256 = TryGetString(FindObjectMember(value, "sha256"));
-        if (!file_size.has_value() || !sha256.has_value() || sha256->empty())
+        if (!file_size.has_value() || !sha256.has_value() || !IsValidSha256Text(*sha256))
         {
             return false;
         }
 
         definition.FileSize = *file_size;
-        definition.Sha256 = *sha256;
+        definition.Sha256 = ToLowerAscii(*sha256);
         return true;
+    }
+
+    /**
+     * @brief Returns whether one parsed virtual-file source kind is valid for the declared virtualization mode.
+     * @param mode Virtualization mode declared by the pack.
+     * @param kind Source kind parsed from the virtual-file source declaration.
+     * @return True when the mode/source pairing is one of the supported combinations; otherwise false.
+     */
+    bool HasCompatibleVirtualFileModeAndSourceKind(std::string_view mode, helen::VirtualFileSourceKind kind)
+    {
+        if (mode == "replace-on-read")
+        {
+            return kind == helen::VirtualFileSourceKind::FullFile;
+        }
+
+        if (mode == "delta-on-read")
+        {
+            return kind == helen::VirtualFileSourceKind::DeltaFile;
+        }
+
+        return false;
     }
 
     /**
@@ -639,7 +683,8 @@ namespace
         {
             definition.Source.Kind = helen::VirtualFileSourceKind::FullFile;
             definition.Source.Path = std::filesystem::path(*source_text);
-            return !definition.Source.Path.empty();
+            return !definition.Source.Path.empty() &&
+                HasCompatibleVirtualFileModeAndSourceKind(definition.Mode, definition.Source.Kind);
         }
 
         if (!source_value->IsObject())
@@ -647,7 +692,12 @@ namespace
             return false;
         }
 
-        return ParseVirtualFileSource(*source_value, definition.Source);
+        if (!ParseVirtualFileSource(*source_value, definition.Source))
+        {
+            return false;
+        }
+
+        return HasCompatibleVirtualFileModeAndSourceKind(definition.Mode, definition.Source.Kind);
     }
 
     /**
