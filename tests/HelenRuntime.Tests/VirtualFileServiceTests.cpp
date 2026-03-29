@@ -1,3 +1,4 @@
+#include <HelenHook/FullFileVirtualFileSource.h>
 #include <HelenHook/PackAssetResolver.h>
 #include <HelenHook/VirtualFileDefinition.h>
 #include <HelenHook/VirtualFileService.h>
@@ -129,6 +130,23 @@ void RunVirtualFileServiceTests()
         Expect(std::string_view(static_cast<const char*>(mapping_view), 5) == "ABCDE", "Mapped virtual file payload mismatch.");
         UnmapViewOfFile(mapping_view);
         CloseHandle(*mapping_handle);
+
+        helen::FullFileVirtualFileSource full_file_source(std::vector<std::uint8_t>{ 'A', 'B', 'C', 'D', 'E' });
+        Expect(full_file_source.GetSize() == 5, "Full-file source size mismatch.");
+
+        std::array<char, 5> source_bytes{};
+        std::size_t source_bytes_read = 0;
+        Expect(full_file_source.Read(0, source_bytes.data(), source_bytes.size(), source_bytes_read), "Expected the full-file source read to succeed.");
+        Expect(source_bytes_read == 5, "Full-file source read byte count mismatch.");
+        Expect(std::string_view(source_bytes.data(), 5) == "ABCDE", "Full-file source read payload mismatch.");
+
+        const std::optional<HANDLE> source_mapping_handle = full_file_source.CreateFileMapping(PAGE_READONLY, 0, 0);
+        Expect(source_mapping_handle.has_value(), "Expected CreateFileMapping to succeed for the full-file source.");
+        void* const source_mapping_view = MapViewOfFile(*source_mapping_handle, FILE_MAP_READ, 0, 0, 5);
+        Expect(source_mapping_view != nullptr, "Expected MapViewOfFile to succeed for the full-file source mapping.");
+        Expect(std::string_view(static_cast<const char*>(source_mapping_view), 5) == "ABCDE", "Mapped full-file source payload mismatch.");
+        UnmapViewOfFile(source_mapping_view);
+        CloseHandle(*source_mapping_handle);
 
         Expect(service.Close(*handle), "Expected Close to succeed for the virtual gameplay package.");
         Expect(!service.IsVirtualHandle(*handle), "Closed gameplay package handle is still tracked as virtual.");

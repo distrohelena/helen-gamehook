@@ -1,5 +1,7 @@
+#include <HelenHook/FullFileVirtualFileSource.h>
 #include <HelenHook/VirtualFileService.h>
 
+#include <HelenHook/VirtualFileSource.h>
 #include <HelenHook/Log.h>
 
 #include <algorithm>
@@ -135,13 +137,40 @@ namespace helen
 
     bool VirtualFileService::RegisterVirtualFile(const VirtualFileDefinition& definition)
     {
+        std::wstring normalized_game_path;
+        if (!NormalizeDeclaredPath(definition.GamePath, normalized_game_path))
+        {
+            return false;
+        }
+
+        std::shared_ptr<VirtualFileSource> source;
+        if (!CreateSource(definition, source))
+        {
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto inserted = virtual_files_.emplace(normalized_game_path, source);
+        if (inserted.second)
+        {
+            Logf(
+                L"[runtime] registered virtual file path=%ls bytes=%llu",
+                normalized_game_path.c_str(),
+                static_cast<unsigned long long>(source->GetSize()));
+        }
+
+        return inserted.second;
+    }
+
+    bool VirtualFileService::CreateSource(const VirtualFileDefinition& definition, std::shared_ptr<VirtualFileSource>& source) const
+    {
+        source.reset();
         if (definition.Mode != "replace-on-read")
         {
             return false;
         }
 
-        std::wstring normalized_game_path;
-        if (!NormalizeDeclaredPath(definition.GamePath, normalized_game_path))
+        if (definition.Source.Kind != VirtualFileSourceKind::FullFile)
         {
             return false;
         }
@@ -152,23 +181,11 @@ namespace helen
             return false;
         }
 
-        const std::shared_ptr<const std::vector<std::uint8_t>> replacement_payload =
-            std::make_shared<std::vector<std::uint8_t>>(std::move(replacement_bytes));
-
-        std::lock_guard<std::mutex> lock(mutex_);
-        const auto inserted = virtual_files_.emplace(normalized_game_path, replacement_payload);
-        if (inserted.second)
-        {
-            Logf(
-                L"[runtime] registered virtual file path=%ls bytes=%llu",
-                normalized_game_path.c_str(),
-                static_cast<unsigned long long>(replacement_payload->size()));
-        }
-
-        return inserted.second;
+        source = std::make_shared<FullFileVirtualFileSource>(std::move(replacement_bytes));
+        return true;
     }
 
-    std::optional<std::shared_ptr<const std::vector<std::uint8_t>>> VirtualFileService::FindReplacementBytes(
+    std::optional<std::shared_ptr<VirtualFileSource>> VirtualFileService::FindSource(
         const std::wstring& normalized_lookup_path) const
     {
         const auto exact_match = virtual_files_.find(normalized_lookup_path);
@@ -206,13 +223,13 @@ namespace helen
         bool found_matching_file = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            const std::optional<std::shared_ptr<const std::vector<std::uint8_t>>> replacement_bytes = FindReplacementBytes(normalized_game_path);
-            if (replacement_bytes.has_value())
+            const std::optional<std::shared_ptr<VirtualFileSource>> source = FindSource(normalized_game_path);
+            if (source.has_value())
             {
                 found_matching_file = true;
 
                 VirtualFileHandle virtual_handle;
-                virtual_handle.ReplacementBytes = *replacement_bytes;
+                virtual_handle.Source = *source;
                 virtual_handle.ReadPosition = 0;
 
                 inserted = open_handles_.emplace(handle, std::move(virtual_handle)).second;
@@ -241,7 +258,7 @@ namespace helen
         DWORD maximum_size_high,
         DWORD maximum_size_low) const
     {
-        std::shared_ptr<const std::vector<std::uint8_t>> replacement_bytes;
+        std::shared_ptr<VirtualFileSource> source;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             const auto found = open_handles_.find(handle);
@@ -250,48 +267,15 @@ namespace helen
                 return std::nullopt;
             }
 
-            replacement_bytes = found->second.ReplacementBytes;
+            source = found->second.Source;
         }
 
-        if (replacement_bytes == nullptr || replacement_bytes->empty())
-        {
-            SetLastError(ERROR_FILE_INVALID);
-            return std::nullopt;
-        }
-
-        const std::uint64_t requested_size = (static_cast<std::uint64_t>(maximum_size_high) << 32) | maximum_size_low;
-        const std::uint64_t payload_size = static_cast<std::uint64_t>(replacement_bytes->size());
-        const std::uint64_t mapping_size = requested_size == 0 ? payload_size : requested_size;
-        if (mapping_size < payload_size || mapping_size > static_cast<std::uint64_t>((std::numeric_limits<DWORD>::max)()))
-        {
-            SetLastError(ERROR_INVALID_PARAMETER);
-            return std::nullopt;
-        }
-
-        const HANDLE mapping_handle = ::CreateFileMappingW(
-            INVALID_HANDLE_VALUE,
-            nullptr,
-            PAGE_READWRITE,
-            0,
-            static_cast<DWORD>(mapping_size),
-            nullptr);
-        if (mapping_handle == nullptr)
+        if (source == nullptr)
         {
             return std::nullopt;
         }
 
-        void* const view = MapViewOfFile(mapping_handle, FILE_MAP_WRITE, 0, 0, static_cast<SIZE_T>(payload_size));
-        if (view == nullptr)
-        {
-            CloseHandle(mapping_handle);
-            return std::nullopt;
-        }
-
-        std::memcpy(view, replacement_bytes->data(), replacement_bytes->size());
-        UnmapViewOfFile(view);
-
-        static_cast<void>(protection);
-        return mapping_handle;
+        return source->CreateFileMapping(protection, maximum_size_high, maximum_size_low);
     }
 
     bool VirtualFileService::IsVirtualHandle(HANDLE handle) const noexcept
@@ -340,23 +324,28 @@ namespace helen
             return false;
         }
 
-        const std::shared_ptr<const std::vector<std::uint8_t>>& replacement_bytes = virtual_handle.ReplacementBytes;
-        const std::uint64_t original_position = virtual_handle.ReadPosition;
-        const std::uint64_t size = static_cast<std::uint64_t>(replacement_bytes->size());
-        const std::uint64_t start = std::min(original_position, size);
-        const std::uint64_t available = size - start;
-        const std::uint64_t requested = static_cast<std::uint64_t>(bytes_to_read);
-        const std::uint64_t copied = std::min(available, requested);
-
-        if (copied > 0)
+        if (virtual_handle.Source == nullptr)
         {
-            std::memcpy(
-                buffer,
-                replacement_bytes->data() + static_cast<std::size_t>(start),
-                static_cast<std::size_t>(copied));
+            SetLastError(ERROR_INVALID_HANDLE);
+            return false;
         }
 
-        virtual_handle.ReadPosition = start + copied;
+        const std::uint64_t original_position = virtual_handle.ReadPosition;
+        const std::uint64_t size = virtual_handle.Source->GetSize();
+        const std::uint64_t start = std::min(original_position, size);
+        std::size_t copied = 0;
+        if (!virtual_handle.Source->Read(start, buffer, static_cast<std::size_t>(bytes_to_read), copied))
+        {
+            return false;
+        }
+
+        if (copied > static_cast<std::size_t>((std::numeric_limits<DWORD>::max)()))
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return false;
+        }
+
+        virtual_handle.ReadPosition = start + static_cast<std::uint64_t>(copied);
         *bytes_read = static_cast<DWORD>(copied);
         return true;
     }
@@ -395,8 +384,13 @@ namespace helen
         }
         else if (move_method == FILE_END)
         {
-            const std::shared_ptr<const std::vector<std::uint8_t>>& replacement_bytes = virtual_handle.ReplacementBytes;
-            const std::uint64_t size = static_cast<std::uint64_t>(replacement_bytes->size());
+            if (virtual_handle.Source == nullptr)
+            {
+                SetLastError(ERROR_INVALID_HANDLE);
+                return false;
+            }
+
+            const std::uint64_t size = virtual_handle.Source->GetSize();
             if (size > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()))
             {
                 SetLastError(ERROR_INVALID_PARAMETER);
@@ -458,14 +452,20 @@ namespace helen
             return false;
         }
 
-        const std::shared_ptr<const std::vector<std::uint8_t>>& replacement_bytes = found->second.ReplacementBytes;
-        if (replacement_bytes->size() > static_cast<std::size_t>((std::numeric_limits<LONGLONG>::max)()))
+        if (found->second.Source == nullptr)
+        {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return false;
+        }
+
+        const std::uint64_t size = found->second.Source->GetSize();
+        if (size > static_cast<std::uint64_t>((std::numeric_limits<LONGLONG>::max)()))
         {
             SetLastError(ERROR_INVALID_PARAMETER);
             return false;
         }
 
-        file_size->QuadPart = static_cast<LONGLONG>(replacement_bytes->size());
+        file_size->QuadPart = static_cast<LONGLONG>(size);
         return true;
     }
 
