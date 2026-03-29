@@ -35,11 +35,13 @@ powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Test-Batm
 powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Deploy-Batman.ps1
 ```
 
-4. Launch Batman and confirm the process starts:
+4. Launch Batman and complete a quick in-game verification:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Launch-Check-Batman.ps1
 ```
+
+After the process starts, load into gameplay and confirm at least one spoken line produces subtitles from the deployed pack. This is the end-to-end check that the runtime hook loaded, the shipped delta-backed pack mounted, and the game is actually using the deployed assets rather than just starting successfully.
 
 5. Verify the deployed pack is still the shipped delta-backed package:
 
