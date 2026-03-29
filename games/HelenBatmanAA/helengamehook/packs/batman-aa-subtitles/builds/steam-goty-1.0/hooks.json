@@ -9,8 +9,8 @@
   "stateObservers": [
     {
       "id": "subtitleUiStateObserver",
-      "scanStartAddress": "0x28000000",
-      "scanEndAddress": "0x2C000000",
+      "scanStartAddress": "0x2B000000",
+      "scanEndAddress": "0x30000000",
       "scanStride": 4,
       "valueOffset": 0,
       "pollIntervalMs": 250,

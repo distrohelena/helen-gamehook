@@ -15,6 +15,11 @@ $BuildAssetsRoot = Join-Path $BuilderRoot 'build-assets\pause-runtime-scale'
 $FfdecPath = Join-Path $BuilderRoot 'ffdec\ffdec-cli.exe'
 $BasePackagePath = Join-Path $BuilderRoot 'bmgame-unpacked\BmGame.u'
 $ManifestPath = Join-Path $BuildAssetsRoot 'pause-runtime-scale.manifest.jsonc'
+$PauseListItemOverridePath = Join-Path $BatmanRoot 'patch-source\PauseRuntimeScaleListItem.as'
+$GeneratedPauseScriptsRoot = Join-Path $BuildAssetsRoot '_build\pause-scripts'
+$GeneratedPauseListItemPath = Join-Path $GeneratedPauseScriptsRoot '__Packages\rs\ui\ListItem.as'
+$PauseStructuralGfxPath = Join-Path $BuildAssetsRoot '_build\Pause-runtime-scale-structural.gfx'
+$PauseOutputGfxPath = Join-Path $BuildAssetsRoot 'Pause-runtime-scale.gfx'
 $GameplayPackagePath = Join-Path $PackBuildRoot 'assets\packages\BmGame-subtitle-signal.u'
 $GlobalBlobPath = Join-Path $PackBuildRoot 'assets\native\batman-global-text-scale.bin'
 
@@ -45,6 +50,25 @@ if ($LASTEXITCODE -ne 0) {
     throw "Pause runtime scale asset build failed."
 }
 
+if (-not (Test-Path $PauseListItemOverridePath)) {
+    throw "Pause runtime scale override file was not found: $PauseListItemOverridePath"
+}
+
+if (-not (Test-Path $GeneratedPauseListItemPath)) {
+    throw "Generated pause runtime scale list item was not found: $GeneratedPauseListItemPath"
+}
+
+if (-not (Test-Path $PauseStructuralGfxPath)) {
+    throw "Generated pause runtime scale structural GFX was not found: $PauseStructuralGfxPath"
+}
+
+Copy-Item $PauseListItemOverridePath $GeneratedPauseListItemPath -Force
+
+& $FfdecPath -importScript $PauseStructuralGfxPath $PauseOutputGfxPath $GeneratedPauseScriptsRoot
+if ($LASTEXITCODE -ne 0) {
+    throw "Pause runtime scale script import failed after applying the Batman override."
+}
+
 & dotnet run --project $BmGameGfxPatcherProjectPath -c $Configuration -- `
     patch `
     --package $BasePackagePath `
@@ -60,6 +84,11 @@ if ($LASTEXITCODE -ne 0) {
     --scale-multiplier 1.5
 if ($LASTEXITCODE -ne 0) {
     throw "Global text scale blob export failed."
+}
+
+& powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-BatmanPauseRuntimeScaleBuilder.ps1') -BatmanRoot $BatmanRoot
+if ($LASTEXITCODE -ne 0) {
+    throw "Pause runtime scale verification failed."
 }
 
 Write-Output "Rebuilt Batman pack outputs:"

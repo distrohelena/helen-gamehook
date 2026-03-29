@@ -1,22 +1,13 @@
 #include <windows.h>
 
+#include <HelenHook/HelenRuntimeExports.h>
+
 #include <filesystem>
 #include <mutex>
 #include <optional>
-#include <string>
 
 namespace
 {
-    /**
-     * @brief Signature used to call the Helen runtime bootstrap export.
-     */
-    using HelenInitializeFunction = BOOL(__stdcall*)();
-
-    /**
-     * @brief Signature used to call the Helen runtime shutdown export.
-     */
-    using HelenShutdownFunction = void(__stdcall*)();
-
     /**
      * @brief Signature used to forward DirectInput8Create into the real system library.
      */
@@ -53,39 +44,14 @@ namespace
     using GetdfDIJoystickFunction = void* (__stdcall*)();
 
     /**
-     * @brief Initialization mutex that serializes first-use loading of the real proxy targets.
+     * @brief Synchronizes one-time loading of the real system dinput8 library and its forwarded exports.
      */
-    std::mutex InitializationMutex;
-
-    /**
-     * @brief Module handle for the current proxy DLL instance.
-     */
-    HMODULE ProxyModule = nullptr;
+    std::mutex RealDInputMutex;
 
     /**
      * @brief Module handle for the real system dinput8 library.
      */
     HMODULE RealDInputModule = nullptr;
-
-    /**
-     * @brief Module handle for the Helen runtime library loaded beside the game executable.
-     */
-    HMODULE HelenRuntimeModule = nullptr;
-
-    /**
-     * @brief Export pointer used to bootstrap the Helen runtime once.
-     */
-    HelenInitializeFunction HelenInitialize = nullptr;
-
-    /**
-     * @brief Export pointer used to request Helen shutdown during process detach when available.
-     */
-    HelenShutdownFunction HelenShutdown = nullptr;
-
-    /**
-     * @brief Returns whether this proxy instance has already completed one successful Helen bootstrap.
-     */
-    bool HelenBootstrapCompleted = false;
 
     /**
      * @brief Forward target for DirectInput8Create.
@@ -118,36 +84,6 @@ namespace
     GetdfDIJoystickFunction RealGetdfDIJoystick = nullptr;
 
     /**
-     * @brief Returns the full path to the proxy DLL module.
-     * @return Absolute proxy module path when it can be queried; otherwise no value.
-     */
-    std::optional<std::filesystem::path> TryGetProxyModulePath()
-    {
-        if (ProxyModule == nullptr)
-        {
-            return std::nullopt;
-        }
-
-        std::wstring buffer(MAX_PATH, L'\0');
-        while (true)
-        {
-            const DWORD length = GetModuleFileNameW(ProxyModule, buffer.data(), static_cast<DWORD>(buffer.size()));
-            if (length == 0)
-            {
-                return std::nullopt;
-            }
-
-            if (length < buffer.size() - 1)
-            {
-                buffer.resize(length);
-                return std::filesystem::path(buffer);
-            }
-
-            buffer.resize(buffer.size() * 2);
-        }
-    }
-
-    /**
      * @brief Returns the absolute path to the system dinput8 DLL.
      * @return Absolute system-library path when it can be resolved; otherwise no value.
      */
@@ -170,6 +106,7 @@ namespace
      */
     bool EnsureRealDInputLoaded()
     {
+        std::lock_guard<std::mutex> lock(RealDInputMutex);
         if (RealDInputModule != nullptr)
         {
             return true;
@@ -209,72 +146,17 @@ namespace
     }
 
     /**
-     * @brief Loads the Helen runtime DLL beside the proxy and resolves its bootstrap exports.
-     * @return True when Helen loads successfully or is already loaded; otherwise false.
-     */
-    bool EnsureHelenRuntimeLoaded()
-    {
-        if (HelenRuntimeModule != nullptr)
-        {
-            return true;
-        }
-
-        const std::optional<std::filesystem::path> proxy_path = TryGetProxyModulePath();
-        if (!proxy_path.has_value())
-        {
-            return false;
-        }
-
-        const std::filesystem::path runtime_path = proxy_path->parent_path() / "HelenGameHook.dll";
-        HelenRuntimeModule = LoadLibraryW(runtime_path.c_str());
-        if (HelenRuntimeModule == nullptr)
-        {
-            return false;
-        }
-
-        HelenInitialize = reinterpret_cast<HelenInitializeFunction>(
-            GetProcAddress(HelenRuntimeModule, "HelenInitialize"));
-        HelenShutdown = reinterpret_cast<HelenShutdownFunction>(
-            GetProcAddress(HelenRuntimeModule, "HelenShutdown"));
-        if (HelenInitialize == nullptr)
-        {
-            FreeLibrary(HelenRuntimeModule);
-            HelenRuntimeModule = nullptr;
-            return false;
-        }
-
-        return true;
-    }
-
-    /**
-     * @brief Ensures both the real system library and the Helen runtime are loaded before forwarding calls.
+     * @brief Ensures both the real system library and the Helen runtime bootstrap have completed before forwarding calls.
      * @return True when the proxy is fully initialized; otherwise false.
      */
     bool EnsureInitialized()
     {
-        std::lock_guard<std::mutex> lock(InitializationMutex);
         if (!EnsureRealDInputLoaded())
         {
             return false;
         }
 
-        if (!EnsureHelenRuntimeLoaded())
-        {
-            return false;
-        }
-
-        if (HelenBootstrapCompleted)
-        {
-            return true;
-        }
-
-        if (HelenInitialize == nullptr || HelenInitialize() != TRUE)
-        {
-            return false;
-        }
-
-        HelenBootstrapCompleted = true;
-        return true;
+        return HelenInitialize() == TRUE;
     }
 }
 
@@ -291,21 +173,12 @@ extern "C" BOOL APIENTRY DllMain(HMODULE module_handle, DWORD reason, LPVOID res
 
     if (reason == DLL_PROCESS_ATTACH)
     {
-        ProxyModule = module_handle;
         DisableThreadLibraryCalls(module_handle);
+        static_cast<void>(HelenInitialize());
     }
     else if (reason == DLL_PROCESS_DETACH)
     {
-        if (HelenShutdown != nullptr)
-        {
-            HelenShutdown();
-        }
-
-        if (HelenRuntimeModule != nullptr)
-        {
-            FreeLibrary(HelenRuntimeModule);
-            HelenRuntimeModule = nullptr;
-        }
+        HelenShutdown();
 
         if (RealDInputModule != nullptr)
         {

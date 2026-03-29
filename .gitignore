@@ -14,3 +14,4 @@
 *.user
 *.log
 *.tmp
+artifacts/*

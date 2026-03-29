@@ -71,6 +71,7 @@
     <Lib />
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="BuildRuntimeCoordinator.cpp" />
     <ClCompile Include="BuildHookInstaller.cpp" />
     <ClCompile Include="CommandDispatcher.cpp" />
     <ClCompile Include="CommandExecutor.cpp" />
@@ -90,11 +91,13 @@
     <ClCompile Include="PackAssetResolver.cpp" />
     <ClCompile Include="PackRepository.cpp" />
     <ClCompile Include="Pattern.cpp" />
+    <ClCompile Include="ProxyBootstrapCoordinator.cpp" />
     <ClCompile Include="RuntimeLayout.cpp" />
     <ClCompile Include="RuntimeValueStore.cpp" />
     <ClCompile Include="VirtualFileService.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\include\HelenHook\BuildRuntimeCoordinator.h" />
     <ClInclude Include="..\include\HelenHook\BuildHookInstaller.h" />
     <ClInclude Include="..\include\HelenHook\BuildDefinition.h" />
     <ClInclude Include="..\include\HelenHook\BuildMatchDefinition.h" />
@@ -129,6 +132,7 @@
     <ClInclude Include="..\include\HelenHook\PackDefinition.h" />
     <ClInclude Include="..\include\HelenHook\PackRepository.h" />
     <ClInclude Include="..\include\HelenHook\Pattern.h" />
+    <ClInclude Include="..\include\HelenHook\ProxyBootstrapCoordinator.h" />
     <ClInclude Include="..\include\HelenHook\RuntimeLayout.h" />
     <ClInclude Include="..\include\HelenHook\RuntimeValueStore.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileDefinition.h" />

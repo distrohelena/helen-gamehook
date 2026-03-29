@@ -42,6 +42,16 @@ namespace
         }
     }
 
+    /**
+     * @brief Resolves the checked-in Batman pack root inside the current repository.
+     * @return Absolute path to the Batman pack root used by the live Helen runtime.
+     */
+    std::filesystem::path GetBatmanPackRoot()
+    {
+        const std::filesystem::path source_path(__FILE__);
+        return source_path.parent_path().parent_path().parent_path() / "games" / "HelenBatmanAA" / "helengamehook" / "packs";
+    }
+
 }
 
 /**
@@ -197,8 +207,8 @@ void RunPackRepositoryTests()
   "stateObservers": [
     {
       "id": "subtitleUiStateObserver",
-      "scanStartAddress": "0x28000000",
-      "scanEndAddress": "0x2C000000",
+      "scanStartAddress": "0x2B000000",
+      "scanEndAddress": "0x30000000",
       "scanStride": 4,
       "valueOffset": 0,
       "pollIntervalMs": 250,
@@ -336,6 +346,16 @@ void RunPackRepositoryTests()
             1234,
             "abcdef");
         Expect(!malformed_pack.has_value(), "Pack repository unexpectedly loaded a build whose hooks.json was malformed.");
+
+        const std::optional<helen::LoadedBuildPack> loaded_batman_pack = repository.LoadForExecutable(
+            GetBatmanPackRoot(),
+            "ShippingPC-BmGame.exe",
+            38758728,
+            "4dac1f5e2ac6710b7378fdce74601f616f4753e3756cb5fda63c7519cc2eb028");
+        Expect(loaded_batman_pack.has_value(), "Expected the checked-in Batman pack to load for the matching executable fingerprint.");
+        Expect(loaded_batman_pack->Build.StateObservers.size() == 1, "Checked-in Batman pack state observer count mismatch.");
+        Expect(loaded_batman_pack->Build.StateObservers[0].ScanStartAddress == 0x2B000000, "Checked-in Batman observer scan start drifted from the investigated hot heap window.");
+        Expect(loaded_batman_pack->Build.StateObservers[0].ScanEndAddress == 0x30000000, "Checked-in Batman observer scan end drifted from the investigated hot heap window.");
     }
     catch (...)
     {
