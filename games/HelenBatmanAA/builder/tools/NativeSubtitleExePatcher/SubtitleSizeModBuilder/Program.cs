@@ -1,7 +1,15 @@
 namespace SubtitleSizeModBuilder;
 
+/// <summary>
+/// Entry point for the subtitle-size asset build tools.
+/// </summary>
 internal static class Program
 {
+    /// <summary>
+    /// Dispatches the requested builder command.
+    /// </summary>
+    /// <param name="args">The command-line arguments.</param>
+    /// <returns>The process exit code.</returns>
     private static int Main(string[] args)
     {
         if (args.Length == 0)
@@ -18,6 +26,7 @@ internal static class Program
             return command switch
             {
                 "build-assets" => RunBuildAssets(tail),
+                "build-main-menu-audio" => RunBuildMainMenuAudio(tail),
                 "build-pause-runtime-scale" => RunBuildPauseRuntimeScale(tail),
                 "build-hud-font-boost" => RunBuildHudFontBoost(tail),
                 "build-hud-subtitle-probe" => RunBuildHudSubtitleProbe(tail),
@@ -33,6 +42,11 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// Builds the combined pause, HUD, and frontend subtitle-size assets.
+    /// </summary>
+    /// <param name="args">The command arguments.</param>
+    /// <returns>The process exit code.</returns>
     private static int RunBuildAssets(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -55,6 +69,37 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Builds the frontend MainV2 audio screen with the dedicated subtitle-size row.
+    /// </summary>
+    /// <param name="args">The command arguments.</param>
+    /// <returns>The process exit code.</returns>
+    private static int RunBuildMainMenuAudio(string[] args)
+    {
+        var options = new ArgumentReader(args);
+        string root = Path.GetFullPath(options.RequireValue("--root"));
+        string outputDirectory = Path.GetFullPath(options.GetValue("--output-dir") ?? Path.Combine(root, "generated", "main-menu-audio"));
+        string ffdecPath = Path.GetFullPath(options.GetValue("--ffdec") ?? Path.Combine(root, "extracted", "ffdec", "ffdec-cli.exe"));
+        string buildVersion = BuildVersionManager.Resolve(root, options.GetValue("--build-version"));
+        options.ThrowIfAnyUnknown();
+
+        BuildPaths paths = BuildPaths.FromRoot(root, ffdecPath, outputDirectory, buildVersion);
+        SubtitleSizeAssetBuilder.BuildFrontend(paths);
+
+        Console.WriteLine($"Build version:      {paths.BuildVersion}");
+        Console.WriteLine($"Patched XML:        {paths.FrontendPatchedXmlPath}");
+        Console.WriteLine($"Structural Frontend:{paths.FrontendStructuralGfxPath}");
+        Console.WriteLine($"Built Frontend:     {paths.FrontendOutputGfxPath}");
+        Console.WriteLine($"Frontend manifest:  {paths.FrontendManifestPath}");
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Builds the pause runtime-scale assets.
+    /// </summary>
+    /// <param name="args">The command arguments.</param>
+    /// <returns>The process exit code.</returns>
     private static int RunBuildPauseRuntimeScale(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -72,6 +117,11 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Builds the HUD font-boost probe assets.
+    /// </summary>
+    /// <param name="args">The command arguments.</param>
+    /// <returns>The process exit code.</returns>
     private static int RunBuildHudFontBoost(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -89,6 +139,11 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Builds the HUD subtitle probe assets.
+    /// </summary>
+    /// <param name="args">The command arguments.</param>
+    /// <returns>The process exit code.</returns>
     private static int RunBuildHudSubtitleProbe(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -106,6 +161,11 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Builds the subtitle route probe assets.
+    /// </summary>
+    /// <param name="args">The command arguments.</param>
+    /// <returns>The process exit code.</returns>
     private static int RunBuildSubtitleRouteProbe(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -124,18 +184,26 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Prints help text and reports success.
+    /// </summary>
+    /// <returns>The process exit code.</returns>
     private static int PrintHelpAndReturn()
     {
         PrintUsage();
         return 0;
     }
 
+    /// <summary>
+    /// Prints the supported builder commands.
+    /// </summary>
     private static void PrintUsage()
     {
         Console.WriteLine("SubtitleSizeModBuilder");
         Console.WriteLine();
         Console.WriteLine("Commands:");
         Console.WriteLine("  build-assets --root <batman-builder-root> [--output-dir <generated\\subtitle-size>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>] [--build-version <label>]");
+        Console.WriteLine("  build-main-menu-audio --root <batman-builder-root> [--output-dir <generated\\main-menu-audio>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>] [--build-version <label>]");
         Console.WriteLine("  build-pause-runtime-scale --root <batman-builder-root> [--output-dir <generated\\pause-runtime-scale>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>]");
         Console.WriteLine("  build-hud-font-boost --root <batman-builder-root> [--output-dir <generated\\hud-font-boost>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>]");
         Console.WriteLine("  build-hud-subtitle-probe --root <batman-builder-root> [--output-dir <generated\\hud-subtitle-probe>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>]");
@@ -143,11 +211,25 @@ internal static class Program
     }
 }
 
+/// <summary>
+/// Parses simple <c>--key value</c> style command-line options.
+/// </summary>
 internal sealed class ArgumentReader
 {
+    /// <summary>
+    /// Stores every parsed option value by key.
+    /// </summary>
     private readonly Dictionary<string, string?> values = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Tracks which options were consumed by the active command.
+    /// </summary>
     private readonly HashSet<string> consumed = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Parses the raw command-line arguments into keyed options.
+    /// </summary>
+    /// <param name="args">The raw command-line arguments after the command name.</param>
     public ArgumentReader(string[] args)
     {
         for (int index = 0; index < args.Length; index++)
@@ -170,6 +252,11 @@ internal sealed class ArgumentReader
         }
     }
 
+    /// <summary>
+    /// Reads a required option value.
+    /// </summary>
+    /// <param name="key">The option key.</param>
+    /// <returns>The non-empty option value.</returns>
     public string RequireValue(string key)
     {
         if (!values.TryGetValue(key, out string? value) || string.IsNullOrWhiteSpace(value))
@@ -181,6 +268,11 @@ internal sealed class ArgumentReader
         return value;
     }
 
+    /// <summary>
+    /// Reads an optional option value.
+    /// </summary>
+    /// <param name="key">The option key.</param>
+    /// <returns>The option value when present; otherwise <see langword="null" />.</returns>
     public string? GetValue(string key)
     {
         if (!values.TryGetValue(key, out string? value))
@@ -192,6 +284,9 @@ internal sealed class ArgumentReader
         return value;
     }
 
+    /// <summary>
+    /// Fails when unknown options remain after a command has consumed the supported keys.
+    /// </summary>
     public void ThrowIfAnyUnknown()
     {
         string[] unknown = values.Keys.Where(key => !consumed.Contains(key)).OrderBy(key => key, StringComparer.Ordinal).ToArray();
