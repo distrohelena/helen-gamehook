@@ -500,8 +500,8 @@ void RunPackRepositoryTests()
         Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Path == std::filesystem::path("assets/deltas/BmGame-subtitle-signal.hgdelta"), "Checked-in Batman gameplay package delta path mismatch.");
         Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Base.FileSize == 100365345, "Checked-in Batman gameplay package base size mismatch.");
         Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Base.Sha256 == "621a5c8d99c9f7c7283531d05a4a6d56bdf15ad93ede0d5bf2f5d3e45117ff36", "Checked-in Batman gameplay package base hash mismatch.");
-        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Target.FileSize == 101117004, "Checked-in Batman gameplay package target size mismatch.");
-        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Target.Sha256 == "b241625d604de97f7b7fda53ad6df2346992d8ef2b9be66fd45d395839080329", "Checked-in Batman gameplay package target hash mismatch.");
+        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Target.FileSize == 101115741, "Checked-in Batman gameplay package target size mismatch.");
+        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Target.Sha256 == "d1e97fbd81e5eec121538873b5fc95c4a47dca98dbae51898cf3e80210639d39", "Checked-in Batman gameplay package target hash mismatch.");
         Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.ChunkSize == 65536, "Checked-in Batman gameplay package chunk size mismatch.");
         Expect(loaded_batman_pack->Build.StateObservers.size() == 1, "Checked-in Batman pack state observer count mismatch.");
         Expect(loaded_batman_pack->Build.StateObservers[0].ScanStartAddress == 0x2B000000, "Checked-in Batman observer scan start drifted from the investigated hot heap window.");

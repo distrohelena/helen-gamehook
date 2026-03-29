@@ -1,19 +1,33 @@
 param(
-    [string]$Configuration = 'Release'
+    [string]$Configuration = 'Release',
+    [string]$BatmanRoot,
+    [string]$BuilderRoot
 )
 
 $ErrorActionPreference = 'Stop'
 
-$BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$BuilderRoot = Join-Path $BatmanRoot 'builder'
-$ToolRoot = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher'
+if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
+    $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+} else {
+    $BatmanRoot = (Resolve-Path $BatmanRoot).Path
+}
+if ([string]::IsNullOrWhiteSpace($BuilderRoot)) {
+    $BuilderRoot = Join-Path $BatmanRoot 'builder'
+} elseif (-not [System.IO.Path]::IsPathRooted($BuilderRoot)) {
+    $BuilderRoot = Join-Path $BatmanRoot $BuilderRoot
+}
+$BuilderRoot = [System.IO.Path]::GetFullPath($BuilderRoot)
+$SourceBuilderRoot = Join-Path $BatmanRoot 'builder'
+$ExtractedRoot = Join-Path $BuilderRoot 'extracted'
+$GeneratedRoot = Join-Path $BuilderRoot 'generated'
+$ToolRoot = Join-Path $SourceBuilderRoot 'tools\NativeSubtitleExePatcher'
 $NativeSubtitleExePatcherProjectPath = Join-Path $ToolRoot 'NativeSubtitleExePatcher.csproj'
 $SubtitleSizeModBuilderProjectPath = Join-Path $ToolRoot 'SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj'
 $BmGameGfxPatcherProjectPath = Join-Path $ToolRoot 'BmGameGfxPatcher\BmGameGfxPatcher.csproj'
 $PackBuildRoot = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles\builds\steam-goty-1.0'
-$BuildAssetsRoot = Join-Path $BuilderRoot 'build-assets\pause-runtime-scale'
-$FfdecPath = Join-Path $BuilderRoot 'ffdec\ffdec-cli.exe'
-$BasePackagePath = Join-Path $BuilderRoot 'bmgame-unpacked\BmGame.u'
+$BuildAssetsRoot = Join-Path $GeneratedRoot 'pause-runtime-scale'
+$FfdecPath = Join-Path $ExtractedRoot 'ffdec\ffdec-cli.exe'
+$BasePackagePath = Join-Path $ExtractedRoot 'bmgame-unpacked\BmGame.u'
 $FilesJsonPath = Join-Path $PackBuildRoot 'files.json'
 $ManifestPath = Join-Path $BuildAssetsRoot 'pause-runtime-scale.manifest.jsonc'
 $PauseListItemOverridePath = Join-Path $BatmanRoot 'patch-source\PauseRuntimeScaleListItem.as'
@@ -25,6 +39,28 @@ $GeneratedGameplayPackagePath = Join-Path $BuildAssetsRoot 'BmGame-subtitle-sign
 $GameplayDeltaPath = Join-Path $PackBuildRoot 'assets\deltas\BmGame-subtitle-signal.hgdelta'
 $GlobalBlobPath = Join-Path $PackBuildRoot 'assets\native\batman-global-text-scale.bin'
 $BuildHgdeltaScriptPath = Join-Path $PSScriptRoot 'Build-Hgdelta.ps1'
+$PauseAudioLayoutVerifierPath = Join-Path $PSScriptRoot 'Test-BatmanPauseAudioLayout.ps1'
+$PrepareBuilderWorkspaceScriptPath = Join-Path $PSScriptRoot 'Prepare-BatmanBuilderWorkspace.ps1'
+
+$builderWorkspacePrerequisites = @(
+    $FfdecPath,
+    $BasePackagePath,
+    (Join-Path $ExtractedRoot 'pause\Pause-extracted.gfx'),
+    (Join-Path $ExtractedRoot 'pause\Pause.xml'),
+    (Join-Path $ExtractedRoot 'pause\pause-ffdec-export\scripts'),
+    (Join-Path $ExtractedRoot 'hud\HUD-extracted.gfx'),
+    (Join-Path $ExtractedRoot 'hud\hud-ffdec-scripts\scripts')
+)
+
+$missingBuilderWorkspacePaths = @(
+    $builderWorkspacePrerequisites |
+    Where-Object { -not (Test-Path -LiteralPath $_) }
+)
+
+if ($missingBuilderWorkspacePaths.Count -gt 0) {
+    $missingBuilderWorkspaceText = ($missingBuilderWorkspacePaths | ForEach-Object { "  - $_" }) -join [Environment]::NewLine
+    throw "Batman builder workspace is incomplete. Run `"$PrepareBuilderWorkspaceScriptPath`" with a trusted BmGame.u and FFDec before rebuilding.$([Environment]::NewLine)Missing paths:$([Environment]::NewLine)$missingBuilderWorkspaceText"
+}
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GeneratedGameplayPackagePath) | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GameplayDeltaPath) | Out-Null
@@ -52,6 +88,11 @@ if ($LASTEXITCODE -ne 0) {
     --ffdec $FfdecPath
 if ($LASTEXITCODE -ne 0) {
     throw "Pause runtime scale asset build failed."
+}
+
+& powershell -ExecutionPolicy Bypass -File $PauseAudioLayoutVerifierPath -BatmanRoot $BatmanRoot
+if ($LASTEXITCODE -ne 0) {
+    throw "Pause audio layout verification failed."
 }
 
 if (-not (Test-Path $PauseListItemOverridePath)) {
