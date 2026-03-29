@@ -13,10 +13,10 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
 $PrepareScriptPath = Join-Path $BatmanRoot 'scripts\Prepare-BatmanBuilderWorkspace.ps1'
 $BasePackagePath = Join-Path $BatmanRoot 'builder\extracted\bmgame-unpacked\BmGame.u'
 $SourceFrontendBasePackagePath = Join-Path $BatmanRoot 'builder\extracted\frontend\startup-int-unpacked\Startup_INT.upk'
-$SourceFrontendGfxPath = Join-Path $BatmanRoot 'builder\extracted\frontend\mainv2\frontend-mainv2.gfx'
 $FrontendBasePackagePath = Join-Path $BatmanRoot 'builder\extracted\frontend\startup-int-unpacked\Startup_INT.upk'
 $FfdecCliPath = Join-Path $BatmanRoot 'builder\extracted\ffdec\ffdec-cli.exe'
 $ExpectedBaseSha256 = '621A5C8D99C9F7C7283531D05A4A6D56BDF15AD93EDE0D5BF2F5D3E45117FF36'
+$ExpectedFrontendGfxSha256 = '414B74DA6D40E81D4F1B5B3408059800C5ECA19CD429331B6043DAA22AF3AF9B'
 $ExpectedPauseGfxSha256 = '0426443F03642194D888199D7BB190DE48E3F7C7EB589FB9E8D732728330A630'
 $ExpectedHudGfxSha256 = 'EF62EB89EB090E607B45AAF4AE46922CB2A78B678452F652F042480F4670D770'
 $TemporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("BatmanBuilderPrep-" + [System.Guid]::NewGuid().ToString('N'))
@@ -88,14 +88,9 @@ try {
         throw "Prepared frontend base package hash mismatch. Expected $sourceFrontendBaseSha256 from $SourceFrontendBasePackagePath, found $preparedFrontendBaseSha256."
     }
 
-    if (-not (Test-Path -LiteralPath $SourceFrontendGfxPath)) {
-        throw "Trusted frontend GFX was not found: $SourceFrontendGfxPath"
-    }
-
-    $sourceFrontendGfxSha256 = (Get-FileHash -LiteralPath $SourceFrontendGfxPath -Algorithm SHA256).Hash
     $preparedFrontendGfxSha256 = (Get-FileHash -LiteralPath $PreparedFrontendGfxPath -Algorithm SHA256).Hash
-    if ($preparedFrontendGfxSha256 -ne $sourceFrontendGfxSha256) {
-        throw "Prepared frontend GFX hash mismatch. Expected $sourceFrontendGfxSha256 from $SourceFrontendGfxPath, found $preparedFrontendGfxSha256."
+    if ($preparedFrontendGfxSha256 -ne $ExpectedFrontendGfxSha256) {
+        throw "Prepared frontend GFX hash mismatch. Expected $ExpectedFrontendGfxSha256, found $preparedFrontendGfxSha256."
     }
 
     $frontendXmlContents = Get-Content -LiteralPath $PreparedFrontendXmlPath -Raw
