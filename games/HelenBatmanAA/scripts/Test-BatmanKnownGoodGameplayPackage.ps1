@@ -15,10 +15,10 @@ $ExpectedVirtualFileKind = 'delta-file'
 $ExpectedDeltaPath = 'assets/deltas/BmGame-subtitle-signal.hgdelta'
 $ExpectedBaseSize = 100365345
 $ExpectedBaseSha256 = '621a5c8d99c9f7c7283531d05a4a6d56bdf15ad93ede0d5bf2f5d3e45117ff36'
-$ExpectedTargetSize = 101117004
-$ExpectedTargetSha256 = 'b241625d604de97f7b7fda53ad6df2346992d8ef2b9be66fd45d395839080329'
+$ExpectedTargetSize = 101115741
+$ExpectedTargetSha256 = 'd1e97fbd81e5eec121538873b5fc95c4a47dca98dbae51898cf3e80210639d39'
 $ExpectedChunkSize = 65536
-$ExpectedGameplayDeltaHash = '2A4988D7BC655C8779C0B3718F60226119AFEC386AB56C22F14CBFC2454FC3C1'
+$ExpectedGameplayDeltaHash = '421665A0A955276A156800C0FA2F26B8193F71601648118902D8EE044E885397'
 
 if (-not (Test-Path $FilesJsonPath)) {
     throw "Batman gameplay package manifest not found: $FilesJsonPath"

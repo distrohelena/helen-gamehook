@@ -1,0 +1,19 @@
+{
+  "name": "Subtitle size mod template",
+  "patches": [
+    {
+      "owner": "PauseMenu",
+      "exportName": "Pause",
+      "exportType": "GFxMovieInfo",
+      "replacementPath": "..\\..\\..\\generated\\subtitle-size\\Pause-subtitle-size.gfx",
+      "payloadMagic": "GFX"
+    },
+    {
+      "owner": "GameHUD",
+      "exportName": "HUD",
+      "exportType": "GFxMovieInfo",
+      "replacementPath": "..\\..\\..\\generated\\subtitle-size\\HUD-subtitle-size.gfx",
+      "payloadMagic": "GFX"
+    }
+  ]
+}
