@@ -2,6 +2,9 @@ using System.Diagnostics;
 
 namespace SubtitleSizeModBuilder;
 
+/// <summary>
+/// Resolves the filesystem layout used by the subtitle-size asset builders.
+/// </summary>
 internal sealed record BuildPaths(
     string RootPath,
     string BuildVersion,
@@ -29,6 +32,14 @@ internal sealed record BuildPaths(
     string BmGameManifestPath,
     string FrontendManifestPath)
 {
+    /// <summary>
+    /// Creates a <see cref="BuildPaths" /> instance rooted at the builder workspace.
+    /// </summary>
+    /// <param name="root">The Batman builder root directory.</param>
+    /// <param name="ffdecPath">The FFDec CLI path.</param>
+    /// <param name="outputDirectory">The generated output directory.</param>
+    /// <param name="buildVersion">The build label injected into the frontend root script.</param>
+    /// <returns>The resolved build path set.</returns>
     public static BuildPaths FromRoot(string root, string ffdecPath, string outputDirectory, string buildVersion)
     {
         string fullRoot = Path.GetFullPath(root);
@@ -64,33 +75,95 @@ internal sealed record BuildPaths(
     }
 }
 
+/// <summary>
+/// Builds the pause, HUD, and frontend subtitle-size assets from extracted FFDec sources.
+/// </summary>
 internal static class SubtitleSizeAssetBuilder
 {
+    /// <summary>
+    /// Builds the combined pause, HUD, and frontend subtitle-size package.
+    /// </summary>
+    /// <param name="paths">The resolved build paths.</param>
     public static void Build(BuildPaths paths)
     {
-        ValidateInputs(paths);
+        ValidateAllInputs(paths);
+        PrepareOutputDirectories(paths);
 
-        RecreateDirectory(paths.OutputDirectory);
-        Directory.CreateDirectory(paths.TempDirectory);
-
-        CopyDirectory(paths.PauseScriptsPath, paths.PauseWorkingScriptsPath);
-        CopyDirectory(paths.HudScriptsPath, paths.HudWorkingScriptsPath);
-        CopyDirectory(paths.FrontendScriptsPath, paths.FrontendWorkingScriptsPath);
-
-        PatchPauseScripts(paths.PauseWorkingScriptsPath);
-        PatchHudScripts(paths.HudWorkingScriptsPath);
-        PatchFrontendScripts(paths.FrontendWorkingScriptsPath, paths.BuildVersion);
-        PauseXmlPatcher.Patch(paths.PauseXmlPath, paths.PausePatchedXmlPath);
-
-        RunProcess(paths.FfdecPath, "-xml2swf", paths.PausePatchedXmlPath, paths.PauseStructuralGfxPath);
-        RunProcess(paths.FfdecPath, "-importScript", paths.PauseStructuralGfxPath, paths.PauseOutputGfxPath, paths.PauseWorkingScriptsPath);
-        RunProcess(paths.FfdecPath, "-importScript", paths.HudSourceGfxPath, paths.HudOutputGfxPath, paths.HudWorkingScriptsPath);
-        RunProcess(paths.FfdecPath, "-importScript", paths.FrontendSourceGfxPath, paths.FrontendOutputGfxPath, paths.FrontendWorkingScriptsPath);
+        BuildPauseAssets(paths);
+        BuildHudAssets(paths);
+        BuildFrontendAssets(paths);
 
         WriteBmGameManifest(paths.BmGameManifestPath);
         WriteFrontendManifest(paths.FrontendManifestPath);
     }
 
+    /// <summary>
+    /// Builds only the frontend main-menu audio asset and manifest.
+    /// </summary>
+    /// <param name="paths">The resolved build paths.</param>
+    public static void BuildFrontend(BuildPaths paths)
+    {
+        ValidateFrontendInputs(paths);
+        PrepareOutputDirectories(paths);
+
+        BuildFrontendAssets(paths);
+        WriteFrontendManifest(paths.FrontendManifestPath);
+    }
+
+    /// <summary>
+    /// Recreates the output directory so each build starts from a clean generated state.
+    /// </summary>
+    /// <param name="paths">The resolved build paths.</param>
+    private static void PrepareOutputDirectories(BuildPaths paths)
+    {
+        RecreateDirectory(paths.OutputDirectory);
+        Directory.CreateDirectory(paths.TempDirectory);
+    }
+
+    /// <summary>
+    /// Builds the pause-menu asset from a structurally patched XML and patched scripts.
+    /// </summary>
+    /// <param name="paths">The resolved build paths.</param>
+    private static void BuildPauseAssets(BuildPaths paths)
+    {
+        CopyDirectory(paths.PauseScriptsPath, paths.PauseWorkingScriptsPath);
+        PatchPauseScripts(paths.PauseWorkingScriptsPath);
+        PauseXmlPatcher.Patch(paths.PauseXmlPath, paths.PausePatchedXmlPath);
+
+        RunProcess(paths.FfdecPath, "-xml2swf", paths.PausePatchedXmlPath, paths.PauseStructuralGfxPath);
+        RunProcess(paths.FfdecPath, "-importScript", paths.PauseStructuralGfxPath, paths.PauseOutputGfxPath, paths.PauseWorkingScriptsPath);
+    }
+
+    /// <summary>
+    /// Builds the HUD asset by importing the patched subtitle scripts into the extracted HUD movie.
+    /// </summary>
+    /// <param name="paths">The resolved build paths.</param>
+    private static void BuildHudAssets(BuildPaths paths)
+    {
+        CopyDirectory(paths.HudScriptsPath, paths.HudWorkingScriptsPath);
+        PatchHudScripts(paths.HudWorkingScriptsPath);
+
+        RunProcess(paths.FfdecPath, "-importScript", paths.HudSourceGfxPath, paths.HudOutputGfxPath, paths.HudWorkingScriptsPath);
+    }
+
+    /// <summary>
+    /// Builds the frontend main-menu audio asset by rebuilding the movie XML, then importing the patched scripts.
+    /// </summary>
+    /// <param name="paths">The resolved build paths.</param>
+    private static void BuildFrontendAssets(BuildPaths paths)
+    {
+        CopyDirectory(paths.FrontendScriptsPath, paths.FrontendWorkingScriptsPath);
+        PatchFrontendScripts(paths.FrontendWorkingScriptsPath, paths.BuildVersion);
+        MainMenuXmlPatcher.Patch(paths.FrontendXmlPath, paths.FrontendPatchedXmlPath);
+
+        RunProcess(paths.FfdecPath, "-xml2swf", paths.FrontendPatchedXmlPath, paths.FrontendStructuralGfxPath);
+        RunProcess(paths.FfdecPath, "-importScript", paths.FrontendStructuralGfxPath, paths.FrontendOutputGfxPath, paths.FrontendWorkingScriptsPath);
+    }
+
+    /// <summary>
+    /// Writes the pause-menu list item and frame script overrides used by the runtime subtitle-size build.
+    /// </summary>
+    /// <param name="scriptsRoot">The copied pause script directory.</param>
     private static void PatchPauseScripts(string scriptsRoot)
     {
         WriteAllText(
@@ -115,6 +188,10 @@ internal static class SubtitleSizeAssetBuilder
             ScriptTemplates.PauseAudioSubtitleSizeClipAction);
     }
 
+    /// <summary>
+    /// Writes the HUD subtitle overrides used by the runtime subtitle-size build.
+    /// </summary>
+    /// <param name="scriptsRoot">The copied HUD script directory.</param>
     private static void PatchHudScripts(string scriptsRoot)
     {
         WriteAllText(
@@ -126,8 +203,17 @@ internal static class SubtitleSizeAssetBuilder
             ScriptTemplates.HudContentsFrame1);
     }
 
+    /// <summary>
+    /// Writes the frontend main-menu audio script overrides and injects the build version label.
+    /// </summary>
+    /// <param name="scriptsRoot">The copied frontend script directory.</param>
+    /// <param name="buildVersion">The build label shown in the root frontend script.</param>
     private static void PatchFrontendScripts(string scriptsRoot, string buildVersion)
     {
+        WriteAllText(
+            Path.Combine(scriptsRoot, "__Packages", "rs", "ui", "ListItem.as"),
+            ScriptTemplates.FrontendListItem);
+
         WriteAllText(
             Path.Combine(scriptsRoot, "DefineSprite_359_ScreenOptionsAudio", "frame_1", "DoAction.as"),
             ScriptTemplates.FrontendAudioFrame1);
@@ -137,7 +223,7 @@ internal static class SubtitleSizeAssetBuilder
                 scriptsRoot,
                 "DefineSprite_359_ScreenOptionsAudio",
                 "frame_1",
-                "PlaceObject2_290_List_Template_53",
+                "PlaceObject2_290_List_Template_61",
                 "CLIPACTIONRECORD onClipEvent(load).as"),
             ScriptTemplates.FrontendAudioSubtitleSizeClipAction);
 
@@ -157,6 +243,10 @@ internal static class SubtitleSizeAssetBuilder
         WriteAllText(rootScriptPath, patched);
     }
 
+    /// <summary>
+    /// Writes the BmGame manifest for the combined pause and HUD replacement package.
+    /// </summary>
+    /// <param name="manifestPath">The output manifest path.</param>
     private static void WriteBmGameManifest(string manifestPath)
     {
         const string manifest = """
@@ -184,6 +274,10 @@ internal static class SubtitleSizeAssetBuilder
         File.WriteAllText(manifestPath, manifest);
     }
 
+    /// <summary>
+    /// Writes the frontend-only manifest for the rebuilt MainV2 movie.
+    /// </summary>
+    /// <param name="manifestPath">The output manifest path.</param>
     private static void WriteFrontendManifest(string manifestPath)
     {
         const string manifest = """
@@ -204,6 +298,11 @@ internal static class SubtitleSizeAssetBuilder
         File.WriteAllText(manifestPath, manifest);
     }
 
+    /// <summary>
+    /// Runs an external process and throws when it exits unsuccessfully.
+    /// </summary>
+    /// <param name="fileName">The executable to run.</param>
+    /// <param name="arguments">The argument list to pass through.</param>
     private static void RunProcess(string fileName, params string[] arguments)
     {
         string argumentString = string.Join(" ", arguments.Select(QuoteArgument));
@@ -229,6 +328,11 @@ internal static class SubtitleSizeAssetBuilder
         }
     }
 
+    /// <summary>
+    /// Quotes a command-line argument when FFDec requires embedded whitespace or quotes.
+    /// </summary>
+    /// <param name="value">The raw argument value.</param>
+    /// <returns>A command-line safe argument string.</returns>
     private static string QuoteArgument(string value)
     {
         if (value.Length == 0)
@@ -244,7 +348,11 @@ internal static class SubtitleSizeAssetBuilder
         return "\"" + value.Replace("\"", "\\\"") + "\"";
     }
 
-    private static void ValidateInputs(BuildPaths paths)
+    /// <summary>
+    /// Validates the full set of combined pause, HUD, and frontend inputs.
+    /// </summary>
+    /// <param name="paths">The resolved build paths.</param>
+    private static void ValidateAllInputs(BuildPaths paths)
     {
         string[] requiredPaths =
         {
@@ -259,6 +367,31 @@ internal static class SubtitleSizeAssetBuilder
             paths.FfdecPath
         };
 
+        ValidateRequiredPaths(requiredPaths);
+    }
+
+    /// <summary>
+    /// Validates only the inputs needed for the frontend main-menu audio build.
+    /// </summary>
+    /// <param name="paths">The resolved build paths.</param>
+    private static void ValidateFrontendInputs(BuildPaths paths)
+    {
+        string[] requiredPaths =
+        {
+            paths.FrontendXmlPath,
+            paths.FrontendScriptsPath,
+            paths.FfdecPath
+        };
+
+        ValidateRequiredPaths(requiredPaths);
+    }
+
+    /// <summary>
+    /// Ensures each required file or directory exists before invoking FFDec.
+    /// </summary>
+    /// <param name="requiredPaths">The paths that must already exist.</param>
+    private static void ValidateRequiredPaths(IEnumerable<string> requiredPaths)
+    {
         foreach (string requiredPath in requiredPaths)
         {
             if (!File.Exists(requiredPath) && !Directory.Exists(requiredPath))
@@ -268,6 +401,10 @@ internal static class SubtitleSizeAssetBuilder
         }
     }
 
+    /// <summary>
+    /// Deletes and recreates a directory tree.
+    /// </summary>
+    /// <param name="path">The directory to recreate.</param>
     private static void RecreateDirectory(string path)
     {
         if (Directory.Exists(path))
@@ -278,6 +415,11 @@ internal static class SubtitleSizeAssetBuilder
         Directory.CreateDirectory(path);
     }
 
+    /// <summary>
+    /// Recursively copies a script directory into a writable working location.
+    /// </summary>
+    /// <param name="sourceDirectory">The extracted FFDec script directory.</param>
+    /// <param name="destinationDirectory">The working copy destination.</param>
     private static void CopyDirectory(string sourceDirectory, string destinationDirectory)
     {
         Directory.CreateDirectory(destinationDirectory);
@@ -295,6 +437,11 @@ internal static class SubtitleSizeAssetBuilder
         }
     }
 
+    /// <summary>
+    /// Writes a text file using the current platform newline convention and creates parent folders as needed.
+    /// </summary>
+    /// <param name="path">The destination file path.</param>
+    /// <param name="contents">The file contents to write.</param>
     private static void WriteAllText(string path, string contents)
     {
         string? directory = Path.GetDirectoryName(path);
@@ -306,6 +453,11 @@ internal static class SubtitleSizeAssetBuilder
         File.WriteAllText(path, contents.Replace("\n", Environment.NewLine));
     }
 
+    /// <summary>
+    /// Escapes a string for insertion into an ActionScript string literal.
+    /// </summary>
+    /// <param name="value">The raw value to escape.</param>
+    /// <returns>The escaped ActionScript literal contents.</returns>
     private static string EscapeActionScriptString(string value)
     {
         return value

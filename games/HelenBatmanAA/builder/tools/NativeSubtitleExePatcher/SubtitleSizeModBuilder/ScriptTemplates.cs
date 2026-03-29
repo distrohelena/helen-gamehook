@@ -1,7 +1,13 @@
 namespace SubtitleSizeModBuilder;
 
+/// <summary>
+/// Centralizes the ActionScript source templates injected into rebuilt Gotham UI assets.
+/// </summary>
 internal static class ScriptTemplates
 {
+    /// <summary>
+    /// Replaces the pause-menu ListItem with runtime subtitle-size storage support.
+    /// </summary>
     public const string PauseRuntimeScaleListItem = """
     class rs.ui.ListItem extends MovieClip
     {
@@ -315,6 +321,9 @@ internal static class ScriptTemplates
     }
     """;
 
+    /// <summary>
+    /// Replaces the pause-menu ListItem with subtitle-size runtime toggling behavior.
+    /// </summary>
     public const string PauseListItem = """
     class rs.ui.ListItem extends MovieClip
     {
@@ -693,16 +702,353 @@ internal static class ScriptTemplates
     _rotation = -3;
     """;
 
+    /// <summary>
+    /// Stops the pause-menu audio screen on frame 12 after initialization.
+    /// </summary>
     public const string PauseAudioFrame12 = """
     stop();
     """;
 
+    /// <summary>
+    /// Initializes the dedicated pause-menu subtitle-size row.
+    /// </summary>
     public const string PauseAudioSubtitleSizeClipAction = """
     onClipEvent(load){
        this.Init("SubtitleSize","Small","Normal","Large");
     }
     """;
 
+    /// <summary>
+    /// Replaces the frontend ListItem so subtitle size is a dedicated row that can be disabled when subtitles are off.
+    /// </summary>
+    public const string FrontendListItem = """
+    class rs.ui.ListItem extends MovieClip
+    {
+       var ItemText;
+       var Label;
+       var LabelName;
+       var LeftClicker;
+       var Names;
+       var RightClicker;
+       var GameVariable = "?name?";
+       var State = 0;
+       var Initial = 0;
+       var Default = 0;
+       function ListItem()
+       {
+          super();
+       }
+       function UsesSubtitleSizeStorage()
+       {
+          return this.GameVariable == "SubtitleSize";
+       }
+       function NormalizeBoolState(InValue, DefaultValue)
+       {
+          if(InValue == undefined)
+          {
+             return DefaultValue;
+          }
+          return InValue != 0 ? 1 : 0;
+       }
+       function GetSubtitleDefaultState()
+       {
+          return 1;
+       }
+       function GetSubtitleDefaultBits()
+       {
+          var _loc2_ = this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetDefaultControlType"),0);
+          var _loc3_ = this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetDefaultSixAxis"),0);
+          return {ControlType:_loc2_,SixAxis:_loc3_};
+       }
+       function GetSubtitleBitsState()
+       {
+          var _loc2_ = this.GetSubtitleDefaultBits();
+          var _loc3_ = this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetControlType"),_loc2_.ControlType);
+          var _loc4_ = this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetSixAxis"),_loc2_.SixAxis);
+          if(_loc4_ != _loc2_.SixAxis)
+          {
+             return 2;
+          }
+          if(_loc3_ != _loc2_.ControlType)
+          {
+             return 0;
+          }
+          return 1;
+       }
+       function ReadSubtitleSizeState()
+       {
+          return this.GetSubtitleBitsState();
+       }
+       function WriteSubtitleSizeState()
+       {
+          var _loc2_ = this.GetSubtitleDefaultBits();
+          switch(this.State)
+          {
+             case 0:
+                _loc2_.ControlType = 1 - _loc2_.ControlType;
+                break;
+             case 2:
+                _loc2_.SixAxis = 1 - _loc2_.SixAxis;
+          }
+          flash.external.ExternalInterface.call("FE_SetControlType",_loc2_.ControlType,_loc2_.ControlType != 0 ? "$UI.Mode1" : "$UI.Mode0");
+          flash.external.ExternalInterface.call("FE_SetSixAxis",_loc2_.SixAxis,_loc2_.SixAxis != 0 ? "$UI.Yes" : "$UI.No");
+       }
+       function AreSubtitlesEnabled()
+       {
+          return this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetSubtitles"),1) != 0;
+       }
+       function IsDisabled()
+       {
+          return this.UsesSubtitleSizeStorage() && !this.AreSubtitlesEnabled();
+       }
+       function Init()
+       {
+          this.Names = new Array();
+          this.GameVariable = arguments[0];
+          if(this.UsesSubtitleSizeStorage())
+          {
+             this.LabelName = "Subtitle Size";
+          }
+          else
+          {
+             this.LabelName = "$UI." + arguments[0];
+          }
+          this.Label.text = this.LabelName;
+          var _loc3_ = 1;
+          while(_loc3_ < arguments.length)
+          {
+             this.Names.push(arguments[_loc3_]);
+             _loc3_ = _loc3_ + 1;
+          }
+          var _loc4_;
+          if(this.UsesSubtitleSizeStorage())
+          {
+             _loc4_ = this.ReadSubtitleSizeState();
+          }
+          else
+          {
+             _loc4_ = flash.external.ExternalInterface.call("FE_Get" + this.GameVariable);
+          }
+          if(_loc4_ == undefined)
+          {
+             _loc4_ = this.UsesSubtitleSizeStorage() ? this.GetSubtitleDefaultState() : 0;
+          }
+          if(_loc4_ < 0 || _loc4_ >= this.Names.length)
+          {
+             _loc4_ = this.UsesSubtitleSizeStorage() ? this.GetSubtitleDefaultState() : 0;
+          }
+          this.State = _loc4_;
+          this.Initial = _loc4_;
+          this.UpdateLRMarkers();
+          this.FetchDefault();
+       }
+       function Destroy()
+       {
+          while(this.Names.length)
+          {
+             this.Names.pop();
+          }
+       }
+       function HasChanged()
+       {
+          return this.State != this.Initial;
+       }
+       function RestoreInitialValue()
+       {
+          if(this.HasChanged())
+          {
+             this.State = this.Initial;
+             this.UpdateLRMarkers();
+          }
+       }
+       function IsDefault()
+       {
+          return this.State == this.Default;
+       }
+       function FetchDefault()
+       {
+          var _loc2_;
+          if(this.UsesSubtitleSizeStorage())
+          {
+             _loc2_ = this.GetSubtitleDefaultState();
+          }
+          else
+          {
+             _loc2_ = flash.external.ExternalInterface.call("FE_GetDefault" + this.GameVariable);
+          }
+          if(_loc2_ == undefined)
+          {
+             _loc2_ = 0;
+          }
+          this.Default = _loc2_;
+       }
+       function SetDefault()
+       {
+          this.State = this.Default;
+          this.UpdateLRMarkers();
+       }
+       function onRollOver()
+       {
+          this._parent.DoSetFocus(this);
+       }
+       function onPress()
+       {
+          this._parent.DoPress(this,true);
+       }
+       function onRelease()
+       {
+          this._parent.DoRelease(this,true,true);
+       }
+       function onReleaseOutside()
+       {
+          this._parent.DoRelease(this,true,false);
+       }
+       function Update()
+       {
+          this.UpdateLRMarkers();
+       }
+       function ShowPrompt()
+       {
+          var _loc3_ = _root.PromptManager;
+          if(this._parent.BackScreen != "")
+          {
+             _loc3_.SetPrompt(_loc3_.CI_B,"$UI.Cancel",this._parent.myListener.onPromptClick,100,100);
+          }
+          if(this.Names.length > 1 && !this.IsDisabled())
+          {
+             _loc3_.SetPrompt(_loc3_.CI_Interact,"$UI.Cycle",this._parent.myListener.onPromptClick,100,100);
+          }
+       }
+       function UpdateLRMarkersReal()
+       {
+          this.ItemText.text = this.Names[this.State];
+          var _loc2_ = this.IsDisabled();
+          this.ItemText._alpha = _loc2_ ? 40 : 100;
+          this.Label._alpha = _loc2_ ? 40 : 100;
+          if(this.IsDisabled())
+          {
+             this.LeftClicker._visible = false;
+             this.RightClicker._visible = false;
+          }
+          else
+          {
+             if(this.State > 0)
+             {
+                this.LeftClicker._visible = true;
+             }
+             else
+             {
+                this.LeftClicker._visible = false;
+             }
+             if(this.State < this.Names.length - 1)
+             {
+                this.RightClicker._visible = true;
+             }
+             else
+             {
+                this.RightClicker._visible = false;
+             }
+          }
+          if(this.UsesSubtitleSizeStorage())
+          {
+             if(!_loc2_)
+             {
+                this.WriteSubtitleSizeState();
+             }
+          }
+          else
+          {
+             flash.external.ExternalInterface.call("FE_Set" + this.GameVariable,this.State,this.Names[this.State]);
+          }
+       }
+       function UpdateLRMarkers()
+       {
+          this.UpdateLRMarkersReal();
+       }
+       function Increment()
+       {
+          if(this.IsDisabled())
+          {
+             return undefined;
+          }
+          if(this.State < this.Names.length - 1)
+          {
+             this.State += 1;
+             this.UpdateLRMarkers();
+             flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Forward");
+          }
+       }
+       function Decrement()
+       {
+          if(this.IsDisabled())
+          {
+             return undefined;
+          }
+          if(this.State > 0)
+          {
+             this.State -= 1;
+             this.UpdateLRMarkers();
+             flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Back");
+          }
+       }
+       function HasAction()
+       {
+          return false;
+       }
+       function Cycle()
+       {
+          if(this.IsDisabled())
+          {
+             return undefined;
+          }
+          if(this.Names.length == 1)
+          {
+             return undefined;
+          }
+          this.State += 1;
+          if(this.State >= this.Names.length)
+          {
+             this.State = 0;
+          }
+          this.UpdateLRMarkers();
+          flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Forward");
+       }
+       function RunAction(bMouse)
+       {
+          if(this.IsDisabled())
+          {
+             return undefined;
+          }
+          if(this.Names.length < 3)
+          {
+             this.Cycle();
+          }
+          else if(bMouse)
+          {
+             if(this._xmouse < 0)
+             {
+                this.Decrement();
+             }
+             else
+             {
+                this.Increment();
+             }
+          }
+          else
+          {
+             this.Cycle();
+          }
+       }
+       function IsListButton()
+       {
+          return false;
+       }
+    }
+    """;
+
+    /// <summary>
+    /// Replaces the frontend audio screen frame script so SubtitleSize becomes a dedicated fifth row.
+    /// </summary>
     public const string FrontendAudioFrame1 = """
     function CancelScreen()
     {
@@ -719,120 +1065,26 @@ internal static class ScriptTemplates
     this.Flags = this.FLAG_OPTIONS;
     this.Init();
     _root.TriggerEvent("Options");
-    this.AddItem(Subtitles,3,1,-1,-1);
+    this.AddItem(Subtitles,4,1,-1,-1);
     this.AddItem(VolumeSFX,0,2,-1,-1);
     this.AddItem(VolumeMusic,1,3,-1,-1);
-    this.AddItem(VolumeDialogue,2,0,-1,-1);
+    this.AddItem(VolumeDialogue,2,4,-1,-1);
+    this.AddItem(SubtitleSize,3,0,-1,-1);
     _rotation = -2;
     """;
 
+    /// <summary>
+    /// Initializes the dedicated frontend subtitle-size row on the cloned depth-61 template.
+    /// </summary>
     public const string FrontendAudioSubtitleSizeClipAction = """
     onClipEvent(load){
-       this.NormalizeBoolState = function(InValue, DefaultValue)
-       {
-          if(InValue == undefined)
-          {
-             return DefaultValue;
-          }
-          return InValue != 0 ? 1 : 0;
-       };
-       this.GetSubtitleDefaultBits = function()
-       {
-          var _loc2_ = this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetDefaultControlType"),0);
-          var _loc3_ = this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetDefaultSixAxis"),0);
-          return {ControlType:_loc2_,SixAxis:_loc3_};
-       };
-       this.GetSubtitleBitsState = function()
-       {
-          var _loc2_ = this.GetSubtitleDefaultBits();
-          var _loc3_ = this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetControlType"),_loc2_.ControlType);
-          var _loc4_ = this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetSixAxis"),_loc2_.SixAxis);
-          if(_loc4_ != _loc2_.SixAxis)
-          {
-             return 2;
-          }
-          if(_loc3_ != _loc2_.ControlType)
-          {
-             return 0;
-          }
-          return 1;
-       };
-       this.GetSubtitleState = function()
-       {
-          if(this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetSubtitles"),1) == 0)
-          {
-             return 0;
-          }
-          return this.GetSubtitleBitsState() + 1;
-       };
-       this.GetDefaultSubtitleState = function()
-       {
-          if(this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetDefaultSubtitles"),1) == 0)
-          {
-             return 0;
-          }
-          return 2;
-       };
-       this.ApplySubtitleState = function()
-       {
-          var _loc2_ = this.State;
-          flash.external.ExternalInterface.call("FE_SetSubtitles",_loc2_ != 0 ? 1 : 0,"");
-          if(_loc2_ == 0)
-          {
-             _loc2_ = 1;
-          }
-          else
-          {
-             _loc2_ = _loc2_ - 1;
-          }
-          var _loc3_ = this.GetSubtitleDefaultBits();
-          switch(_loc2_)
-          {
-             case 0:
-                _loc3_.ControlType = 1 - _loc3_.ControlType;
-                break;
-             case 2:
-                _loc3_.SixAxis = 1 - _loc3_.SixAxis;
-          }
-          flash.external.ExternalInterface.call("FE_SetControlType",_loc3_.ControlType,_loc3_.ControlType != 0 ? "$UI.Mode1" : "$UI.Mode0");
-          flash.external.ExternalInterface.call("FE_SetSixAxis",_loc3_.SixAxis,_loc3_.SixAxis != 0 ? "$UI.Yes" : "$UI.No");
-       };
-       this.FetchDefault = function()
-       {
-          this.Default = this.GetDefaultSubtitleState();
-       };
-       this.SetDefault = function()
-       {
-          this.State = this.Default;
-          this.UpdateLRMarkers();
-       };
-       this.UpdateLRMarkersReal = function()
-       {
-          this.ItemText.text = this.Names[this.State];
-          this.LeftClicker._visible = this.State > 0;
-          this.RightClicker._visible = this.State < this.Names.length - 1;
-          this.ApplySubtitleState();
-       };
-       this.Names = new Array();
-       this.GameVariable = "Subtitles";
-       this.LabelName = "Subtitle Size";
-       this.Label.text = this.LabelName;
-       this.Names.push("Off");
-       this.Names.push("Small");
-       this.Names.push("Normal");
-       this.Names.push("Large");
-       var _loc2_ = this.GetSubtitleState();
-       if(_loc2_ < 0 || _loc2_ >= this.Names.length)
-       {
-          _loc2_ = this.GetDefaultSubtitleState();
-       }
-       this.State = _loc2_;
-       this.Initial = _loc2_;
-       this.UpdateLRMarkers();
-       this.FetchDefault();
+       this.Init("SubtitleSize","Small","Normal","Large");
     }
     """;
 
+    /// <summary>
+    /// Replaces the HUD subtitle clip so runtime scaling uses the forced size settings.
+    /// </summary>
     public const string HudSubtitle = """
     class rs.hud.Subtitle extends MovieClip
     {
@@ -908,6 +1160,9 @@ internal static class ScriptTemplates
     }
     """;
 
+    /// <summary>
+    /// Replaces the HUD frame script so forced subtitle appearance updates run every frame.
+    /// </summary>
     public const string HudContentsFrame1 = """
     function ApplyForcedSubtitleInstance(Instance, InText, InJustify, FontSize, ScalePercent, bAlignBottom)
     {
