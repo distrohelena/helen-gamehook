@@ -49,22 +49,29 @@ After the process starts, open the pause menu and confirm it still shows `Subtit
 $PackBuildRoot = 'D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\helengamehook\packs\batman-aa-subtitles\builds\steam-goty-1.0'
 $FilesJsonPath = Join-Path $PackBuildRoot 'files.json'
 $DeployedDeltaPath = Join-Path $PackBuildRoot 'assets\deltas\BmGame-subtitle-signal.hgdelta'
+$PackagesPath = Join-Path $PackBuildRoot 'assets\packages'
 
 $Manifest = Get-Content -LiteralPath $FilesJsonPath -Raw | ConvertFrom-Json
 $GameplayFile = @($Manifest.virtualFiles)[0]
+if ($GameplayFile.id -ne 'bmgameGameplayPackage') { throw "Unexpected deployed virtual file id: $($GameplayFile.id)" }
 if ($GameplayFile.path -ne 'BmGame/CookedPC/BmGame.u') { throw "Unexpected deployed virtual file path: $($GameplayFile.path)" }
 if ($GameplayFile.mode -ne 'delta-on-read') { throw "Unexpected deployed virtual file mode: $($GameplayFile.mode)" }
+if ($GameplayFile.source.kind -ne 'delta-file') { throw "Unexpected deployed source kind: $($GameplayFile.source.kind)" }
 if ($GameplayFile.source.path -ne 'assets/deltas/BmGame-subtitle-signal.hgdelta') { throw "Unexpected deployed delta path: $($GameplayFile.source.path)" }
 
 $DeployedDeltaHash = (Get-FileHash -LiteralPath $DeployedDeltaPath -Algorithm SHA256).Hash
 if ($DeployedDeltaHash -ne '2A4988D7BC655C8779C0B3718F60226119AFEC386AB56C22F14CBFC2454FC3C1') {
     throw "Batman deployment delta hash mismatch: $DeployedDeltaHash"
 }
+
+if (Test-Path -LiteralPath $PackagesPath) {
+    throw "Batman deployment should not contain legacy packages: $PackagesPath"
+}
 ```
 
 Important notes:
 
-- The deploy script now validates the shipped delta-backed gameplay package before it copies anything into the game directory and verifies the deployed manifest and delta hash after copy.
+- The deploy script now validates the shipped delta-backed gameplay package before it copies anything into the game directory, stages the pack before replacing the live install, and verifies the deployed manifest and delta hash after copy.
 - The current supported runtime pack is the shipped delta-backed `BmGame.u` package plus the native text-scale and subtitle-signal blobs.
 - The builder mirror keeps the original relative path assumptions intact so the old C# toolchain can run without being rewritten first.
 - Legacy debug scripts from the old `artifacts` folder were copied into `scripts` for reference, but the recommended entry points are the PascalCase scripts above.
