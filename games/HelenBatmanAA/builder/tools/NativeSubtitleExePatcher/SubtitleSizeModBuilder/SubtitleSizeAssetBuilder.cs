@@ -112,6 +112,19 @@ internal static class SubtitleSizeAssetBuilder
     }
 
     /// <summary>
+    /// Builds only the frontend root version-label patch and imports the untouched frontend scripts into MainV2.
+    /// </summary>
+    /// <param name="paths">The resolved build paths.</param>
+    public static void BuildFrontendVersionLabel(BuildPaths paths)
+    {
+        ValidateFrontendVersionLabelInputs(paths);
+        PrepareOutputDirectories(paths);
+
+        BuildFrontendVersionLabelAssets(paths);
+        WriteFrontendManifest(paths.FrontendManifestPath);
+    }
+
+    /// <summary>
     /// Recreates the output directory so each build starts from a clean generated state.
     /// </summary>
     /// <param name="paths">The resolved build paths.</param>
@@ -159,6 +172,18 @@ internal static class SubtitleSizeAssetBuilder
 
         RunProcess(paths.FfdecPath, "-xml2swf", paths.FrontendPatchedXmlPath, paths.FrontendStructuralGfxPath);
         RunProcess(paths.FfdecPath, "-importScript", paths.FrontendStructuralGfxPath, paths.FrontendOutputGfxPath, paths.FrontendWorkingScriptsPath);
+    }
+
+    /// <summary>
+    /// Builds the frontend MainV2 movie with only the root version label changed.
+    /// </summary>
+    /// <param name="paths">The resolved build paths.</param>
+    private static void BuildFrontendVersionLabelAssets(BuildPaths paths)
+    {
+        CopyDirectory(paths.FrontendScriptsPath, paths.FrontendWorkingScriptsPath);
+        PatchFrontendVersionLabelScript(paths.FrontendWorkingScriptsPath, paths.BuildVersion);
+
+        RunProcess(paths.FfdecPath, "-importScript", paths.FrontendSourceGfxPath, paths.FrontendOutputGfxPath, paths.FrontendWorkingScriptsPath);
     }
 
     /// <summary>
@@ -228,6 +253,16 @@ internal static class SubtitleSizeAssetBuilder
                 "CLIPACTIONRECORD onClipEvent(load).as"),
             ScriptTemplates.FrontendAudioSubtitleSizeClipAction);
 
+        PatchFrontendVersionLabelScript(scriptsRoot, buildVersion);
+    }
+
+    /// <summary>
+    /// Rewrites the frontend root <c>PCVersionString</c> declaration to the requested build label.
+    /// </summary>
+    /// <param name="scriptsRoot">The copied frontend script directory.</param>
+    /// <param name="buildVersion">The build label shown in the root frontend script.</param>
+    private static void PatchFrontendVersionLabelScript(string scriptsRoot, string buildVersion)
+    {
         string rootScriptPath = Path.Combine(scriptsRoot, "frame_1", "DoAction.as");
         string rootScript = File.ReadAllText(rootScriptPath);
         const string declarationPattern = """var PCVersionString(?:\s*=\s*"[^"]*")?;""";
@@ -382,6 +417,22 @@ internal static class SubtitleSizeAssetBuilder
         string[] requiredPaths =
         {
             paths.FrontendXmlPath,
+            paths.FrontendScriptsPath,
+            paths.FfdecPath
+        };
+
+        ValidateRequiredPaths(requiredPaths);
+    }
+
+    /// <summary>
+    /// Validates the inputs needed for the narrowed frontend version-label build.
+    /// </summary>
+    /// <param name="paths">The resolved build paths.</param>
+    private static void ValidateFrontendVersionLabelInputs(BuildPaths paths)
+    {
+        string[] requiredPaths =
+        {
+            paths.FrontendSourceGfxPath,
             paths.FrontendScriptsPath,
             paths.FfdecPath
         };
