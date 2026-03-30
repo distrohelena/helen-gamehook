@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace SubtitleSizeModBuilder;
 
@@ -229,16 +230,18 @@ internal static class SubtitleSizeAssetBuilder
 
         string rootScriptPath = Path.Combine(scriptsRoot, "frame_1", "DoAction.as");
         string rootScript = File.ReadAllText(rootScriptPath);
-        const string marker = "var PCVersionString;";
-        if (!rootScript.Contains(marker, StringComparison.Ordinal))
+        const string declarationPattern = """var PCVersionString(?:\s*=\s*"[^"]*")?;""";
+        Regex declarationRegex = new(declarationPattern, RegexOptions.CultureInvariant);
+        Match declarationMatch = declarationRegex.Match(rootScript);
+        if (!declarationMatch.Success)
         {
-            throw new InvalidOperationException($"Could not find '{marker}' in {rootScriptPath}");
+            throw new InvalidOperationException($"Could not find a PCVersionString declaration in {rootScriptPath}");
         }
 
-        string patched = rootScript.Replace(
-            marker,
+        string patched = declarationRegex.Replace(
+            rootScript,
             $"var PCVersionString = \"{EscapeActionScriptString(buildVersion)}\";",
-            StringComparison.Ordinal);
+            1);
 
         WriteAllText(rootScriptPath, patched);
     }
@@ -450,7 +453,12 @@ internal static class SubtitleSizeAssetBuilder
             Directory.CreateDirectory(directory);
         }
 
-        File.WriteAllText(path, contents.Replace("\n", Environment.NewLine));
+        string normalizedContents = contents
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace("\r", "\n", StringComparison.Ordinal)
+            .Replace("\n", Environment.NewLine, StringComparison.Ordinal);
+
+        File.WriteAllText(path, normalizedContents);
     }
 
     /// <summary>
