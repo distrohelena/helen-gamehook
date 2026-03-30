@@ -6,7 +6,7 @@ Current layout:
 
 - `helengamehook\packs\batman-aa-subtitles`
   - current shipped delta-backed runtime pack used by `HelenGameHook.dll`
-  - ships `files.json` with `mode = "delta-on-read"`, `assets\deltas\BmGame-subtitle-signal.hgdelta`, and the native blob assets under `assets\native`
+  - ships `files.json` with `mode = "delta-on-read"`, `assets\deltas\BmGame-subtitle-signal.hgdelta`, `assets\deltas\Frontend-main-menu-subtitle-size.hgdelta`, and the native blob assets under `assets\native`
 - `builder`
   - maintained Batman build tool source under `tools\NativeSubtitleExePatcher`
   - local ignored builder prerequisites under `extracted`
@@ -90,12 +90,14 @@ $ExpectedVirtualFiles = @(
         Path = 'BmGame/CookedPC/BmGame.u'
         DeltaPath = 'assets/deltas/BmGame-subtitle-signal.hgdelta'
         DeltaFilePath = Join-Path $PackBuildRoot 'assets\deltas\BmGame-subtitle-signal.hgdelta'
+        DeltaSha256 = '421665A0A955276A156800C0FA2F26B8193F71601648118902D8EE044E885397'
     },
     @{
         Id = 'frontendMapPackage'
         Path = 'BmGame/CookedPC/Maps/Frontend/Frontend.umap'
         DeltaPath = 'assets/deltas/Frontend-main-menu-subtitle-size.hgdelta'
         DeltaFilePath = Join-Path $PackBuildRoot 'assets\deltas\Frontend-main-menu-subtitle-size.hgdelta'
+        DeltaSha256 = 'ECFE097B89F1EB1F4E3C003E15212E08E2B426500CF121083B780F4E9B8BC595'
     }
 )
 $PackagesPath = Join-Path $PackBuildRoot 'assets\packages'
@@ -114,7 +116,9 @@ foreach ($ExpectedVirtualFile in $ExpectedVirtualFiles) {
     if ($VirtualFile.source.path -ne $ExpectedVirtualFile.DeltaPath) { throw "Unexpected deployed delta path for $($ExpectedVirtualFile.Id): $($VirtualFile.source.path)" }
 
     $DeployedDeltaHash = (Get-FileHash -LiteralPath $ExpectedVirtualFile.DeltaFilePath -Algorithm SHA256).Hash
-    Write-Output "$($ExpectedVirtualFile.Id): $DeployedDeltaHash"
+    if ($DeployedDeltaHash -ne $ExpectedVirtualFile.DeltaSha256) {
+        throw "Unexpected deployed delta hash for $($ExpectedVirtualFile.Id): $DeployedDeltaHash"
+    }
 }
 
 if (Test-Path -LiteralPath $PackagesPath) {
@@ -125,7 +129,7 @@ if (Test-Path -LiteralPath $PackagesPath) {
 Important notes:
 
 - The deploy script now validates the shipped delta-backed gameplay package before it copies anything into the game directory, stages the pack before replacing the live install, and verifies the deployed manifest and delta hash after copy.
-- The current supported runtime pack is the shipped delta-backed `BmGame.u` gameplay package, the shipped delta-backed `Frontend.umap` front-end package, and the native text-scale blob.
+- The current supported runtime pack is the shipped delta-backed `BmGame.u` gameplay package, the shipped delta-backed `Frontend.umap` front-end package, their checked-in `.hgdelta` containers, and the native text-scale blob.
 - The prep script recreates the ignored local builder prerequisites under `builder\extracted`, while generated build outputs stay under ignored `builder\generated`.
 - Live front-end verification requires the installed `BmGame\CookedPC\Maps\Frontend\Frontend.umap` to match the trusted base hash used to build `assets\deltas\Frontend-main-menu-subtitle-size.hgdelta`. The scripts do not hide a base-package mismatch with fallbacks.
 - Legacy investigation-only frontend assets, when kept locally, now live under `builder\extracted\frontend\...` instead of the old flat `builder\working` layout.

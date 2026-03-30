@@ -568,6 +568,10 @@ void RunPackRepositoryTests()
         Expect(checked_in_frontend_file->Source.Kind == helen::VirtualFileSourceKind::DeltaFile, "Checked-in Batman frontend package source kind mismatch.");
         Expect(checked_in_frontend_file->GamePath == std::filesystem::path("BmGame/CookedPC/Maps/Frontend/Frontend.umap"), "Checked-in Batman frontend package path mismatch.");
         Expect(checked_in_frontend_file->Source.Path == std::filesystem::path("assets/deltas/Frontend-main-menu-subtitle-size.hgdelta"), "Checked-in Batman frontend delta path mismatch.");
+        Expect(checked_in_frontend_file->Source.Base.FileSize == 11739909, "Checked-in Batman frontend package base size mismatch.");
+        Expect(checked_in_frontend_file->Source.Base.Sha256 == "05fa5608eeda5c12f964b1fafca121d3db60eef60094fa9bb567d9be5a620a50", "Checked-in Batman frontend package base hash mismatch.");
+        Expect(checked_in_frontend_file->Source.Target.FileSize == 12552240, "Checked-in Batman frontend package target size mismatch.");
+        Expect(checked_in_frontend_file->Source.Target.Sha256 == "e79292efd6caebd2f5e5e281117cf936b7c316ced5c86fd1e9995a200832630f", "Checked-in Batman frontend package target hash mismatch.");
         Expect(checked_in_frontend_file->Source.ChunkSize == 65536, "Checked-in Batman frontend chunk size mismatch.");
         Expect(loaded_batman_pack->Build.StateObservers.size() == 1, "Checked-in Batman pack state observer count mismatch.");
         Expect(loaded_batman_pack->Build.StateObservers[0].ScanStartAddress == 0x2B000000, "Checked-in Batman observer scan start drifted from the investigated hot heap window.");
