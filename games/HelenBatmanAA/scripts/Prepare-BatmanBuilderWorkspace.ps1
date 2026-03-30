@@ -78,7 +78,7 @@ $ExtractedRoot = Join-Path $BuilderRoot 'extracted'
 $ToolRoot = Join-Path $SourceBuilderRoot 'tools\NativeSubtitleExePatcher'
 $BmGameGfxPatcherProjectPath = Join-Path $ToolRoot 'BmGameGfxPatcher\BmGameGfxPatcher.csproj'
 $PreparedBasePackagePath = Join-Path $ExtractedRoot 'bmgame-unpacked\BmGame.u'
-$PreparedFrontendBasePackagePath = Join-Path $ExtractedRoot 'frontend\startup-int-unpacked\Startup_INT.upk'
+$PreparedFrontendBasePackagePath = Join-Path $ExtractedRoot 'frontend\frontend-umap-unpacked\Frontend.umap'
 $PreparedFrontendRoot = Join-Path $ExtractedRoot 'frontend\mainv2'
 $PreparedFrontendGfxPath = Join-Path $PreparedFrontendRoot 'frontend-mainv2.gfx'
 $PreparedFrontendXmlPath = Join-Path $PreparedFrontendRoot 'frontend-mainv2.xml'
@@ -165,7 +165,7 @@ Invoke-CheckedCommand `
         '--name', 'MainV2',
         '--output', $PreparedFrontendGfxPath
     ) `
-    -FailureMessage 'Failed to extract MainMenu.MainV2 from the trusted frontend package.'
+    -FailureMessage 'Failed to extract MainMenu.MainV2 from the trusted Frontend.umap package.'
 
 Invoke-CheckedCommand `
     -FilePath $PreparedFfdecCliPath `

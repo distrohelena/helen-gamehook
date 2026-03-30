@@ -7,77 +7,100 @@ $ErrorActionPreference = 'Stop'
 $PackBuildRoot = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles\builds\steam-goty-1.0'
 $FilesJsonPath = Join-Path $PackBuildRoot 'files.json'
 $GameplayDeltaPath = Join-Path $PackBuildRoot 'assets\deltas\BmGame-subtitle-signal.hgdelta'
-
-$ExpectedVirtualFileId = 'bmgameGameplayPackage'
-$ExpectedVirtualFilePath = 'BmGame/CookedPC/BmGame.u'
-$ExpectedVirtualFileMode = 'delta-on-read'
-$ExpectedVirtualFileKind = 'delta-file'
-$ExpectedDeltaPath = 'assets/deltas/BmGame-subtitle-signal.hgdelta'
-$ExpectedBaseSize = 100365345
-$ExpectedBaseSha256 = '621a5c8d99c9f7c7283531d05a4a6d56bdf15ad93ede0d5bf2f5d3e45117ff36'
-$ExpectedTargetSize = 101115741
-$ExpectedTargetSha256 = 'd1e97fbd81e5eec121538873b5fc95c4a47dca98dbae51898cf3e80210639d39'
-$ExpectedChunkSize = 65536
-$ExpectedGameplayDeltaHash = '421665A0A955276A156800C0FA2F26B8193F71601648118902D8EE044E885397'
+$FrontendDeltaPath = Join-Path $PackBuildRoot 'assets\deltas\Frontend-main-menu-subtitle-size.hgdelta'
+$TrustedGameplayBasePath = Join-Path $BatmanRoot 'builder\extracted\bmgame-unpacked\BmGame.u'
+$GeneratedGameplayPackagePath = Join-Path $BatmanRoot 'builder\generated\pause-runtime-scale\BmGame-subtitle-signal.u'
+$TrustedFrontendBasePath = Join-Path $BatmanRoot 'builder\extracted\frontend\frontend-umap-unpacked\Frontend.umap'
+$GeneratedFrontendPackagePath = Join-Path $BatmanRoot 'builder\generated\main-menu-audio\Frontend-main-menu-subtitle-size.umap'
+$ExpectedVirtualFiles = @(
+    @{
+        Id = 'bmgameGameplayPackage'
+        Path = 'BmGame/CookedPC/BmGame.u'
+        Mode = 'delta-on-read'
+        Kind = 'delta-file'
+        DeltaPath = 'assets/deltas/BmGame-subtitle-signal.hgdelta'
+        BasePath = $TrustedGameplayBasePath
+        TargetPath = $GeneratedGameplayPackagePath
+        DeltaFilePath = $GameplayDeltaPath
+        ChunkSize = 65536
+    },
+    @{
+        Id = 'frontendMapPackage'
+        Path = 'BmGame/CookedPC/Maps/Frontend/Frontend.umap'
+        Mode = 'delta-on-read'
+        Kind = 'delta-file'
+        DeltaPath = 'assets/deltas/Frontend-main-menu-subtitle-size.hgdelta'
+        BasePath = $TrustedFrontendBasePath
+        TargetPath = $GeneratedFrontendPackagePath
+        DeltaFilePath = $FrontendDeltaPath
+        ChunkSize = 65536
+    }
+)
 
 if (-not (Test-Path $FilesJsonPath)) {
     throw "Batman gameplay package manifest not found: $FilesJsonPath"
 }
 
-if (-not (Test-Path $GameplayDeltaPath)) {
-    throw "Batman gameplay delta not found: $GameplayDeltaPath"
+foreach ($ExpectedVirtualFile in $ExpectedVirtualFiles) {
+    foreach ($RequiredPath in @($ExpectedVirtualFile.BasePath, $ExpectedVirtualFile.TargetPath, $ExpectedVirtualFile.DeltaFilePath)) {
+        if (-not (Test-Path -LiteralPath $RequiredPath)) {
+            throw "Batman pack verification input not found: $RequiredPath"
+        }
+    }
 }
 
 $FilesManifest = Get-Content -LiteralPath $FilesJsonPath -Raw | ConvertFrom-Json
 $VirtualFiles = @($FilesManifest.virtualFiles)
-if ($VirtualFiles.Count -ne 1) {
-    throw "Batman gameplay package manifest expected exactly one virtual file, found $($VirtualFiles.Count)."
+if ($VirtualFiles.Count -ne $ExpectedVirtualFiles.Count) {
+    throw "Batman gameplay package manifest expected exactly $($ExpectedVirtualFiles.Count) virtual files, found $($VirtualFiles.Count)."
 }
 
-$GameplayFile = $VirtualFiles[0]
-if ($GameplayFile.id -ne $ExpectedVirtualFileId) {
-    throw "Batman gameplay package virtual file id mismatch. Expected $ExpectedVirtualFileId but found $($GameplayFile.id)."
-}
+foreach ($ExpectedVirtualFile in $ExpectedVirtualFiles) {
+    $VirtualFile = @($VirtualFiles | Where-Object { $_.id -eq $ExpectedVirtualFile.Id })[0]
+    if ($null -eq $VirtualFile) {
+        throw "Batman gameplay package manifest is missing virtual file id $($ExpectedVirtualFile.Id)."
+    }
 
-if ($GameplayFile.path -ne $ExpectedVirtualFilePath) {
-    throw "Batman gameplay package virtual file path mismatch. Expected $ExpectedVirtualFilePath but found $($GameplayFile.path)."
-}
+    if ($VirtualFile.path -ne $ExpectedVirtualFile.Path) {
+        throw "Batman gameplay package virtual file path mismatch for $($ExpectedVirtualFile.Id). Expected $($ExpectedVirtualFile.Path) but found $($VirtualFile.path)."
+    }
 
-if ($GameplayFile.mode -ne $ExpectedVirtualFileMode) {
-    throw "Batman gameplay package virtual file mode mismatch. Expected $ExpectedVirtualFileMode but found $($GameplayFile.mode)."
-}
+    if ($VirtualFile.mode -ne $ExpectedVirtualFile.Mode) {
+        throw "Batman gameplay package virtual file mode mismatch for $($ExpectedVirtualFile.Id). Expected $($ExpectedVirtualFile.Mode) but found $($VirtualFile.mode)."
+    }
 
-if ($GameplayFile.source.kind -ne $ExpectedVirtualFileKind) {
-    throw "Batman gameplay package source kind mismatch. Expected $ExpectedVirtualFileKind but found $($GameplayFile.source.kind)."
-}
+    if ($VirtualFile.source.kind -ne $ExpectedVirtualFile.Kind) {
+        throw "Batman gameplay package source kind mismatch for $($ExpectedVirtualFile.Id). Expected $($ExpectedVirtualFile.Kind) but found $($VirtualFile.source.kind)."
+    }
 
-if ($GameplayFile.source.path -ne $ExpectedDeltaPath) {
-    throw "Batman gameplay package delta path mismatch. Expected $ExpectedDeltaPath but found $($GameplayFile.source.path)."
-}
+    if ($VirtualFile.source.path -ne $ExpectedVirtualFile.DeltaPath) {
+        throw "Batman gameplay package delta path mismatch for $($ExpectedVirtualFile.Id). Expected $($ExpectedVirtualFile.DeltaPath) but found $($VirtualFile.source.path)."
+    }
 
-if ([int64]$GameplayFile.source.base.size -ne $ExpectedBaseSize) {
-    throw "Batman gameplay package base size mismatch. Expected $ExpectedBaseSize but found $($GameplayFile.source.base.size)."
-}
+    $ExpectedBaseSize = (Get-Item -LiteralPath $ExpectedVirtualFile.BasePath).Length
+    $ExpectedBaseSha256 = (Get-FileHash -LiteralPath $ExpectedVirtualFile.BasePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $ExpectedTargetSize = (Get-Item -LiteralPath $ExpectedVirtualFile.TargetPath).Length
+    $ExpectedTargetSha256 = (Get-FileHash -LiteralPath $ExpectedVirtualFile.TargetPath -Algorithm SHA256).Hash.ToLowerInvariant()
 
-if (-not [string]::Equals($GameplayFile.source.base.sha256, $ExpectedBaseSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Batman gameplay package base hash mismatch. Expected $ExpectedBaseSha256 but found $($GameplayFile.source.base.sha256)."
-}
+    if ([int64]$VirtualFile.source.base.size -ne $ExpectedBaseSize) {
+        throw "Batman gameplay package base size mismatch for $($ExpectedVirtualFile.Id). Expected $ExpectedBaseSize but found $($VirtualFile.source.base.size)."
+    }
 
-if ([int64]$GameplayFile.source.target.size -ne $ExpectedTargetSize) {
-    throw "Batman gameplay package target size mismatch. Expected $ExpectedTargetSize but found $($GameplayFile.source.target.size)."
-}
+    if (-not [string]::Equals($VirtualFile.source.base.sha256, $ExpectedBaseSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Batman gameplay package base hash mismatch for $($ExpectedVirtualFile.Id). Expected $ExpectedBaseSha256 but found $($VirtualFile.source.base.sha256)."
+    }
 
-if (-not [string]::Equals($GameplayFile.source.target.sha256, $ExpectedTargetSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Batman gameplay package target hash mismatch. Expected $ExpectedTargetSha256 but found $($GameplayFile.source.target.sha256)."
-}
+    if ([int64]$VirtualFile.source.target.size -ne $ExpectedTargetSize) {
+        throw "Batman gameplay package target size mismatch for $($ExpectedVirtualFile.Id). Expected $ExpectedTargetSize but found $($VirtualFile.source.target.size)."
+    }
 
-if ([int64]$GameplayFile.source.chunkSize -ne $ExpectedChunkSize) {
-    throw "Batman gameplay package chunk size mismatch. Expected $ExpectedChunkSize but found $($GameplayFile.source.chunkSize)."
-}
+    if (-not [string]::Equals($VirtualFile.source.target.sha256, $ExpectedTargetSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Batman gameplay package target hash mismatch for $($ExpectedVirtualFile.Id). Expected $ExpectedTargetSha256 but found $($VirtualFile.source.target.sha256)."
+    }
 
-$ActualGameplayDeltaHash = (Get-FileHash -LiteralPath $GameplayDeltaPath -Algorithm SHA256).Hash
-if (-not [string]::Equals($ActualGameplayDeltaHash, $ExpectedGameplayDeltaHash, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Batman gameplay delta hash mismatch. Expected $ExpectedGameplayDeltaHash but found $ActualGameplayDeltaHash."
+    if ([int64]$VirtualFile.source.chunkSize -ne $ExpectedVirtualFile.ChunkSize) {
+        throw "Batman gameplay package chunk size mismatch for $($ExpectedVirtualFile.Id). Expected $($ExpectedVirtualFile.ChunkSize) but found $($VirtualFile.source.chunkSize)."
+    }
 }
 
 Write-Output 'PASS'
