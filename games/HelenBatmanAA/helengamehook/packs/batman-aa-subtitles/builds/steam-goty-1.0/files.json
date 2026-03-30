@@ -10,12 +10,30 @@
                                                      },
                                             "chunkSize":  65536,
                                             "target":  {
-                                                           "sha256":  "b241625d604de97f7b7fda53ad6df2346992d8ef2b9be66fd45d395839080329",
-                                                           "size":  101117004
+                                                           "sha256":  "d1e97fbd81e5eec121538873b5fc95c4a47dca98dbae51898cf3e80210639d39",
+                                                           "size":  101115741
                                                        },
                                             "kind":  "delta-file"
                                         },
                              "id":  "bmgameGameplayPackage",
+                             "mode":  "delta-on-read"
+                         },
+                         {
+                             "path":  "BmGame/CookedPC/Maps/Frontend/Frontend.umap",
+                             "source":  {
+                                            "path":  "assets/deltas/Frontend-main-menu-subtitle-size.hgdelta",
+                                            "base":  {
+                                                         "sha256":  "05fa5608eeda5c12f964b1fafca121d3db60eef60094fa9bb567d9be5a620a50",
+                                                         "size":  11739909
+                                                     },
+                                            "chunkSize":  65536,
+                                            "target":  {
+                                                           "sha256":  "242833c3c2fb349eae17b7830a6424b9ac73a51218de9b2fba445fa7dbfcb745",
+                                                           "size":  12552240
+                                                       },
+                                            "kind":  "delta-file"
+                                        },
+                             "id":  "frontendMapPackage",
                              "mode":  "delta-on-read"
                          }
                      ]

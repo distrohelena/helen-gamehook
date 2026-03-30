@@ -8,7 +8,9 @@
 /.worktree/
 /artifacts/*.png
 /artifacts/*.json
-/games/HelenBatmanAA/builder/
+/games/HelenBatmanAA/builder/extracted/
+/games/HelenBatmanAA/builder/generated/
+/games/HelenBatmanAA/builder/tools/NativeSubtitleExePatcher/.git.local/
 *.VC.db
 *.VC.opendb
 *.suo

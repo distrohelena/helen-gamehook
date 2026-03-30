@@ -1,0 +1,41 @@
+{
+  "name": "Startup font slots -> MediumFont",
+  "patches": [
+    {
+      "patchMode": "raw",
+      "owner": "BmFonts",
+      "exportName": "EngineSmallFont",
+      "exportType": "Font",
+      "replacementPath": "..\\..\\..\\extract-out\\Startup_INT\\BmFonts\\MediumFont.Font",
+      "expectedOriginalLength": 5452,
+      "expectedOriginalSha256": "7977a40a7bb432cc9cb64c93d6c4a20d4027ad494394e56292f7a2aee4160895"
+    },
+    {
+      "patchMode": "raw",
+      "owner": "BmFonts",
+      "exportName": "EngineTinyFont",
+      "exportType": "Font",
+      "replacementPath": "..\\..\\..\\extract-out\\Startup_INT\\BmFonts\\MediumFont.Font",
+      "expectedOriginalLength": 5452,
+      "expectedOriginalSha256": "4eea69443caf1be95927e346f453c46f2ef5fa616520bd807e1f2ea8c8e8915a"
+    },
+    {
+      "patchMode": "raw",
+      "owner": "BmFonts",
+      "exportName": "SmallFont",
+      "exportType": "Font",
+      "replacementPath": "..\\..\\..\\extract-out\\Startup_INT\\BmFonts\\MediumFont.Font",
+      "expectedOriginalLength": 7286,
+      "expectedOriginalSha256": "1572c67d64d085e3bfa80ba9d532c380ac8b8bd2c090a46184ecf314b151fa64"
+    },
+    {
+      "patchMode": "raw",
+      "owner": "BmFonts",
+      "exportName": "TinyFont",
+      "exportType": "Font",
+      "replacementPath": "..\\..\\..\\extract-out\\Startup_INT\\BmFonts\\MediumFont.Font",
+      "expectedOriginalLength": 5452,
+      "expectedOriginalSha256": "d27390fe7baa11c43eb9d80a14a6d4862ed59866c419865798d4db3cb1814db4"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "HUD only example",
+  "patches": [
+    {
+      "owner": "GameHUD",
+      "exportName": "HUD",
+      "exportType": "GFxMovieInfo",
+      "replacementPath": "..\\..\\..\\extracted\\hud\\HUD-patched.gfx",
+      "payloadMagic": "GFX",
+      "expectedOriginalLength": 453578,
+      "expectedOriginalSha256": "9d934e9cbb503dc0a868e01fc15b52235f9034dcd96e21e92bf214355909270b",
+      "outputObjectPath": "..\\..\\..\\generated\\HUD-patched.GFxMovieInfo"
+    }
+  ]
+}

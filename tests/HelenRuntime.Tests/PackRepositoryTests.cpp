@@ -151,6 +151,24 @@ void RunPackRepositoryTests()
         },
         "chunkSize": 65536
       }
+    },
+    {
+      "id": "frontendMapPackage",
+      "path": "BmGame/CookedPC/Maps/Frontend/Frontend.umap",
+      "mode": "delta-on-read",
+      "source": {
+        "kind": "delta-file",
+        "path": "assets/deltas/Frontend-main-menu-subtitle-size.hgdelta",
+        "base": {
+          "size": 2048,
+          "sha256": "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
+        },
+        "target": {
+          "size": 2304,
+          "sha256": "FFEEDDCCBBAA99887766554433221100FFEEDDCCBBAA99887766554433221100"
+        },
+        "chunkSize": 65536
+      }
     }
   ]
 })");
@@ -444,15 +462,41 @@ void RunPackRepositoryTests()
         Expect(loaded_valid_pack->Build.Id == "steam-goty-1.0", "Loaded build identifier mismatch.");
         Expect(loaded_valid_pack->Build.StartupCommandIds.size() == 1, "Loaded startup command count mismatch.");
         Expect(loaded_valid_pack->Build.StartupCommandIds[0] == "applySavedSubtitleSize", "Loaded startup command identifier mismatch.");
-        Expect(loaded_valid_pack->Build.VirtualFiles.size() == 1, "Loaded virtual file count mismatch.");
-        Expect(loaded_valid_pack->Build.VirtualFiles[0].Mode == "delta-on-read", "Virtual file mode mismatch.");
-        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Kind == helen::VirtualFileSourceKind::DeltaFile, "Virtual file source kind mismatch.");
-        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Path == std::filesystem::path("assets/deltas/BmGame-subtitle-signal.hgdelta"), "Virtual file source path mismatch.");
-        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Base.FileSize == 101403981, "Virtual file base size mismatch.");
-        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Base.Sha256 == "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899", "Virtual file base hash normalization mismatch.");
-        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Target.FileSize == 101405329, "Virtual file target size mismatch.");
-        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.Target.Sha256 == "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100", "Virtual file target hash normalization mismatch.");
-        Expect(loaded_valid_pack->Build.VirtualFiles[0].Source.ChunkSize == 65536, "Virtual file chunk size mismatch.");
+        Expect(loaded_valid_pack->Build.VirtualFiles.size() == 2, "Loaded virtual file count mismatch.");
+
+        const helen::VirtualFileDefinition* valid_gameplay_file = nullptr;
+        const helen::VirtualFileDefinition* valid_frontend_file = nullptr;
+        for (const helen::VirtualFileDefinition& virtual_file : loaded_valid_pack->Build.VirtualFiles)
+        {
+            if (virtual_file.Id == "bmgameGameplayPackage")
+            {
+                valid_gameplay_file = &virtual_file;
+            }
+            else if (virtual_file.Id == "frontendMapPackage")
+            {
+                valid_frontend_file = &virtual_file;
+            }
+        }
+
+        Expect(valid_gameplay_file != nullptr, "Loaded gameplay virtual file was not found.");
+        Expect(valid_frontend_file != nullptr, "Loaded frontend virtual file was not found.");
+        Expect(valid_gameplay_file->Mode == "delta-on-read", "Gameplay virtual file mode mismatch.");
+        Expect(valid_gameplay_file->Source.Kind == helen::VirtualFileSourceKind::DeltaFile, "Gameplay virtual file source kind mismatch.");
+        Expect(valid_gameplay_file->Source.Path == std::filesystem::path("assets/deltas/BmGame-subtitle-signal.hgdelta"), "Gameplay virtual file source path mismatch.");
+        Expect(valid_gameplay_file->Source.Base.FileSize == 101403981, "Gameplay virtual file base size mismatch.");
+        Expect(valid_gameplay_file->Source.Base.Sha256 == "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899", "Gameplay virtual file base hash normalization mismatch.");
+        Expect(valid_gameplay_file->Source.Target.FileSize == 101405329, "Gameplay virtual file target size mismatch.");
+        Expect(valid_gameplay_file->Source.Target.Sha256 == "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100", "Gameplay virtual file target hash normalization mismatch.");
+        Expect(valid_gameplay_file->Source.ChunkSize == 65536, "Gameplay virtual file chunk size mismatch.");
+        Expect(valid_frontend_file->Mode == "delta-on-read", "Frontend virtual file mode mismatch.");
+        Expect(valid_frontend_file->Source.Kind == helen::VirtualFileSourceKind::DeltaFile, "Frontend virtual file source kind mismatch.");
+        Expect(valid_frontend_file->GamePath == std::filesystem::path("BmGame/CookedPC/Maps/Frontend/Frontend.umap"), "Frontend virtual file path mismatch.");
+        Expect(valid_frontend_file->Source.Path == std::filesystem::path("assets/deltas/Frontend-main-menu-subtitle-size.hgdelta"), "Frontend virtual file source path mismatch.");
+        Expect(valid_frontend_file->Source.Base.FileSize == 2048, "Frontend virtual file base size mismatch.");
+        Expect(valid_frontend_file->Source.Base.Sha256 == "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff", "Frontend virtual file base hash normalization mismatch.");
+        Expect(valid_frontend_file->Source.Target.FileSize == 2304, "Frontend virtual file target size mismatch.");
+        Expect(valid_frontend_file->Source.Target.Sha256 == "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100", "Frontend virtual file target hash normalization mismatch.");
+        Expect(valid_frontend_file->Source.ChunkSize == 65536, "Frontend virtual file chunk size mismatch.");
         Expect(loaded_valid_pack->Build.RuntimeSlots.size() == 1, "Loaded runtime slot count mismatch.");
         Expect(loaded_valid_pack->Build.StateObservers.size() == 1, "Loaded state observer count mismatch.");
         Expect(loaded_valid_pack->Build.Hooks.size() == 1, "Loaded hook count mismatch.");
@@ -494,15 +538,41 @@ void RunPackRepositoryTests()
             38758728,
             "4dac1f5e2ac6710b7378fdce74601f616f4753e3756cb5fda63c7519cc2eb028");
         Expect(loaded_batman_pack.has_value(), "Expected the checked-in Batman pack to load for the matching executable fingerprint.");
-        Expect(loaded_batman_pack->Build.VirtualFiles.size() == 1, "Checked-in Batman pack virtual file count mismatch.");
-        Expect(loaded_batman_pack->Build.VirtualFiles[0].Mode == "delta-on-read", "Checked-in Batman gameplay package is not delta-backed.");
-        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Kind == helen::VirtualFileSourceKind::DeltaFile, "Checked-in Batman gameplay package source kind mismatch.");
-        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Path == std::filesystem::path("assets/deltas/BmGame-subtitle-signal.hgdelta"), "Checked-in Batman gameplay package delta path mismatch.");
-        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Base.FileSize == 100365345, "Checked-in Batman gameplay package base size mismatch.");
-        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Base.Sha256 == "621a5c8d99c9f7c7283531d05a4a6d56bdf15ad93ede0d5bf2f5d3e45117ff36", "Checked-in Batman gameplay package base hash mismatch.");
-        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Target.FileSize == 101117004, "Checked-in Batman gameplay package target size mismatch.");
-        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.Target.Sha256 == "b241625d604de97f7b7fda53ad6df2346992d8ef2b9be66fd45d395839080329", "Checked-in Batman gameplay package target hash mismatch.");
-        Expect(loaded_batman_pack->Build.VirtualFiles[0].Source.ChunkSize == 65536, "Checked-in Batman gameplay package chunk size mismatch.");
+        Expect(loaded_batman_pack->Build.VirtualFiles.size() == 2, "Checked-in Batman pack virtual file count mismatch.");
+
+        const helen::VirtualFileDefinition* checked_in_gameplay_file = nullptr;
+        const helen::VirtualFileDefinition* checked_in_frontend_file = nullptr;
+        for (const helen::VirtualFileDefinition& virtual_file : loaded_batman_pack->Build.VirtualFiles)
+        {
+            if (virtual_file.Id == "bmgameGameplayPackage")
+            {
+                checked_in_gameplay_file = &virtual_file;
+            }
+            else if (virtual_file.Id == "frontendMapPackage")
+            {
+                checked_in_frontend_file = &virtual_file;
+            }
+        }
+
+        Expect(checked_in_gameplay_file != nullptr, "Checked-in Batman gameplay virtual file was not found.");
+        Expect(checked_in_frontend_file != nullptr, "Checked-in Batman frontend virtual file was not found.");
+        Expect(checked_in_gameplay_file->Mode == "delta-on-read", "Checked-in Batman gameplay package is not delta-backed.");
+        Expect(checked_in_gameplay_file->Source.Kind == helen::VirtualFileSourceKind::DeltaFile, "Checked-in Batman gameplay package source kind mismatch.");
+        Expect(checked_in_gameplay_file->Source.Path == std::filesystem::path("assets/deltas/BmGame-subtitle-signal.hgdelta"), "Checked-in Batman gameplay package delta path mismatch.");
+        Expect(checked_in_gameplay_file->Source.Base.FileSize == 100365345, "Checked-in Batman gameplay package base size mismatch.");
+        Expect(checked_in_gameplay_file->Source.Base.Sha256 == "621a5c8d99c9f7c7283531d05a4a6d56bdf15ad93ede0d5bf2f5d3e45117ff36", "Checked-in Batman gameplay package base hash mismatch.");
+        Expect(checked_in_gameplay_file->Source.Target.FileSize == 101115741, "Checked-in Batman gameplay package target size mismatch.");
+        Expect(checked_in_gameplay_file->Source.Target.Sha256 == "d1e97fbd81e5eec121538873b5fc95c4a47dca98dbae51898cf3e80210639d39", "Checked-in Batman gameplay package target hash mismatch.");
+        Expect(checked_in_gameplay_file->Source.ChunkSize == 65536, "Checked-in Batman gameplay package chunk size mismatch.");
+        Expect(checked_in_frontend_file->Mode == "delta-on-read", "Checked-in Batman frontend package is not delta-backed.");
+        Expect(checked_in_frontend_file->Source.Kind == helen::VirtualFileSourceKind::DeltaFile, "Checked-in Batman frontend package source kind mismatch.");
+        Expect(checked_in_frontend_file->GamePath == std::filesystem::path("BmGame/CookedPC/Maps/Frontend/Frontend.umap"), "Checked-in Batman frontend package path mismatch.");
+        Expect(checked_in_frontend_file->Source.Path == std::filesystem::path("assets/deltas/Frontend-main-menu-subtitle-size.hgdelta"), "Checked-in Batman frontend delta path mismatch.");
+        Expect(checked_in_frontend_file->Source.Base.FileSize == 11739909, "Checked-in Batman frontend package base size mismatch.");
+        Expect(checked_in_frontend_file->Source.Base.Sha256 == "05fa5608eeda5c12f964b1fafca121d3db60eef60094fa9bb567d9be5a620a50", "Checked-in Batman frontend package base hash mismatch.");
+        Expect(checked_in_frontend_file->Source.Target.FileSize == 12552240, "Checked-in Batman frontend package target size mismatch.");
+        Expect(checked_in_frontend_file->Source.Target.Sha256 == "242833c3c2fb349eae17b7830a6424b9ac73a51218de9b2fba445fa7dbfcb745", "Checked-in Batman frontend package target hash mismatch.");
+        Expect(checked_in_frontend_file->Source.ChunkSize == 65536, "Checked-in Batman frontend chunk size mismatch.");
         Expect(loaded_batman_pack->Build.StateObservers.size() == 1, "Checked-in Batman pack state observer count mismatch.");
         Expect(loaded_batman_pack->Build.StateObservers[0].ScanStartAddress == 0x2B000000, "Checked-in Batman observer scan start drifted from the investigated hot heap window.");
         Expect(loaded_batman_pack->Build.StateObservers[0].ScanEndAddress == 0x30000000, "Checked-in Batman observer scan end drifted from the investigated hot heap window.");
