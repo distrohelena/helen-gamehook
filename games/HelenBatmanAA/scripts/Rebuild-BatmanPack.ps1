@@ -27,6 +27,7 @@ $BmGameGfxPatcherProjectPath = Join-Path $ToolRoot 'BmGameGfxPatcher\BmGameGfxPa
 $PackBuildRoot = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles\builds\steam-goty-1.0'
 $BuildAssetsRoot = Join-Path $GeneratedRoot 'pause-runtime-scale'
 $FrontendBuildRoot = Join-Path $GeneratedRoot 'main-menu-audio'
+$FrontendPackBuildVersion = 'v1.1.13'
 $FfdecPath = Join-Path $ExtractedRoot 'ffdec\ffdec-cli.exe'
 $BasePackagePath = Join-Path $ExtractedRoot 'bmgame-unpacked\BmGame.u'
 $FrontendBasePackagePath = Join-Path $ExtractedRoot 'frontend\frontend-umap-unpacked\Frontend.umap'
@@ -148,7 +149,8 @@ if ($LASTEXITCODE -ne 0) {
     build-main-menu-audio `
     --root $BuilderRoot `
     --output-dir $FrontendBuildRoot `
-    --ffdec $FfdecPath
+    --ffdec $FfdecPath `
+    --build-version $FrontendPackBuildVersion
 if ($LASTEXITCODE -ne 0) {
     throw "Main-menu audio asset build failed."
 }

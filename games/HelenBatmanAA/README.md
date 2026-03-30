@@ -97,7 +97,7 @@ $ExpectedVirtualFiles = @(
         Path = 'BmGame/CookedPC/Maps/Frontend/Frontend.umap'
         DeltaPath = 'assets/deltas/Frontend-main-menu-subtitle-size.hgdelta'
         DeltaFilePath = Join-Path $PackBuildRoot 'assets\deltas\Frontend-main-menu-subtitle-size.hgdelta'
-        DeltaSha256 = 'ECFE097B89F1EB1F4E3C003E15212E08E2B426500CF121083B780F4E9B8BC595'
+        DeltaSha256 = 'C23B8251D33010CA790B7C657183ACEA63734CFC9354E46784D84338F2627395'
     }
 )
 $PackagesPath = Join-Path $PackBuildRoot 'assets\packages'
