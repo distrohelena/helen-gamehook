@@ -1,10 +1,17 @@
 param(
-    [string]$BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+    [string]$BatmanRoot
 )
 
 $ErrorActionPreference = 'Stop'
 
-$ListItemPath = Join-Path $BatmanRoot 'builder\build-assets\pause-runtime-scale\_build\pause-scripts\__Packages\rs\ui\ListItem.as'
+if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
+    $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+} else {
+    $BatmanRoot = (Resolve-Path $BatmanRoot).Path
+}
+
+$GeneratedRoot = Join-Path $BatmanRoot 'builder\generated'
+$ListItemPath = Join-Path $GeneratedRoot 'pause-runtime-scale\_build\pause-scripts\__Packages\rs\ui\ListItem.as'
 
 if (-not (Test-Path $ListItemPath)) {
     throw "Generated pause runtime scale script not found: $ListItemPath"
