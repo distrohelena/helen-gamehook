@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 
 $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $RepoRoot = (Resolve-Path (Join-Path $BatmanRoot '..\..')).Path
+$GameRoot = [System.IO.Path]::GetFullPath((Join-Path $GameBin '..'))
 $PackSource = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles'
 $PackDestination = Join-Path $GameBin 'helengamehook\packs\batman-aa-subtitles'
 $PackParent = Split-Path -Path $PackDestination -Parent
@@ -23,6 +24,7 @@ $SourceGameplayDeltaPath = Join-Path $PackSource 'builds\steam-goty-1.0\assets\d
 $SourceFrontendDeltaPath = Join-Path $PackSource 'builds\steam-goty-1.0\assets\deltas\Frontend-main-menu-subtitle-size.hgdelta'
 $SourcePackagesPath = Join-Path $PackSource 'assets\packages'
 $VerifierPath = Join-Path $PSScriptRoot 'Test-BatmanKnownGoodGameplayPackage.ps1'
+$InstalledBaseVerifierPath = Join-Path $PSScriptRoot 'Test-BatmanInstalledBaseCompatibility.ps1'
 $HelenGameHookPath = Join-Path $RepoRoot "bin\Win32\$Configuration\HelenGameHook.dll"
 $ProxyPath = Join-Path $RepoRoot "bin\Win32\$Configuration\dinput8.dll"
 $ExpectedVirtualFiles = @(
@@ -97,7 +99,7 @@ function Test-ExpectedVirtualFiles {
     }
 }
 
-foreach ($RequiredPath in @($PackSource, $SourceGameplayDeltaPath, $SourceFrontendDeltaPath, $HelenGameHookPath, $ProxyPath)) {
+foreach ($RequiredPath in @($PackSource, $SourceGameplayDeltaPath, $SourceFrontendDeltaPath, $HelenGameHookPath, $ProxyPath, $InstalledBaseVerifierPath)) {
     if (-not (Test-Path -LiteralPath $RequiredPath)) {
         throw "Batman deployment input not found: $RequiredPath"
     }
@@ -111,6 +113,7 @@ if (Test-Path -LiteralPath $SourcePackagesPath) {
 }
 
 & $VerifierPath -BatmanRoot $BatmanRoot
+& $InstalledBaseVerifierPath -GameRoot $GameRoot -PackBuildRoot (Join-Path $PackSource 'builds\steam-goty-1.0')
 
 Get-Process ShippingPC-BmGame -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2

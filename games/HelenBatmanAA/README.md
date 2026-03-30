@@ -1,6 +1,13 @@
 # HelenBatmanAA
 
-This folder now contains the Batman-specific delta-backed runtime pack, the Batman-specific build inputs, and Batman-local helper scripts.
+This folder now contains the Batman-specific runtime pack experiments, the Batman-specific build inputs, and Batman-local helper scripts.
+
+Important warning:
+
+- The current Batman package toolchain is not retail-vanilla safe.
+- `BmGameGfxPatcher` only supports unpacked Unreal packages and does not rebuild chunk compression.
+- The current shipped `BmGame.u` and `Frontend.umap` deltas are built from unpacked package bases, not the compressed retail files from a clean Steam install.
+- Do not treat the current Batman pack as "drop in Helen DLLs + pack on untouched Batman" until compressed-package support exists and the bases are rebuilt from true retail files.
 
 Current layout:
 
@@ -129,7 +136,8 @@ if (Test-Path -LiteralPath $PackagesPath) {
 Important notes:
 
 - The deploy script now validates the shipped delta-backed gameplay package before it copies anything into the game directory, stages the pack before replacing the live install, and verifies the deployed manifest and delta hash after copy.
-- The current supported runtime pack is the shipped delta-backed `BmGame.u` gameplay package, the shipped delta-backed `Frontend.umap` front-end package, their checked-in `.hgdelta` containers, and the native text-scale blob.
+- The current repo still contains the shipped delta-backed `BmGame.u` gameplay package, the shipped delta-backed `Frontend.umap` front-end package, their checked-in `.hgdelta` containers, and the native text-scale blob, but those deltas are built from unpacked package bases and are not retail-vanilla safe.
+- `Deploy-Batman.ps1` now runs `Test-BatmanInstalledBaseCompatibility.ps1` before copying anything into the game directory and fails fast when the installed Batman package files do not match the exact base hashes in `files.json`.
 - The prep script recreates the ignored local builder prerequisites under `builder\extracted`, while generated build outputs stay under ignored `builder\generated`.
 - Live front-end verification requires the installed `BmGame\CookedPC\Maps\Frontend\Frontend.umap` to match the trusted base hash used to build `assets\deltas\Frontend-main-menu-subtitle-size.hgdelta`. The scripts do not hide a base-package mismatch with fallbacks.
 - Legacy investigation-only frontend assets, when kept locally, now live under `builder\extracted\frontend\...` instead of the old flat `builder\working` layout.
