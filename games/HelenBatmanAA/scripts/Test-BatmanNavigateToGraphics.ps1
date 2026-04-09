@@ -221,12 +221,45 @@ function Run-Recognition {
     return ($output | ConvertFrom-Json)
 }
 
-# Navigation logic
+# Navigation logic - SIMPLIFIED (no recognition dependency for inputs)
 function Get-NavigationAction {
     param(
         [string]$screenName,
-        [string]$highlightedItem
+        [string]$highlightedItem,
+        [int]$stepCount,
+        [int]$consecutiveWaits
     )
+
+    # If we don't know the screen, use heuristic navigation
+    if ([string]::IsNullOrEmpty($screenName) -or $screenName -eq "Unknown") {
+        # Heuristic: try to progress through menus with Enter/Down
+        if ($stepCount -le 2) {
+            return @{
+                Action = "PressEnter"
+                Description = "Starting: pressing Enter to get past title/save screens"
+            }
+        } elseif ($stepCount -le 6) {
+            return @{
+                Action = "PressEnter"
+                Description = "Navigating main menu: pressing Enter to reach Options"
+            }
+        } elseif ($stepCount -le 10) {
+            return @{
+                Action = "PressDown"
+                Description = "Looking for Options: pressing Down"
+            }
+        } elseif ($stepCount -le 15) {
+            return @{
+                Action = "PressEnter"
+                Description = "Trying to enter Options menu"
+            }
+        } else {
+            return @{
+                Action = "PressDown"
+                Description = "Searching for Graphics option"
+            }
+        }
+    }
 
     switch ($screenName) {
         "Title" {
@@ -375,7 +408,7 @@ while ($stepCount -lt $MaxSteps -and -not $success) {
     $lastScreenName = $currentScreen
 
     # Get navigation action
-    $navAction = Get-NavigationAction -screenName $currentScreen -highlightedItem $highlightedItem
+    $navAction = Get-NavigationAction -screenName $currentScreen -highlightedItem $highlightedItem -stepCount $stepCount -consecutiveWaits $consecutiveWaits
 
     switch ($navAction.Action) {
         "Success" {
