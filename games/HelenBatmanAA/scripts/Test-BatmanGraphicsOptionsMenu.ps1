@@ -221,6 +221,12 @@ while ($screenshotCount -lt $MaxScreenshots -and -not $graphicsOptionsDetected) 
                 Write-Host "  --> Still on: $currentScreen" -ForegroundColor DarkGreen
             }
 
+            # Show highlighted menu item if detected
+            $mainMenuItem = $result.variable_states | Where-Object { $_.variable_name -eq "MainMenuItem" }
+            if ($mainMenuItem -and $mainMenuItem.value -and $mainMenuItem.matched) {
+                Write-Host "      Highlighted: $($mainMenuItem.value)" -ForegroundColor Yellow
+            }
+
             # Check if we detected Graphics Options
             if ($currentScreen -eq "GraphicsOptions") {
                 Write-Host ""

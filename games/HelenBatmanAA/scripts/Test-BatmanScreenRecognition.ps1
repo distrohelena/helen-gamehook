@@ -168,7 +168,17 @@ if ($result.variable_states) {
     Write-Host ""
     Write-Host "Variable states:" -ForegroundColor White
     $result.variable_states | ForEach-Object {
-        Write-Host "  $($_.name) = $($_.value)" -ForegroundColor Gray
+        $valueStr = if ($_.value) { $_.value } else { "unknown" }
+        $statusColor = if ($_.matched) { "Green" } else { "Gray" }
+        Write-Host "  $($_.variable_name) = " -NoNewline
+        Write-Host "$valueStr" -ForegroundColor $statusColor
+    }
+    
+    # Highlight the MainMenuItem if detected
+    $mainMenuItem = $result.variable_states | Where-Object { $_.variable_name -eq "MainMenuItem" }
+    if ($mainMenuItem -and $mainMenuItem.value) {
+        Write-Host ""
+        Write-Host "==> Currently highlighted menu item: $($mainMenuItem.value)" -ForegroundColor Yellow -BackgroundColor DarkGreen
     }
 }
 
