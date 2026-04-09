@@ -16,6 +16,21 @@
       "key": "ui.subtitleSize",
       "type": "int",
       "defaultValue": 1
+    },
+    {
+      "key": "graphics.brightness",
+      "type": "float",
+      "defaultValue": 0.5
+    },
+    {
+      "key": "graphics.gamma",
+      "type": "float",
+      "defaultValue": 1.0
+    },
+    {
+      "key": "graphics.vsync",
+      "type": "bool",
+      "defaultValue": true
     }
   ],
   "features": [
@@ -25,6 +40,59 @@
       "kind": "enum",
       "configKey": "ui.subtitleSize",
       "defaultValue": 1
+    },
+    {
+      "id": "graphicsOptions",
+      "name": "Graphics Options",
+      "kind": "group",
+      "configKeys": [
+        "graphics.brightness",
+        "graphics.gamma",
+        "graphics.vsync"
+      ]
+    }
+  ],
+  "iniFiles": [
+    {
+      "id": "user-engine",
+      "root": "documents",
+      "path": "Square Enix/Batman Arkham Asylum GOTY/BmGame/Config/BmEngine.ini"
+    }
+  ],
+  "iniStores": [
+    {
+      "id": "batmanFrontendUi",
+      "files": [
+        "user-engine"
+      ],
+      "keys": [
+        "subtitleSize"
+      ]
+    }
+  ],
+  "iniKeys": [
+    {
+      "id": "subtitleSize",
+      "file": "user-engine",
+      "section": "Engine.HUD",
+      "key": "ConsoleFontSize",
+      "type": "choice-map",
+      "writable": true,
+      "ownership": "hijacked-native-key",
+      "valueMap": [
+        {
+          "match": 0,
+          "encodedValue": 5
+        },
+        {
+          "match": 1,
+          "encodedValue": 6
+        },
+        {
+          "match": 2,
+          "encodedValue": 7
+        }
+      ]
     }
   ],
   "builds": [
