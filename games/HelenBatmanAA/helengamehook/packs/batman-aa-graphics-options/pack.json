@@ -1,0 +1,93 @@
+{
+    "schemaVersion":  1,
+    "id":  "batman-aa-graphics-options",
+    "name":  "Batman Graphics Options Experiment",
+    "targets":  [
+                    {
+                        "gameId":  "batman-arkham-asylum",
+                        "executables":  [
+                                            "ShippingPC-BmGame.exe"
+                                        ]
+                    }
+                ],
+    "config":  [
+                   {
+                       "key":  "fullscreen",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "resolutionWidth",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "resolutionHeight",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "vsync",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "msaa",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "detailLevel",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "bloom",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "dynamicShadows",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "motionBlur",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "distortion",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "fogVolumes",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "sphericalHarmonicLighting",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "ambientOcclusion",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "physx",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "stereo",
+                       "type":  "int",
+                       "defaultValue":  0
+                   }
+               ],
+    "builds":  [
+                   "steam-goty-1.0"
+               ]
+}

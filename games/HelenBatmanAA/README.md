@@ -4,10 +4,10 @@ This folder now contains the Batman-specific runtime pack experiments, the Batma
 
 Important warning:
 
-- The current Batman package toolchain is not retail-vanilla safe.
-- `BmGameGfxPatcher` only supports unpacked Unreal packages and does not rebuild chunk compression.
-- The current shipped `BmGame.u` and `Frontend.umap` deltas are built from unpacked package bases, not the compressed retail files from a clean Steam install.
-- Do not treat the current Batman pack as "drop in Helen DLLs + pack on untouched Batman" until compressed-package support exists and the bases are rebuilt from true retail files.
+- The current shipped Batman pack and the legacy FFDec rebuild workflow are not retail-vanilla safe.
+- Most Batman package rebuild paths still consume unpacked package bases, not the compressed retail files from a clean Steam install.
+- Do not treat the current shipped Batman pack as "drop in Helen DLLs + pack on untouched Batman" until those shipped deltas are rebuilt from true retail files.
+- The direct retail frontend experiments documented below are the current exception: `patch-mainv2-version-label` and `patch-mainv2-audio-subtitle-size` patch the compressed retail `Frontend.umap` directly.
 
 Current layout:
 
@@ -142,3 +142,169 @@ Important notes:
 - Live front-end verification requires the installed `BmGame\CookedPC\Maps\Frontend\Frontend.umap` to match the trusted base hash used to build `assets\deltas\Frontend-main-menu-subtitle-size.hgdelta`. The scripts do not hide a base-package mismatch with fallbacks.
 - Legacy investigation-only frontend assets, when kept locally, now live under `builder\extracted\frontend\...` instead of the old flat `builder\working` layout.
 - Legacy debug scripts from the old `artifacts` folder were copied into `scripts` for reference, but the recommended entry points are the PascalCase scripts above.
+
+## Main Menu Version Label Experiment
+
+This experiment uses a direct patch of the existing compressed retail `Frontend.umap` package under `<BatmanBuilderRoot>\extracted\frontend-retail\Frontend.umap`. It does not rebuild `MainV2` through FFDec `-importScript`, and the experiment rebuild path consumes only that retail frontend copy plus the direct `patch-mainv2-version-label` command. Deployment does not replace the checked-in gameplay pack source; it temporarily swaps the live copied `batman-aa-subtitles` pack under the game directory so `PackRepository` sees the experiment pack first.
+
+Full automated flow:
+
+1. Prepare the builder workspace with `Prepare-BatmanBuilderWorkspace.ps1`.
+2. Rebuild the experiment pack.
+3. Verify the generated package.
+4. Deploy the experiment pack copy.
+5. Run `Launch-Check-Batman.ps1`.
+
+Prepare the shared builder workspace first. This seeds the trusted retail frontend copy under `<BatmanBuilderRoot>\extracted\frontend-retail\Frontend.umap` for the experiment. The prep script may also refresh unpacked FFDec outputs for other Batman builder workflows, but this version-label proof does not consume the unpacked frontend outputs in its patch path:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Prepare-BatmanBuilderWorkspace.ps1 `
+  -BuilderRoot <BatmanBuilderRoot> `
+  -BasePackagePath <TrustedBmGamePath> `
+  -FrontendBasePackagePath <TrustedFrontendPath> `
+  -FfdecCliPath <FfdecCliPath>
+```
+
+Rebuild the experiment pack:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Rebuild-BatmanMainMenuVersionLabelExperiment.ps1 `
+  -Configuration Debug `
+  -BuilderRoot <BatmanBuilderRoot>
+```
+
+Verify the generated experiment pack:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Test-BatmanMainMenuVersionLabelPackage.ps1 `
+  -BatmanRoot <BatmanRoot> `
+  -BuilderRoot <BatmanBuilderRoot>
+```
+
+Deploy the experiment pack copy into the live game directory:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Deploy-BatmanMainMenuVersionLabelExperiment.ps1 `
+  -BuilderRoot <BatmanBuilderRoot>
+```
+
+Run the launch check:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Launch-Check-Batman.ps1
+```
+
+Manual smoke gate:
+
+1. Launch Batman.
+2. Press start.
+3. Reach profile/save selection.
+4. Reach the main menu.
+5. Confirm the label reads `v1.1 HELEN FIX`.
+
+Rollback if the experiment needs to be removed:
+
+1. Remove the live deployed experiment pack copy under `Binaries\helengamehook\packs\batman-aa-subtitles`, or move the backup folder created by the deploy script back into place.
+2. Confirm the normal live `batman-aa-subtitles` pack is back in place under the game directory.
+
+## Graphics Options Experiment
+
+Build:
+
+1. Run `Rebuild-BatmanGraphicsOptionsExperiment.ps1`.
+2. Run `Test-BatmanGraphicsOptionsPackage.ps1`.
+3. Run `Test-BatmanRetailGraphicsOptionsPatch.ps1`.
+
+Deploy:
+
+1. Run `Deploy-BatmanGraphicsOptionsExperiment.ps1`.
+
+Live smoke:
+
+1. Launch Batman.
+2. Press start.
+3. Reach profile/save selection.
+4. Reach the main menu.
+5. Open `Options -> Graphics Options`.
+6. Confirm the options stack entries exist.
+7. Confirm the graphics list scrolls and shows all requested rows.
+8. Confirm `Fullscreen` and `Resolution` display saved values but do not expose arrows.
+9. Change `VSync` or `Bloom` and confirm `Apply Changes` becomes enabled.
+10. Back out without applying and confirm the three-choice unsaved-changes prompt appears.
+11. Choose `Cancel` and confirm the draft is preserved.
+12. Choose `Apply Changes` and confirm the restart warning appears after restart-required edits.
+13. Reopen the screen and confirm the applied values persisted from `BmEngine.ini`.
+
+## Main Menu Subtitle Size Experiment
+
+This experiment also uses a direct patch of the existing compressed retail `Frontend.umap` package under `<BatmanBuilderRoot>\extracted\frontend-retail\Frontend.umap`, but it needs one generated prototype `MainV2-subtitle-size.gfx` as the transplant source for the `ScreenOptionsAudio` sprite and the subtitle-size-aware `rs.ui.ListItem` class-definition tag. It does not ship the old unpacked `Frontend.umap` delta path, and deployment still swaps only the live copied `batman-aa-subtitles` pack under the game directory.
+
+Full automated flow:
+
+1. Prepare the shared builder workspace.
+2. Rebuild the subtitle-size experiment pack.
+3. Verify the generated package and layout.
+4. Deploy the experiment pack copy.
+5. Run `Launch-Check-Batman.ps1`.
+
+Prepare the shared builder workspace first. This seeds the trusted retail frontend copy under `<BatmanBuilderRoot>\extracted\frontend-retail\Frontend.umap`, the FFDec tool under `<BatmanBuilderRoot>\extracted\ffdec\ffdec-cli.exe`, and the generated prototype dependencies used by `build-main-menu-audio`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Prepare-BatmanBuilderWorkspace.ps1 `
+  -BuilderRoot <BatmanBuilderRoot> `
+  -BasePackagePath <TrustedBmGamePath> `
+  -FrontendBasePackagePath <TrustedFrontendPath> `
+  -FfdecCliPath <FfdecCliPath>
+```
+
+Rebuild the subtitle-size experiment pack:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Rebuild-BatmanMainMenuSubtitleSizeExperiment.ps1 `
+  -Configuration Debug `
+  -BatmanRoot <BatmanRoot> `
+  -BuilderRoot <BatmanBuilderRoot>
+```
+
+Verify the generated retail package contract and the patched `ScreenOptionsAudio` layout:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Test-BatmanMainMenuSubtitleSizePackage.ps1 `
+  -BatmanRoot <BatmanRoot> `
+  -BuilderRoot <BatmanBuilderRoot>
+
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Test-BatmanMainMenuAudioLayout.ps1 `
+  -BatmanRoot <BatmanRoot>
+```
+
+Deploy the experiment pack copy into the live game directory:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Deploy-BatmanMainMenuSubtitleSizeExperiment.ps1 `
+  -BuilderRoot <BatmanBuilderRoot>
+```
+
+Run the launch check:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Launch-Check-Batman.ps1
+```
+
+Manual smoke gate:
+
+1. Launch Batman.
+2. Press start.
+3. Reach profile/save selection.
+4. Reach the main menu.
+5. Open `Options -> Audio`.
+6. Confirm all five rows sit inside the square panel.
+7. Confirm the visible order is `Subtitles`, `Subtitle Size`, `Volume SFX`, `Volume Music`, `Volume Dialogue`.
+8. Confirm up/down focus order matches that visible order.
+9. Turn `Subtitles` off and confirm `Subtitle Size` stays visible but greyed or inert.
+10. Turn `Subtitles` on and confirm `Subtitle Size` becomes active again.
+11. Change the `Subtitle Size` value, back out, and confirm the row persists on reopen.
+
+Rollback if the experiment needs to be removed:
+
+1. Remove the live deployed experiment pack copy under `Binaries\helengamehook\packs\batman-aa-subtitles`, or move the backup folder created by the deploy script back into place.
+2. Confirm the normal live `batman-aa-subtitles` pack is back in place under the game directory.

@@ -1,0 +1,172 @@
+{
+    "bindings":  [
+                     {
+                         "id":  "graphicsGetFullscreen",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "fullscreen"
+                     },
+                     {
+                         "id":  "graphicsGetResolutionWidth",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "resolutionWidth"
+                     },
+                     {
+                         "id":  "graphicsGetResolutionHeight",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "resolutionHeight"
+                     },
+                     {
+                         "id":  "graphicsGetVsync",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "vsync"
+                     },
+                     {
+                         "id":  "graphicsGetMsaa",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "msaa"
+                     },
+                     {
+                         "id":  "graphicsGetDetailLevel",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "detailLevel"
+                     },
+                     {
+                         "id":  "graphicsGetBloom",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "bloom"
+                     },
+                     {
+                         "id":  "graphicsGetDynamicShadows",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "dynamicShadows"
+                     },
+                     {
+                         "id":  "graphicsGetMotionBlur",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "motionBlur"
+                     },
+                     {
+                         "id":  "graphicsGetDistortion",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "distortion"
+                     },
+                     {
+                         "id":  "graphicsGetFogVolumes",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "fogVolumes"
+                     },
+                     {
+                         "id":  "graphicsGetSphericalHarmonicLighting",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "sphericalHarmonicLighting"
+                     },
+                     {
+                         "id":  "graphicsGetAmbientOcclusion",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "ambientOcclusion"
+                     },
+                     {
+                         "id":  "graphicsGetPhysx",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "physx"
+                     },
+                     {
+                         "id":  "graphicsGetStereo",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "stereo"
+                     },
+                     {
+                         "id":  "graphicsSetVsync",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "vsync"
+                     },
+                     {
+                         "id":  "graphicsSetMsaa",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "msaa"
+                     },
+                     {
+                         "id":  "graphicsSetDetailLevel",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "detailLevel"
+                     },
+                     {
+                         "id":  "graphicsSetBloom",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "bloom"
+                     },
+                     {
+                         "id":  "graphicsSetDynamicShadows",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "dynamicShadows"
+                     },
+                     {
+                         "id":  "graphicsSetMotionBlur",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "motionBlur"
+                     },
+                     {
+                         "id":  "graphicsSetDistortion",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "distortion"
+                     },
+                     {
+                         "id":  "graphicsSetFogVolumes",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "fogVolumes"
+                     },
+                     {
+                         "id":  "graphicsSetSphericalHarmonicLighting",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "sphericalHarmonicLighting"
+                     },
+                     {
+                         "id":  "graphicsSetAmbientOcclusion",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "ambientOcclusion"
+                     },
+                     {
+                         "id":  "graphicsSetPhysx",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "physx"
+                     },
+                     {
+                         "id":  "graphicsSetStereo",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "stereo"
+                     },
+                     {
+                         "id":  "graphicsApplyDraft",
+                         "externalName":  "Helen_RunCommand",
+                         "mode":  "run-command",
+                         "command":  "applyBatmanGraphicsDraft"
+                     }
+                 ]
+}
