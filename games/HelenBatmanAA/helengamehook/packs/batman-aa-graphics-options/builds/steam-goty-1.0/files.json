@@ -1,0 +1,22 @@
+{
+    "virtualFiles":  [
+                         {
+                             "path":  "BmGame/CookedPC/Maps/Frontend/Frontend.umap",
+                             "source":  {
+                                            "path":  "assets/deltas/Frontend-graphics-options.hgdelta",
+                                            "base":  {
+                                                         "sha256":  "271916b888f83374122af0fccc5c685804f4c8286a92a772cd71e4f48a00f2cc",
+                                                         "size":  2988548
+                                                     },
+                                            "chunkSize":  65536,
+                                            "target":  {
+                                                           "sha256":  "c7147d5c8dd34db505d971b4a53244d9c43cd650faf33806a15a8835979bf2eb",
+                                                           "size":  12362458
+                                                       },
+                                            "kind":  "delta-file"
+                                        },
+                             "id":  "frontendGraphicsOptionsPackage",
+                             "mode":  "delta-on-read"
+                         }
+                     ]
+}

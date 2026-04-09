@@ -2,8 +2,14 @@ using System.Text.Json;
 
 namespace BmGameGfxPatcher;
 
+/// <summary>
+/// Implements the command-line entry point for export inspection and patching operations.
+/// </summary>
 internal static class Program
 {
+    /// <summary>
+    /// Stores the JSON serializer settings used for patch manifests.
+    /// </summary>
     private static readonly JsonSerializerOptions ManifestJsonOptions = new()
     {
         AllowTrailingCommas = true,
@@ -12,6 +18,11 @@ internal static class Program
         WriteIndented = true
     };
 
+    /// <summary>
+    /// Dispatches one CLI command.
+    /// </summary>
+    /// <param name="args">Raw command-line arguments.</param>
+    /// <returns>Process exit code.</returns>
     private static int Main(string[] args)
     {
         if (args.Length == 0)
@@ -34,6 +45,9 @@ internal static class Program
                 "describe-function" => RunDescribeFunction(tail),
                 "find-function-refs" => RunFindFunctionRefs(tail),
                 "scale-font" => RunScaleFont(tail),
+                "patch-mainv2-version-label" => RunPatchMainV2VersionLabel(tail),
+                "patch-mainv2-audio-subtitle-size" => RunPatchMainV2AudioSubtitleSize(tail),
+                "patch-mainv2-graphics-options" => RunPatchMainV2GraphicsOptions(tail),
                 "patch" => RunPatch(tail),
                 "help" or "--help" or "-h" => PrintHelpAndReturn(),
                 _ => throw new InvalidOperationException($"Unknown command '{command}'.")
@@ -46,6 +60,11 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// Lists exports in one Unreal package, optionally filtered by type.
+    /// </summary>
+    /// <param name="args">Command-line arguments for export listing.</param>
+    /// <returns>Process exit code.</returns>
     private static int RunListExports(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -70,6 +89,11 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Prints metadata, payload offsets, and optional reference scans for one export object.
+    /// </summary>
+    /// <param name="args">Command-line arguments for export description.</param>
+    /// <returns>Process exit code.</returns>
     private static int RunDescribeExport(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -131,6 +155,11 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Extracts one embedded GFX payload from the requested export into a standalone file.
+    /// </summary>
+    /// <param name="args">Command-line arguments for payload extraction.</param>
+    /// <returns>Process exit code.</returns>
     private static int RunExtractGfx(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -148,6 +177,11 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Applies one manifest-driven patch set to a package and writes the patched output package.
+    /// </summary>
+    /// <param name="args">Command-line arguments for manifest patching.</param>
+    /// <returns>Process exit code.</returns>
     private static int RunPatch(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -184,6 +218,11 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Dumps serialized property tags for one export object starting at a requested byte offset.
+    /// </summary>
+    /// <param name="args">Command-line arguments for property inspection.</param>
+    /// <returns>Process exit code.</returns>
     private static int RunDescribeProperties(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -221,6 +260,11 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Prints metadata and optional hex or reference scans for one Unreal function export.
+    /// </summary>
+    /// <param name="args">Command-line arguments for function inspection.</param>
+    /// <returns>Process exit code.</returns>
     private static int RunDescribeFunction(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -271,6 +315,11 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Scales one or more font exports and writes the patched package output.
+    /// </summary>
+    /// <param name="args">Command-line arguments for font scaling.</param>
+    /// <returns>Process exit code.</returns>
     private static int RunScaleFont(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -300,6 +349,65 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Patches the retail frontend MainV2 root script so the main-menu version label shows a custom build string.
+    /// </summary>
+    /// <param name="args">Command-line arguments for the version-label patch.</param>
+    /// <returns>Process exit code.</returns>
+    private static int RunPatchMainV2VersionLabel(string[] args)
+    {
+        var options = new ArgumentReader(args);
+        string packagePath = options.RequireValue("--package");
+        string outputPath = options.RequireValue("--output");
+        string buildLabel = options.RequireValue("--label");
+        options.ThrowIfAnyUnknown();
+
+        MainMenuVersionLabelPackagePatcher.PatchPackage(packagePath, outputPath, buildLabel);
+        Console.WriteLine($"Patched MainMenu.MainV2 version label into {Path.GetFullPath(outputPath)}");
+        return 0;
+    }
+
+    /// <summary>
+    /// Patches the retail frontend MainV2 audio screen so subtitle size becomes a dedicated fifth row.
+    /// </summary>
+    /// <param name="args">Command-line arguments for the audio subtitle-size patch.</param>
+    /// <returns>Process exit code.</returns>
+    private static int RunPatchMainV2AudioSubtitleSize(string[] args)
+    {
+        var options = new ArgumentReader(args);
+        string packagePath = options.RequireValue("--package");
+        string outputPath = options.RequireValue("--output");
+        string prototypeGfxPath = options.RequireValue("--prototype-gfx");
+        options.ThrowIfAnyUnknown();
+
+        MainMenuAudioSubtitleSizePackagePatcher.PatchPackage(packagePath, outputPath, prototypeGfxPath);
+        Console.WriteLine($"Patched MainMenu.MainV2 audio subtitle size into {Path.GetFullPath(outputPath)}");
+        return 0;
+    }
+
+    /// <summary>
+    /// Patches the retail frontend MainV2 movie so the graphics-options prototype payload is transplanted into the package.
+    /// </summary>
+    /// <param name="args">Command-line arguments for the graphics-options patch.</param>
+    /// <returns>Process exit code.</returns>
+    private static int RunPatchMainV2GraphicsOptions(string[] args)
+    {
+        var options = new ArgumentReader(args);
+        string packagePath = options.RequireValue("--package");
+        string outputPath = options.RequireValue("--output");
+        string prototypeGfxPath = options.RequireValue("--prototype-gfx");
+        options.ThrowIfAnyUnknown();
+
+        MainMenuGraphicsOptionsPackagePatcher.PatchPackage(packagePath, outputPath, prototypeGfxPath);
+        Console.WriteLine($"Patched MainMenu.MainV2 graphics-options movie into {Path.GetFullPath(outputPath)}");
+        return 0;
+    }
+
+    /// <summary>
+    /// Loads and initializes one patch manifest from disk.
+    /// </summary>
+    /// <param name="manifestPath">Manifest file path.</param>
+    /// <returns>Initialized manifest.</returns>
     private static PatchManifest LoadManifest(string manifestPath)
     {
         string fullManifestPath = Path.GetFullPath(manifestPath);
@@ -315,6 +423,11 @@ internal static class Program
         return manifest;
     }
 
+    /// <summary>
+    /// Searches function exports for references that match the requested filters.
+    /// </summary>
+    /// <param name="args">Command-line arguments for function-reference scanning.</param>
+    /// <returns>Process exit code.</returns>
     private static int RunFindFunctionRefs(string[] args)
     {
         var options = new ArgumentReader(args);
@@ -396,6 +509,15 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Evaluates whether one resolved reference matches the requested filter set.
+    /// </summary>
+    /// <param name="referenceInfo">Reference metadata to evaluate.</param>
+    /// <param name="refNameContains">Optional object-name substring filter.</param>
+    /// <param name="refOwnerContains">Optional owner-name substring filter.</param>
+    /// <param name="refTypeContains">Optional type-name substring filter.</param>
+    /// <param name="refKind">Optional reference-kind filter.</param>
+    /// <returns>True when the reference satisfies every requested filter.</returns>
     private static bool MatchesReferenceFilter(
         ReferenceInfo referenceInfo,
         string? refNameContains,
@@ -427,6 +549,12 @@ internal static class Program
         return true;
     }
 
+    /// <summary>
+    /// Evaluates one optional case-insensitive substring filter against one candidate string.
+    /// </summary>
+    /// <param name="candidate">Candidate string to test.</param>
+    /// <param name="substring">Optional substring filter.</param>
+    /// <returns>True when the filter is empty or the candidate contains it.</returns>
     private static bool MatchesContains(string? candidate, string? substring)
     {
         if (string.IsNullOrWhiteSpace(substring))
@@ -438,12 +566,19 @@ internal static class Program
                candidate.Contains(substring, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Prints CLI usage text and reports success.
+    /// </summary>
+    /// <returns>Process exit code.</returns>
     private static int PrintHelpAndReturn()
     {
         PrintUsage();
         return 0;
     }
 
+    /// <summary>
+    /// Prints the supported CLI commands and their primary arguments.
+    /// </summary>
     private static void PrintUsage()
     {
         Console.WriteLine("BmGameGfxPatcher");
@@ -456,9 +591,17 @@ internal static class Program
         Console.WriteLine("  describe-function --package <package> --owner <Owner> --name <FunctionName> [--scan-refs] [--dump-script-hex]");
         Console.WriteLine("  find-function-refs --package <package> [--function-owner <Owner>] (--ref-name-contains <Text> | --ref-owner-contains <Text> | --ref-type-contains <Text> | --ref-kind <Import|Export>) [--show-all-matches]");
         Console.WriteLine("  scale-font --package <package> --output <patched-package> --names <FontA,FontB> [--owner BmFonts] [--scale 2.0] [--start-offset 4]");
+        Console.WriteLine("  patch-mainv2-version-label --package <Frontend.umap> --output <patched-package> --label <text>");
+        Console.WriteLine("  patch-mainv2-audio-subtitle-size --package <Frontend.umap> --output <patched-package> --prototype-gfx <MainV2-subtitle-size.gfx>");
+        Console.WriteLine("  patch-mainv2-graphics-options --package <Frontend.umap> --output <patched-package> --prototype-gfx <MainV2-graphics-options.gfx>");
         Console.WriteLine("  patch --package <package> --manifest <manifest.jsonc> --output <patched-package> [--skip-verify]");
     }
 
+    /// <summary>
+    /// Normalizes null or whitespace values for console output.
+    /// </summary>
+    /// <param name="value">Value to normalize.</param>
+    /// <returns>The original value or a dash placeholder.</returns>
     private static string ValueOrDash(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? "-" : value;
