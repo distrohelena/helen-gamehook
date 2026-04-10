@@ -1,277 +1,136 @@
 <#
 .SYNOPSIS
-    Navega automaticamente do inicio do Batman ate o menu Graphics Options.
+    Navega ate o menu Graphics Options a partir do jogo rodando.
 
 .DESCRIPTION
-    Este script usa inputs de teclado (ENTER, DOWN, ESC) para navegar nos menus
-    do Batman ate chegar no menu Graphics Options.
-
-    Fluxo de navegacao:
-    1. Pressiona ENTER para passar da tela de titulo/save
-    2. No menu principal, navega ate "Options" 
-    3. Entra no menu Options
-    4. Navega ate "Graphics"
-    5. Entra no menu Graphics Options
-
-    Captura screenshots a cada passo para verificacao.
-
-.PARAMETER GamePath
-    Caminho para o executavel ShippingPC-BmGame.exe
+    Fluxo conhecido (confirmado por screenshots):
+    1. Title screen -> ENTER (passa "Click to Start")
+    2. Saved Game Select -> ENTER (seleciona save, vai para Main Menu)
+    3. Main Menu -> 5x DOWN (Options e o 6o item)
+    4. Options menu -> ENTER (entra em Options)
+    5. Options -> DOWN (Graphics e o 2o item)
+    6. ENTER (entra em Graphics Options)
 
 .PARAMETER NoLaunch
-    Se especificado, nao inicia o jogo (assume que ja esta rodando)
-
-.PARAMETER MaxSteps
-    Numero maximo de passos de navegacao antes de desistir (padrao: 30)
+    Se o jogo ja esta rodando.
 
 .PARAMETER StepDelayMs
-    Delay entre inputs de teclado em milissegundos (padrao: 600)
+    Delay entre teclas (default 600ms).
 
 .PARAMETER MenuDelayMs
-    Delay apos entrar em um submenu para carregar (padrao: 2000)
-
-.EXAMPLE
-    .\Test-BatmanNavigateToGraphicsSimple.ps1
-
-.EXAMPLE
-    .\Test-BatmanNavigateToGraphicsSimple.ps1 -NoLaunch -StepDelayMs 800
+    Delay apos entrar em submenu (default 2500ms).
 #>
 
 param(
-    [Parameter(Mandatory=$false)]
-    [string]$GamePath = "D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\ShippingPC-BmGame.exe",
-
-    [Parameter(Mandatory=$false)]
     [switch]$NoLaunch,
-
-    [Parameter(Mandatory=$false)]
-    [int]$MaxSteps = 30,
-
-    [Parameter(Mandatory=$false)]
     [int]$StepDelayMs = 600,
-
-    [Parameter(Mandatory=$false)]
-    [int]$MenuDelayMs = 2000
+    [int]$MenuDelayMs = 2500
 )
 
-$OutputDir = "C:\dev\helenhook\artifacts\navigation-simple"
+$OutputDir = "C:\dev\helenhook\artifacts\nav-graphics"
+if (-not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null }
 
-# Create output directory
-if (-not (Test-Path $OutputDir)) {
-    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-}
-
-Write-Host "=== Batman Navigation to Graphics Options (Simple) ===" -ForegroundColor Cyan
-Write-Host "Game: $GamePath" -ForegroundColor Yellow
-Write-Host "NoLaunch: $NoLaunch" -ForegroundColor Yellow
-Write-Host "Max steps: $MaxSteps" -ForegroundColor Yellow
-Write-Host "Output: $OutputDir" -ForegroundColor Yellow
-Write-Host ""
-
-# Check if game exists
-if (-not $NoLaunch -and -not (Test-Path $GamePath)) {
-    Write-Host "ERROR: Game executable not found at $GamePath" -ForegroundColor Red
-    exit 1
-}
-
-# Win32 P/Invoke for input simulation
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-
 public class Win32Input {
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
-
     [DllImport("user32.dll")]
     public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-
     [DllImport("user32.dll")]
-    public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, IntPtr dwExtraInfo);
-
-    public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
-    public const uint MOUSEEVENTF_LEFTUP = 0x0004;
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 }
 "@
 
-Add-Type -AssemblyName System.Windows.Forms
-
-# Start the game
-$gameProcess = $null
-if (-not $NoLaunch) {
-    Write-Host "Launching Batman Arkham Asylum..." -ForegroundColor Green
-    $gameProcess = Start-Process -FilePath $GamePath -PassThru
-    Write-Host "Game launched (PID: $($gameProcess.Id))" -ForegroundColor Green
-    Write-Host "Waiting 20 seconds for game to initialize..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 20
-} else {
-    Write-Host "NoLaunch specified - assuming game is already running" -ForegroundColor Yellow
-    Start-Sleep -Seconds 2
-}
-
-# Focus game window
-function Focus-GameWindow {
-    # Try multiple window title patterns
-    $possibleTitles = @(
-        "BATMAN: ARKHAM ASYLUM",
-        "Batman: Arkham Asylum",
-        "Batman"
-    )
-    
-    foreach ($title in $possibleTitles) {
-        $hwnd = [Win32Input]::FindWindow($null, $title)
-        if ($hwnd -ne [IntPtr]::Zero) {
-            [Win32Input]::SetForegroundWindow($hwnd)
-            Start-Sleep -Milliseconds 100
-            return $true
-        }
+function Focus-Game {
+    $p = Get-Process -Name "ShippingPC-BmGame" -ErrorAction SilentlyContinue
+    if ($p -and $p.Count -gt 0 -and $p[0].MainWindowHandle -ne [IntPtr]::Zero) {
+        [Win32Input]::SetForegroundWindow($p[0].MainWindowHandle)
+        Start-Sleep -Milliseconds 300
+        return $true
     }
-    
-    # Fallback: find by process
-    $processes = Get-Process -Name "ShippingPC-BmGame" -ErrorAction SilentlyContinue
-    if ($processes -and $processes.Count -gt 0) {
-        $hwnd = $processes[0].MainWindowHandle
-        if ($hwnd -ne [IntPtr]::Zero) {
-            [Win32Input]::SetForegroundWindow($hwnd)
-            Start-Sleep -Milliseconds 100
-            return $true
-        }
-    }
-    
     return $false
 }
 
-# Send key input
-function Send-GameKey {
-    param([string]$key, [string]$description)
-
-    Focus-GameWindow
+function Press {
+    param([string]$key, [string]$label)
+    Focus-Game
     Start-Sleep -Milliseconds 200
-    Write-Host "  -> $description" -ForegroundColor White
+    Write-Host "  -> $label" -ForegroundColor White
     [System.Windows.Forms.SendKeys]::SendWait($key)
     Start-Sleep -Milliseconds $StepDelayMs
 }
 
-# Capture screenshot - only the game window
-function Capture-Screenshot {
-    param([string]$filename)
+function Snap {
+    param([string]$name)
+    $path = Join-Path $OutputDir "$name.png"
+    # Full-screen capture to ensure we see all menus
+    $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $g.Dispose(); $bmp.Dispose()
 
-    $screenshotPath = Join-Path $OutputDir $filename
-    
-    $processes = Get-Process -Name "ShippingPC-BmGame" -ErrorAction SilentlyContinue
-    if ($processes -and $processes.Count -gt 0) {
-        $hwnd = $processes[0].MainWindowHandle
-        if ($hwnd -ne [IntPtr]::Zero) {
-            # Get window rectangle
-            Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
+    # Also copy to C:\dev\batma\prints for user review
+    $batmaDir = "C:\dev\batma\prints"
+    if (-not (Test-Path $batmaDir)) { New-Item -ItemType Directory -Force -Path $batmaDir | Out-Null }
+    $batmaPath = Join-Path $batmaDir "$name.png"
+    Copy-Item -Path $path -Destination $batmaPath -Force
 
-public class Win32Window {
-    [DllImport("user32.dll")]
-    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-    
-    [StructLayout(LayoutKind.Sequential)]
-    public struct RECT {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
-    }
-}
-"@
-            
-            $rect = New-Object Win32Window+RECT
-            [Win32Window]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
-            
-            $width = $rect.Right - $rect.Left
-            $height = $rect.Bottom - $rect.Top
-            
-            $bitmap = New-Object System.Drawing.Bitmap $width, $height
-            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-            $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, (New-Object System.Drawing.Size($width, $height)))
-            $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
-            $graphics.Dispose()
-            $bitmap.Dispose()
-        } else {
-            # Fallback to full screen
-            $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-            $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-            $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-            $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
-            $graphics.Dispose()
-            $bitmap.Dispose()
-        }
-    }
-    
-    return $screenshotPath
+    return $path
 }
 
-# Main navigation sequence
-$stepCount = 0
+Write-Host "=== Navigate to Graphics Options ===" -ForegroundColor Cyan
 
-Write-Host ""
-Write-Host "=== Starting Navigation ===" -ForegroundColor Cyan
-Write-Host ""
+if (-not $NoLaunch) {
+    Write-Host "Launching Batman..." -ForegroundColor Green
+    Start-Process "D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\ShippingPC-BmGame.exe"
+    Start-Sleep -Seconds 20
+} else {
+    Start-Sleep -Seconds 2
+}
 
-# Phase 0: Pause the game first (if in gameplay)
-Write-Host "Phase 0: Pausing game (if running)..." -ForegroundColor Yellow
-Capture-Screenshot -filename "step_00_before.png" | Out-Null
-Send-GameKey "{ESC}" "Pressing ESC to pause"
-Capture-Screenshot -filename "step_00_after.png" | Out-Null
+# Step 1: Title -> Saved Game Select
+Snap "01_title" | Out-Null
+Press "{ENTER}" "Title: Press ENTER"
+Snap "02_after_title" | Out-Null
 Start-Sleep -Milliseconds $MenuDelayMs
 
-# Phase 1: Navigate from pause menu to Options (steps 1-4)
-Write-Host ""
-Write-Host "Phase 1: Navigating pause menu to Options..." -ForegroundColor Yellow
-# In pause menu: Resume, Options, Quit (or similar)
-# Press DOWN once to reach Options
-$stepCount++
-Capture-Screenshot -filename "step_$(('{0:D2}' -f $stepCount))_before.png" | Out-Null
-Send-GameKey "{DOWN}" "Pressing DOWN to reach Options"
-Capture-Screenshot -filename "step_$(('{0:D2}' -f $stepCount))_after.png" | Out-Null
+# Step 2: Saved Game Select -> Main Menu
+Snap "03_save_select" | Out-Null
+Press "{ENTER}" "Save Select: Press ENTER to reach Main Menu"
+Snap "04_after_save" | Out-Null
+Start-Sleep -Milliseconds $MenuDelayMs
+
+# Step 3: Main Menu -> navigate to Options (5 DOWNs)
+Snap "05_main_menu" | Out-Null
+for ($i = 0; $i -lt 5; $i++) {
+    Press "{DOWN}" "Main Menu: DOWN ($($i+1)/5)"
+    Snap "06_main_down_$($i+1)" | Out-Null
+    Start-Sleep -Milliseconds $StepDelayMs
+}
+
+# Step 4: Enter Options
+Press "{ENTER}" "Main Menu: ENTER into Options"
+Snap "07_options_menu" | Out-Null
+Start-Sleep -Milliseconds $MenuDelayMs
+
+# Step 5: Navigate to Graphics (1 DOWN)
+Snap "08_in_options" | Out-Null
+Press "{DOWN}" "Options: DOWN to Graphics"
+Snap "09_options_down" | Out-Null
 Start-Sleep -Milliseconds $StepDelayMs
 
-# Enter Options
-$stepCount++
-Capture-Screenshot -filename "step_$(('{0:D2}' -f $stepCount))_before.png" | Out-Null
-Send-GameKey "{ENTER}" "Pressing ENTER to enter Options"
-Capture-Screenshot -filename "step_$(('{0:D2}' -f $stepCount))_after.png" | Out-Null
+# Step 6: Enter Graphics
+Press "{ENTER}" "Options: ENTER into Graphics Options"
+Snap "10_graphics_options" | Out-Null
 Start-Sleep -Milliseconds $MenuDelayMs
 
-# Phase 2: Navigate to Graphics in Options menu
 Write-Host ""
-Write-Host "Phase 2: Navigating to Graphics in Options..." -ForegroundColor Yellow
-# Options menu typically has: Game Options, Graphics, Audio, Controls
-# Graphics is usually the second item
-$stepCount++
-Capture-Screenshot -filename "step_$(('{0:D2}' -f $stepCount))_before.png" | Out-Null
-Send-GameKey "{DOWN}" "Pressing DOWN to reach Graphics"
-Capture-Screenshot -filename "step_$(('{0:D2}' -f $stepCount))_after.png" | Out-Null
-Start-Sleep -Milliseconds $StepDelayMs
-
-# Enter Graphics
-$stepCount++
-Capture-Screenshot -filename "step_$(('{0:D2}' -f $stepCount))_before.png" | Out-Null
-Send-GameKey "{ENTER}" "Pressing ENTER to enter Graphics Options"
-Capture-Screenshot -filename "step_$(('{0:D2}' -f $stepCount))_after.png" | Out-Null
-Start-Sleep -Milliseconds $MenuDelayMs
-
-# Summary
-Write-Host ""
-Write-Host "=== Navigation Complete ===" -ForegroundColor Cyan
-Write-Host "Total steps: $stepCount" -ForegroundColor White
-Write-Host "Screenshots saved to: $OutputDir" -ForegroundColor White
-Write-Host ""
-Write-Host "Check the screenshots to verify if we reached Graphics Options!" -ForegroundColor Yellow
-Write-Host "Look at the last images in: $OutputDir" -ForegroundColor Cyan
-
-# Note about game process
-if ($gameProcess -and -not $gameProcess.HasExited) {
-    Write-Host ""
-    Write-Host "NOTE: Game is still running (PID: $($gameProcess.Id))" -ForegroundColor Yellow
-}
-
-Write-Host ""
-Write-Host "Done!" -ForegroundColor Green
+Write-Host "=== Done! Screenshots saved to: $OutputDir ===" -ForegroundColor Green
+Write-Host "Check 10_graphics_options.png to verify!" -ForegroundColor Yellow
