@@ -9,6 +9,7 @@
 #include <HelenHook/HookBlobRelocationSourceDefinition.h>
 #include <HelenHook/HookDefinition.h>
 #include <HelenHook/JsonParser.h>
+#include <HelenHook/Log.h>
 #include <HelenHook/MemoryStateObserverCheckDefinition.h>
 #include <HelenHook/RuntimeSlotDefinition.h>
 #include <HelenHook/VirtualFileHashDefinition.h>
@@ -1406,37 +1407,50 @@ namespace
      */
     bool LoadBuildDefinition(const std::filesystem::path& build_directory, const std::string& expected_build_id, helen::BuildDefinition& definition)
     {
+        helen::Logf(L"[pack] LoadBuildDefinition: reading build.json");
         helen::JsonValue build_root;
         if (!TryReadJsonFile(build_directory / "build.json", build_root))
         {
+            helen::Logf(L"[pack] LoadBuildDefinition: build.json missing or invalid");
             return false;
         }
 
+        helen::Logf(L"[pack] LoadBuildDefinition: parsing build manifest");
         if (!ParseBuildManifest(build_root, expected_build_id, definition))
         {
+            helen::Logf(L"[pack] LoadBuildDefinition: parse build manifest failed");
             return false;
         }
 
+        helen::Logf(L"[pack] LoadBuildDefinition: loading files.json");
         if (!LoadFilesManifest(build_directory / "files.json", definition))
         {
+            helen::Logf(L"[pack] LoadBuildDefinition: files.json failed");
             return false;
         }
 
+        helen::Logf(L"[pack] LoadBuildDefinition: loading hooks.json");
         if (!LoadHooksManifest(build_directory / "hooks.json", definition))
         {
+            helen::Logf(L"[pack] LoadBuildDefinition: hooks.json failed");
             return false;
         }
 
+        helen::Logf(L"[pack] LoadBuildDefinition: loading bindings.json");
         if (!LoadBindingsManifest(build_directory / "bindings.json", definition))
         {
+            helen::Logf(L"[pack] LoadBuildDefinition: bindings.json failed");
             return false;
         }
 
+        helen::Logf(L"[pack] LoadBuildDefinition: loading commands.json");
         if (!LoadCommandsManifest(build_directory / "commands.json", definition))
         {
+            helen::Logf(L"[pack] LoadBuildDefinition: commands.json failed");
             return false;
         }
 
+        helen::Logf(L"[pack] LoadBuildDefinition: success");
         return true;
     }
 
@@ -1500,36 +1514,55 @@ namespace helen
             return std::nullopt;
         }
 
+        helen::Logf(L"[pack] scanning packs_directory");
         for (const std::filesystem::path& pack_directory : ListChildDirectoriesSorted(packs_directory))
         {
+            helen::Logf(L"[pack] inspecting pack directory");
             JsonValue pack_root;
             if (!TryReadJsonFile(pack_directory / "pack.json", pack_root))
             {
+                helen::Logf(L"[pack] skipped: pack.json missing or invalid");
                 continue;
             }
 
             PackDefinition pack_definition;
             if (!ParsePackDefinition(pack_root, pack_definition))
             {
+                helen::Logf(L"[pack] skipped: failed to parse pack definition");
                 continue;
             }
 
+            helen::Logf(L"[pack] loaded pack executables count=%zu", pack_definition.Executables.size());
+
             if (!SupportsExecutable(pack_definition, executable_name))
             {
+                helen::Logf(L"[pack] does not support this executable");
                 continue;
             }
+
+            helen::Logf(L"[pack] supports executable, checking %zu builds", pack_definition.BuildIds.size());
 
             for (const std::string& build_id : pack_definition.BuildIds)
             {
                 const std::filesystem::path build_directory = pack_directory / "builds" / build_id;
+                helen::Logf(L"[pack] checking build");
                 BuildDefinition build_definition;
                 if (!LoadBuildDefinition(build_directory, build_id, build_definition))
                 {
+                    helen::Logf(L"[pack] build failed to load");
                     continue;
                 }
 
+                helen::Logf(L"[pack] build loaded: size=%llu",
+                    static_cast<unsigned long long>(build_definition.Match.FileSize));
+
+                helen::Logf(L"[pack] fingerprint compare: expected_size=%llu actual_size=%llu",
+                    static_cast<unsigned long long>(build_definition.Match.FileSize),
+                    static_cast<unsigned long long>(executable_size));
+
                 if (!MatchesFingerprint(build_definition, executable_name, executable_size, executable_sha256))
                 {
+                    helen::Logf(L"[pack] fingerprint mismatch");
                     continue;
                 }
 
