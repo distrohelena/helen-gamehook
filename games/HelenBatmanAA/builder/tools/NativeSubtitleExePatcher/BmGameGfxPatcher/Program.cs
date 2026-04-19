@@ -38,6 +38,11 @@ internal static class Program
 
             return command switch
             {
+                "decompress" => RunDecompress(tail),
+                "extract-mainv2" => RunExtractMainV2(tail),
+                "generate-delta" => RunGenerateDelta(tail),
+                "apply-delta" => RunApplyDelta(tail),
+                "compress" => RunCompress(tail),
                 "list-exports" => RunListExports(tail),
                 "describe-export" => RunDescribeExport(tail),
                 "extract-gfx" => RunExtractGfx(tail),
@@ -58,6 +63,204 @@ internal static class Program
             Console.Error.WriteLine(ex.Message);
             return 2;
         }
+    }
+
+    /// <summary>
+    /// Decompresses one UE3 package.
+    /// </summary>
+    /// <param name="args">Command-line arguments.</param>
+    /// <returns>Process exit code.</returns>
+    private static int RunDecompress(string[] args)
+    {
+        var options = new ArgumentReader(args);
+        string packagePath = options.RequireValue("--package");
+        string? outputPath = options.GetValue("--output");
+        options.ThrowIfAnyUnknown();
+
+        string fullPath = Path.GetFullPath(packagePath);
+        string outPath = outputPath ?? Path.ChangeExtension(fullPath, ".decompressed.upk");
+
+        Console.WriteLine($"Decompressing {fullPath}...");
+        byte[] decompressed = Ue3Decompressor.DecompressAndFixPackage(fullPath);
+        File.WriteAllBytes(outPath, decompressed);
+        Console.WriteLine($"Decompressed {decompressed.Length} bytes to {outPath}");
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Compresses a decompressed UE3 package.
+    /// </summary>
+    /// <param name="args">Command-line arguments.</param>
+    /// <returns>Process exit code.</returns>
+    private static int RunCompress(string[] args)
+    {
+        var options = new ArgumentReader(args);
+        string inputPath = options.RequireValue("--input");
+        string originalPath = options.RequireValue("--original");
+        string? outputPath = options.GetValue("--output");
+        options.ThrowIfAnyUnknown();
+
+        string fullPath = Path.GetFullPath(inputPath);
+        string outPath = outputPath ?? Path.ChangeExtension(fullPath, ".compressed.upk");
+
+        Console.WriteLine($"Loading decompressed file: {fullPath}");
+        byte[] decompressed = File.ReadAllBytes(fullPath);
+        Console.WriteLine($"Decompressed size: {decompressed.Length} bytes");
+        
+        Console.WriteLine($"Compressing using original structure from: {originalPath}");
+        byte[] compressed = Ue3Compressor.Compress(decompressed, originalPath);
+        
+        File.WriteAllBytes(outPath, compressed);
+        Console.WriteLine($"Compressed file saved to {outPath} ({compressed.Length} bytes)");
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Applies a delta to one UE3 package's MainV2 payload.
+    /// </summary>
+    /// <param name="args">Command-line arguments.</param>
+    /// <returns>Process exit code.</returns>
+    private static int RunApplyDelta(string[] args)
+    {
+        var options = new ArgumentReader(args);
+        string packagePath = options.RequireValue("--package");
+        string deltaPath = options.RequireValue("--delta");
+        string? outputPath = options.GetValue("--output");
+        options.ThrowIfAnyUnknown();
+
+        string fullPath = Path.GetFullPath(packagePath);
+        string outPath = outputPath ?? Path.ChangeExtension(fullPath, ".patched.upk");
+
+        Console.WriteLine($"Decompressing {fullPath}...");
+        byte[] decompressed = Ue3Decompressor.DecompressAndFixPackage(fullPath);
+        Console.WriteLine($"Decompressed {decompressed.Length} bytes");
+        
+        // Find MainV2 payload in decompressed data
+        Console.WriteLine($"Finding MainV2 payload...");
+        int mainV2Offset = -1;
+        for (int i = 0; i < decompressed.Length - 3; i++)
+        {
+            if (decompressed[i] == 0x47 && decompressed[i+1] == 0x46 && decompressed[i+2] == 0x58)
+            {
+                if (i + 8 <= decompressed.Length)
+                {
+                    uint fileSize = BitConverter.ToUInt32(decompressed, i + 4);
+                    if (fileSize > 100000 && fileSize < 2000000) // Reasonable GFX file size
+                    {
+                        mainV2Offset = i;
+                        Console.WriteLine($"[DEBUG] Found MainV2 at offset {mainV2Offset}, size={fileSize}");
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (mainV2Offset == -1)
+        {
+            Console.Error.WriteLine("MainV2 payload not found");
+            return 2;
+        }
+        
+        // Extract current MainV2
+        uint currentSize = BitConverter.ToUInt32(decompressed, mainV2Offset + 4);
+        byte[] currentMainV2 = new byte[currentSize];
+        Array.Copy(decompressed, mainV2Offset, currentMainV2, 0, (int)currentSize);
+        
+        // Apply delta
+        Console.WriteLine($"Applying delta...");
+        byte[] patchedMainV2 = BinaryDelta.ApplyDelta(currentMainV2, deltaPath);
+        Console.WriteLine($"Patched MainV2: {patchedMainV2.Length} bytes");
+        
+        // Update size in header
+        BitConverter.GetBytes((uint)patchedMainV2.Length).CopyTo(decompressed, mainV2Offset + 4);
+        
+        // Replace MainV2 in decompressed data
+        // Need to handle size difference
+        int sizeDiff = patchedMainV2.Length - (int)currentSize;
+        byte[] newData;
+        
+        if (sizeDiff == 0)
+        {
+            newData = new byte[decompressed.Length];
+            Array.Copy(decompressed, newData, decompressed.Length);
+            Array.Copy(patchedMainV2, 0, newData, mainV2Offset, patchedMainV2.Length);
+        }
+        else if (sizeDiff > 0)
+        {
+            // Expanded - need to shift data after MainV2
+            newData = new byte[decompressed.Length + sizeDiff];
+            Array.Copy(decompressed, 0, newData, 0, mainV2Offset);
+            Array.Copy(patchedMainV2, 0, newData, mainV2Offset, patchedMainV2.Length);
+            Array.Copy(decompressed, mainV2Offset + (int)currentSize, newData, mainV2Offset + patchedMainV2.Length, decompressed.Length - mainV2Offset - (int)currentSize);
+        }
+        else
+        {
+            // Shrunk - need to shift data after MainV2
+            newData = new byte[decompressed.Length + sizeDiff];
+            Array.Copy(decompressed, 0, newData, 0, mainV2Offset);
+            Array.Copy(patchedMainV2, 0, newData, mainV2Offset, patchedMainV2.Length);
+            Array.Copy(decompressed, mainV2Offset + (int)currentSize, newData, mainV2Offset + patchedMainV2.Length, decompressed.Length - mainV2Offset - (int)currentSize);
+        }
+        
+        File.WriteAllBytes(outPath, newData);
+        Console.WriteLine($"Saved patched file to {outPath} ({newData.Length} bytes)");
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Generates a delta between source and target files.
+    /// </summary>
+    /// <param name="args">Command-line arguments.</param>
+    /// <returns>Process exit code.</returns>
+    private static int RunGenerateDelta(string[] args)
+    {
+        var options = new ArgumentReader(args);
+        string sourcePath = options.RequireValue("--source");
+        string targetPath = options.RequireValue("--target");
+        string? deltaPath = options.GetValue("--output");
+        options.ThrowIfAnyUnknown();
+
+        string outPath = deltaPath ?? Path.ChangeExtension(targetPath, ".delta");
+        
+        BinaryDelta.GenerateDelta(sourcePath, targetPath, outPath);
+        return 0;
+    }
+
+    /// <summary>
+    /// Extracts the MainV2 GFX payload from one UE3 package.
+    /// </summary>
+    /// <param name="args">Command-line arguments.</param>
+    /// <returns>Process exit code.</returns>
+    private static int RunExtractMainV2(string[] args)
+    {
+        var options = new ArgumentReader(args);
+        string packagePath = options.RequireValue("--package");
+        string? outputPath = options.GetValue("--output");
+        options.ThrowIfAnyUnknown();
+
+        string fullPath = Path.GetFullPath(packagePath);
+        string outPath = outputPath ?? Path.ChangeExtension(fullPath, ".mainv2.gfx");
+
+        Console.WriteLine($"Decompressing {fullPath}...");
+        byte[] decompressed = Ue3Decompressor.DecompressAndFixPackage(fullPath);
+        Console.WriteLine($"Decompressed {decompressed.Length} bytes");
+        
+        Console.WriteLine($"Extracting MainV2 payload...");
+        byte[]? payload = Ue3Decompressor.ExtractMainV2Payload(decompressed);
+        
+        if (payload == null)
+        {
+            Console.Error.WriteLine("Failed to extract MainV2 payload");
+            return 2;
+        }
+        
+        File.WriteAllBytes(outPath, payload);
+        Console.WriteLine($"Extracted {payload.Length} bytes to {outPath}");
+
+        return 0;
     }
 
     /// <summary>

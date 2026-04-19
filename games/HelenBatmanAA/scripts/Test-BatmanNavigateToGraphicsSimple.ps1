@@ -27,110 +27,232 @@ param(
     [int]$MenuDelayMs = 2500
 )
 
-$OutputDir = "C:\dev\helenhook\artifacts\nav-graphics"
-if (-not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null }
+$ErrorActionPreference = 'Stop'
 
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class Win32Input {
-    [DllImport("user32.dll")]
-    public static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")]
-    public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-    [DllImport("user32.dll")]
-    public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
-    [StructLayout(LayoutKind.Sequential)]
-    public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+$OutputDir = 'C:\dev\helenhook\artifacts\nav-graphics'
+$RecognitionCliProject = 'C:\dev\helenui\plugins\recognition-cli'
+$ScreenshotCliProject = 'C:\dev\helenui\plugins\screenshot-cli'
+$BatmanAaProject = 'C:\dev\helenui\batman-aa.json'
+$TempOcrConfigPath = Join-Path $OutputDir 'temp-ocr-config.json'
+$BatmanPrintsDir = 'C:\dev\batma\prints'
+$HelperScriptPath = Join-Path $PSScriptRoot 'BatmanWindowHelpers.ps1'
+
+if (-not (Test-Path $OutputDir)) {
+    New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 }
-"@
+
+if (-not (Test-Path $BatmanPrintsDir)) {
+    New-Item -ItemType Directory -Force -Path $BatmanPrintsDir | Out-Null
+}
+
+. $HelperScriptPath
+Add-Type -AssemblyName System.Windows.Forms
+
+Write-BatmanRecognitionOcrConfig -OutputPath $TempOcrConfigPath
+
+function Get-ArtifactLabel {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    $Sanitized = $Value -replace '[^A-Za-z0-9_-]+', '-'
+    return $Sanitized.Trim('-')
+}
 
 function Focus-Game {
-    $p = Get-Process -Name "ShippingPC-BmGame" -ErrorAction SilentlyContinue
-    if ($p -and $p.Count -gt 0 -and $p[0].MainWindowHandle -ne [IntPtr]::Zero) {
-        [Win32Input]::SetForegroundWindow($p[0].MainWindowHandle)
-        Start-Sleep -Milliseconds 300
-        return $true
+    $MainWindow = Get-BatmanMainWindowSnapshot
+    if ($null -eq $MainWindow) {
+        return $false
     }
-    return $false
+
+    [BatmanWindowNative]::SetForegroundWindow($MainWindow.HandleValue) | Out-Null
+    Start-Sleep -Milliseconds 300
+    return $true
+}
+
+function Assert-BatmanReady {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+
+    $ArtifactLabel = Get-ArtifactLabel -Value $Label
+    Assert-NoBatmanDialog `
+        -ArtifactsRoot $OutputDir `
+        -Label $ArtifactLabel `
+        -ScreenshotCliProject $ScreenshotCliProject `
+        -RecognitionCliProject $RecognitionCliProject `
+        -BatmanProjectPath $BatmanAaProject `
+        -OcrConfigPath $TempOcrConfigPath
+
+    if (-not (Focus-Game)) {
+        throw "Batman main window not found while handling '$Label'."
+    }
 }
 
 function Press {
-    param([string]$key, [string]$label)
-    Focus-Game
-    Start-Sleep -Milliseconds 200
-    Write-Host "  -> $label" -ForegroundColor White
-    [System.Windows.Forms.SendKeys]::SendWait($key)
+    param(
+        [string]$Key,
+        [string]$Label
+    )
+
+    Assert-BatmanReady -Label "before-$Label"
+    Write-Host "  -> $Label" -ForegroundColor White
+    [System.Windows.Forms.SendKeys]::SendWait($Key)
     Start-Sleep -Milliseconds $StepDelayMs
+
+    Assert-NoBatmanDialog `
+        -ArtifactsRoot $OutputDir `
+        -Label (Get-ArtifactLabel -Value "after-$Label") `
+        -ScreenshotCliProject $ScreenshotCliProject `
+        -RecognitionCliProject $RecognitionCliProject `
+        -BatmanProjectPath $BatmanAaProject `
+        -OcrConfigPath $TempOcrConfigPath
 }
 
 function Snap {
-    param([string]$name)
-    $path = Join-Path $OutputDir "$name.png"
-    # Full-screen capture to ensure we see all menus
-    $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-    $g.Dispose(); $bmp.Dispose()
+    param(
+        [string]$Name
+    )
 
-    # Also copy to C:\dev\batma\prints for user review
-    $batmaDir = "C:\dev\batma\prints"
-    if (-not (Test-Path $batmaDir)) { New-Item -ItemType Directory -Force -Path $batmaDir | Out-Null }
-    $batmaPath = Join-Path $batmaDir "$name.png"
-    Copy-Item -Path $path -Destination $batmaPath -Force
+    Assert-NoBatmanDialog `
+        -ArtifactsRoot $OutputDir `
+        -Label (Get-ArtifactLabel -Value "snapshot-$Name") `
+        -ScreenshotCliProject $ScreenshotCliProject `
+        -RecognitionCliProject $RecognitionCliProject `
+        -BatmanProjectPath $BatmanAaProject `
+        -OcrConfigPath $TempOcrConfigPath
 
-    return $path
+    $Path = Join-Path $OutputDir "$Name.png"
+    Capture-BatmanMainWindowImage -OutputPath $Path -ScreenshotCliProject $ScreenshotCliProject | Out-Null
+
+    $BatmanPrintPath = Join-Path $BatmanPrintsDir "$Name.png"
+    Copy-Item -Path $Path -Destination $BatmanPrintPath -Force
+    return $Path
 }
 
-Write-Host "=== Navigate to Graphics Options ===" -ForegroundColor Cyan
+function Run-Recognition {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScreenshotPath
+    )
 
-if (-not $NoLaunch) {
-    Write-Host "Launching Batman..." -ForegroundColor Green
-    Start-Process "D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\ShippingPC-BmGame.exe"
-    Start-Sleep -Seconds 20
-} else {
-    Start-Sleep -Seconds 2
+    return Invoke-RecognitionCliAnalyzeImage `
+        -ImagePath $ScreenshotPath `
+        -RecognitionCliProject $RecognitionCliProject `
+        -BatmanProjectPath $BatmanAaProject `
+        -OcrConfigPath $TempOcrConfigPath
 }
 
-# Step 1: Title -> Saved Game Select
-Snap "01_title" | Out-Null
-Press "{ENTER}" "Title: Press ENTER"
-Snap "02_after_title" | Out-Null
-Start-Sleep -Milliseconds $MenuDelayMs
+function Wait-ForCheckpointScreen {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedScreenName,
+        [Parameter(Mandatory = $true)]
+        [string]$Context,
+        [Parameter(Mandatory = $true)]
+        [string]$Label,
+        [int]$TimeoutMs = 10000
+    )
 
-# Step 2: Saved Game Select -> Main Menu
-Snap "03_save_select" | Out-Null
-Press "{ENTER}" "Save Select: Press ENTER to reach Main Menu"
-Snap "04_after_save" | Out-Null
-Start-Sleep -Milliseconds $MenuDelayMs
+    return Wait-ForBatmanMainWindowExpectedScreen `
+        -ExpectedScreenName $ExpectedScreenName `
+        -Context $Context `
+        -ArtifactsRoot $OutputDir `
+        -Label $Label `
+        -ScreenshotCliProject $ScreenshotCliProject `
+        -RecognitionCliProject $RecognitionCliProject `
+        -BatmanProjectPath $BatmanAaProject `
+        -OcrConfigPath $TempOcrConfigPath `
+        -TimeoutMilliseconds $TimeoutMs `
+        -PollMilliseconds 500
+}
 
-# Step 3: Main Menu -> navigate to Options (5 DOWNs)
-Snap "05_main_menu" | Out-Null
-for ($i = 0; $i -lt 5; $i++) {
-    Press "{DOWN}" "Main Menu: DOWN ($($i+1)/5)"
-    Snap "06_main_down_$($i+1)" | Out-Null
+function Assert-GraphicsOptionsScreen {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScreenshotPath
+    )
+
+    $Recognition = Run-Recognition -ScreenshotPath $ScreenshotPath
+    $GraphicsScore = Get-BatmanRecognitionScreenScore -Recognition $Recognition -ScreenName 'GraphicsOptions'
+    $AudioScore = Get-BatmanRecognitionScreenScore -Recognition $Recognition -ScreenName 'AudioOptions'
+    $MatchedScreen = Get-BatmanRecognitionMatchedScreenName -Recognition $Recognition
+    $TopCandidates = Get-BatmanRecognitionTopCandidateSummary -Recognition $Recognition
+
+    if ($GraphicsScore -ge 1) {
+        return
+    }
+
+    if ($AudioScore -ge 1) {
+        throw "Graphics option is absent. Navigation reached Audio Options instead. Top candidates: $TopCandidates. Screenshot: $ScreenshotPath"
+    }
+
+    throw "Expected GraphicsOptions screen but found '$MatchedScreen'. Top candidates: $TopCandidates. Screenshot: $ScreenshotPath"
+}
+
+try {
+    Write-Host '=== Navigate to Graphics Options ===' -ForegroundColor Cyan
+
+    if (-not $NoLaunch) {
+        Write-Host 'Launching Batman...' -ForegroundColor Green
+        Start-Process 'D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\ShippingPC-BmGame.exe'
+        Start-Sleep -Seconds 20
+    } else {
+        Start-Sleep -Seconds 2
+    }
+
+    Assert-BatmanReady -Label 'post-launch'
+
+    Snap '01_title' | Out-Null
+    Press '{ENTER}' 'Title: Press ENTER'
+    Snap '02_after_title' | Out-Null
+
+    Wait-ForCheckpointScreen `
+        -ExpectedScreenName 'Saves' `
+        -Context 'Saved Game Select did not load after leaving title' `
+        -Label '03_save_select' `
+        -TimeoutMs ([Math]::Max($MenuDelayMs * 3, 6000)) | Out-Null
+
+    Snap '03_save_select' | Out-Null
+    Press '{ENTER}' 'Post-title: Press ENTER to reach Main Menu'
+    Wait-ForCheckpointScreen `
+        -ExpectedScreenName 'Main' `
+        -Context 'Main menu did not load after leaving title' `
+        -Label '04_after_save' `
+        -TimeoutMs ([Math]::Max($MenuDelayMs * 4, 10000)) | Out-Null
+
+    Snap '05_main_menu' | Out-Null
+    for ($Index = 0; $Index -lt 5; $Index++) {
+        Press '{DOWN}' "Main Menu: DOWN ($($Index + 1)/5)"
+        Snap "06_main_down_$($Index + 1)" | Out-Null
+        Start-Sleep -Milliseconds $StepDelayMs
+    }
+
+    Press '{ENTER}' 'Main Menu: ENTER into Options'
+    Wait-ForCheckpointScreen `
+        -ExpectedScreenName 'Options' `
+        -Context 'Options menu did not load from the main menu' `
+        -Label '07_options_menu' `
+        -TimeoutMs ([Math]::Max($MenuDelayMs * 3, 6000)) | Out-Null
+
+    Snap '08_in_options' | Out-Null
+    Press '{DOWN}' 'Options: DOWN to Graphics'
+    Snap '09_options_down' | Out-Null
     Start-Sleep -Milliseconds $StepDelayMs
+
+    Press '{ENTER}' 'Options: ENTER into Graphics Options'
+    $GraphicsOptionsPath = Snap '10_graphics_options'
+    Start-Sleep -Milliseconds $MenuDelayMs
+    Assert-GraphicsOptionsScreen -ScreenshotPath $GraphicsOptionsPath
+
+    Write-Host ''
+    Write-Host "=== Done! Screenshots saved to: $OutputDir ===" -ForegroundColor Green
+    Write-Host 'Check 10_graphics_options.png to verify!' -ForegroundColor Yellow
 }
-
-# Step 4: Enter Options
-Press "{ENTER}" "Main Menu: ENTER into Options"
-Snap "07_options_menu" | Out-Null
-Start-Sleep -Milliseconds $MenuDelayMs
-
-# Step 5: Navigate to Graphics (1 DOWN)
-Snap "08_in_options" | Out-Null
-Press "{DOWN}" "Options: DOWN to Graphics"
-Snap "09_options_down" | Out-Null
-Start-Sleep -Milliseconds $StepDelayMs
-
-# Step 6: Enter Graphics
-Press "{ENTER}" "Options: ENTER into Graphics Options"
-Snap "10_graphics_options" | Out-Null
-Start-Sleep -Milliseconds $MenuDelayMs
-
-Write-Host ""
-Write-Host "=== Done! Screenshots saved to: $OutputDir ===" -ForegroundColor Green
-Write-Host "Check 10_graphics_options.png to verify!" -ForegroundColor Yellow
+finally {
+    if (Test-Path $TempOcrConfigPath) {
+        Remove-Item $TempOcrConfigPath -Force -ErrorAction SilentlyContinue
+    }
+}

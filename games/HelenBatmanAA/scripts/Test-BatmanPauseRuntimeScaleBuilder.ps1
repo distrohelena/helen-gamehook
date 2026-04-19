@@ -1,5 +1,6 @@
 param(
-    [string]$BatmanRoot
+    [string]$BatmanRoot,
+    [string]$BuilderRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,7 +11,14 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
     $BatmanRoot = (Resolve-Path $BatmanRoot).Path
 }
 
-$GeneratedRoot = Join-Path $BatmanRoot 'builder\generated'
+if ([string]::IsNullOrWhiteSpace($BuilderRoot)) {
+    $BuilderRoot = Join-Path $BatmanRoot 'builder'
+} elseif (-not [System.IO.Path]::IsPathRooted($BuilderRoot)) {
+    $BuilderRoot = Join-Path $BatmanRoot $BuilderRoot
+}
+$BuilderRoot = [System.IO.Path]::GetFullPath($BuilderRoot)
+
+$GeneratedRoot = Join-Path $BuilderRoot 'generated'
 $ListItemPath = Join-Path $GeneratedRoot 'pause-runtime-scale\_build\pause-scripts\__Packages\rs\ui\ListItem.as'
 
 if (-not (Test-Path $ListItemPath)) {

@@ -190,21 +190,25 @@ $RequiredFixedRowControllerTokens = @(
     'this.BindFixedRow(this.Screen.GraphicsRow13,"PhysX");',
     'this.BindFixedRow(this.Screen.GraphicsRow14,"Stereo3D");',
     'this.BindFixedRow(this.Screen.GraphicsRow15,"ApplyChanges");',
+    'return new Array(this.GetRowDisplayValue(rowName));',
+    '_root.TriggerEvent("Options");',
     'this.AddItem(GraphicsRow1,14,1,-1,-1);',
     'this.AddItem(GraphicsRow15,13,0,-1,-1);'
 )
 
-$ExpectedPromptBoundaryTokens = @(
+$ForbiddenInteractiveControllerTokens = @(
+    'flash.external.ExternalInterface.call("Helen_GetInt",key)',
+    'flash.external.ExternalInterface.call("Helen_SetInt"',
+    'flash.external.ExternalInterface.call("Helen_RunCommand","applyBatmanGraphicsDraft")',
     'this.ExitPromptMode = "unsaved";',
     'this.ExitPromptMode = "restart";',
     'if(this.ExitPromptMode == "restart")',
-    'this.Screen.ReturnFromScreen();'
-)
-
-$ExpectedGraphicsExternalCallTokens = @(
-    'flash.external.ExternalInterface.call("Helen_GetInt",key)',
-    'flash.external.ExternalInterface.call("Helen_SetInt"',
-    'flash.external.ExternalInterface.call("Helen_RunCommand","applyBatmanGraphicsDraft")'
+    'this.Screen.ReturnFromScreen();',
+    'this.LoadDraftValues();',
+    'this.CaptureInitialState();',
+    'HasUnsavedChanges',
+    'return new Array("Windowed","Fullscreen");',
+    'return new Array(this.DraftState.fullscreen == 0 ? "Windowed" : "Fullscreen");'
 )
 
 $ForbiddenScrollControllerTokens = @(
@@ -493,9 +497,8 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedGraphicsRowClipPaths.Count; $RowIndex
         '_parent.GraphicsController.GetRowValues(rowName);',
         'this.Names = _parent.GraphicsController.GetRowValues(this.RowName);',
         'this.State = _parent.GraphicsController.GetRowState(this.RowName);',
-        '_parent.GraphicsController.HandleRowAction(this.RowName);',
-        '_parent.GraphicsController.IncrementRow(this.RowName);',
-        '_parent.GraphicsController.DecrementRow(this.RowName);'
+        'this.LeftClicker._visible = false;',
+        'this.RightClicker._visible = false;'
     )) {
         if ($GraphicsRowClipScript.IndexOf($ExpectedControllerToken, [System.StringComparison]::Ordinal) -lt 0) {
             throw "Graphics row clip script is missing expected controller token '$ExpectedControllerToken': $ResolvedGraphicsRowClipPath"
@@ -513,7 +516,11 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedGraphicsRowClipPaths.Count; $RowIndex
         'GetLogicalRowNameByOffset',
         '_parent.GraphicsController.GetRowDisplayLabel(rowName);',
         '_parent.GraphicsController.GetValueForRow(this.RowName);',
-        'this.Init(rowName,"","");'
+        'this.Init(rowName,"","");',
+        '_parent.GraphicsController.HandleRowAction(this.RowName);',
+        '_parent.GraphicsController.IncrementRow(this.RowName);',
+        '_parent.GraphicsController.DecrementRow(this.RowName);',
+        '_loc2_.SetPrompt(_loc2_.CI_Interact,"$UI.Cycle",this._parent.myListener.onPromptClick,100,100);'
     )) {
         if ($GraphicsRowClipScript.IndexOf($ForbiddenControllerToken, [System.StringComparison]::Ordinal) -ge 0) {
             throw "Graphics row clip script still contains unsupported controller token '$ForbiddenControllerToken': $ResolvedGraphicsRowClipPath"
@@ -541,50 +548,21 @@ foreach ($ExpectedRow in $ExpectedGraphicsRows) {
 
 $GraphicsScreenScript = Get-Content -LiteralPath $GraphicsScreenScriptPath -Raw
 $GraphicsScreenSettledScript = Get-Content -LiteralPath $GraphicsScreenSettledScriptPath -Raw
-$ExpectedCurrentControllerTokens = @($ExpectedGraphicsExternalCallTokens + $RequiredFixedRowControllerTokens)
+$ExpectedCurrentControllerTokens = @($RequiredFixedRowControllerTokens)
 foreach ($ExpectedCurrentControllerToken in $ExpectedCurrentControllerTokens) {
     if ($GraphicsScreenScript.IndexOf($ExpectedCurrentControllerToken, [System.StringComparison]::Ordinal) -lt 0) {
         throw "Graphics screen script is missing expected fixed-row token: $ExpectedCurrentControllerToken"
     }
 }
 
-$ControllerInitMatch = [System.Text.RegularExpressions.Regex]::Match(
-    $GraphicsScreenScript,
-    '_loc2_\.Init = function\(\)\s*\{(?<body>.*?)\};\s*_loc2_\.BindFixedRows = function',
-    [System.Text.RegularExpressions.RegexOptions]::Singleline
-)
-
-if (-not $ControllerInitMatch.Success) {
-    throw 'Could not isolate BatmanGraphicsOptionsController.Init function body in the graphics screen script.'
-}
-
-$ControllerInitBody = $ControllerInitMatch.Groups['body'].Value
-
-foreach ($ExpectedGraphicsEventToken in @(
-    '_root.TriggerEvent("Options");'
-)) {
-    if ($GraphicsScreenScript.IndexOf($ExpectedGraphicsEventToken, [System.StringComparison]::Ordinal) -lt 0) {
-        throw "Graphics screen script is missing expected options event token: $ExpectedGraphicsEventToken"
+foreach ($ForbiddenInteractiveControllerToken in $ForbiddenInteractiveControllerTokens) {
+    if ($GraphicsScreenScript.IndexOf($ForbiddenInteractiveControllerToken, [System.StringComparison]::Ordinal) -ge 0) {
+        throw "Graphics screen script still contains forbidden interactive token: $ForbiddenInteractiveControllerToken"
     }
 }
 
-foreach ($ForbiddenEarlyBindingToken in @(
-    'this.BindFixedRows();',
-    'this.RefreshAllRows();'
-)) {
-    if ($ControllerInitBody.IndexOf($ForbiddenEarlyBindingToken, [System.StringComparison]::Ordinal) -ge 0) {
-        throw "Graphics controller init still binds rows too early: $ForbiddenEarlyBindingToken"
-    }
-}
-
-foreach ($ExpectedSettledBindingToken in @(
-    'this.GraphicsController.BindFixedRows();',
-    'this.GraphicsController.RefreshAllRows();',
-    'stop();'
-)) {
-    if ($GraphicsScreenSettledScript.IndexOf($ExpectedSettledBindingToken, [System.StringComparison]::Ordinal) -lt 0) {
-        throw "Graphics screen settled-frame script is missing required token: $ExpectedSettledBindingToken"
-    }
+if ($GraphicsScreenSettledScript.IndexOf('stop();', [System.StringComparison]::Ordinal) -lt 0) {
+    throw 'Graphics screen settled-frame script is missing stop();'
 }
 
 foreach ($ExpectedFailFastToken in @(
@@ -606,12 +584,17 @@ foreach ($ForbiddenFailSoftToken in @(
     }
 }
 
-if ($GraphicsScreenScript.IndexOf('return new Array("Windowed","Fullscreen");', [System.StringComparison]::Ordinal) -lt 0) {
-    throw 'Graphics screen script is missing the expected two-value Fullscreen display contract.'
+if ($GraphicsScreenScript.IndexOf('return new Array(this.GetRowDisplayValue(rowName));', [System.StringComparison]::Ordinal) -lt 0) {
+    throw 'Graphics screen script is missing the expected static row display contract.'
 }
 
-if ($GraphicsScreenScript.IndexOf('return new Array(this.DraftState.fullscreen == 0 ? "Windowed" : "Fullscreen");', [System.StringComparison]::Ordinal) -ge 0) {
-    throw 'Graphics screen script still uses the legacy one-value Fullscreen display contract.'
+foreach ($ForbiddenFullscreenDisplayToken in @(
+    'return new Array("Windowed","Fullscreen");',
+    'return new Array(this.DraftState.fullscreen == 0 ? "Windowed" : "Fullscreen");'
+)) {
+    if ($GraphicsScreenScript.IndexOf($ForbiddenFullscreenDisplayToken, [System.StringComparison]::Ordinal) -ge 0) {
+        throw "Graphics screen script still contains legacy fullscreen display token: $ForbiddenFullscreenDisplayToken"
+    }
 }
 
 foreach ($ForbiddenScrollControllerToken in $ForbiddenScrollControllerTokens) {
@@ -777,22 +760,6 @@ foreach ($ForbiddenHelperToken in @(
     if ($GraphicsScreenScriptContents.IndexOf($ForbiddenHelperToken, [System.StringComparison]::Ordinal) -ge 0) {
         throw "Graphics screen exported scripts still contain forbidden helper token: $ForbiddenHelperToken"
     }
-}
-
-foreach ($ExpectedPromptBoundaryToken in $ExpectedPromptBoundaryTokens) {
-    if ($GraphicsScreenScript.IndexOf($ExpectedPromptBoundaryToken, [System.StringComparison]::Ordinal) -lt 0) {
-        throw "Graphics screen script is missing required prompt boundary token: $ExpectedPromptBoundaryToken"
-    }
-}
-
-$RestartBoundaryIndex = $GraphicsScreenScript.IndexOf('if(this.ExitPromptMode == "restart")', [System.StringComparison]::Ordinal)
-$ApplyBranchIndex = $GraphicsScreenScript.IndexOf('if(response == "apply")', [System.StringComparison]::Ordinal)
-if ($RestartBoundaryIndex -lt 0 -or $ApplyBranchIndex -lt 0) {
-    throw 'Could not verify restart-prompt boundary ordering in graphics screen script.'
-}
-
-if ($RestartBoundaryIndex -ge $ApplyBranchIndex) {
-    throw 'Restart prompt boundary must be evaluated before the generic apply branch.'
 }
 
 Write-Output 'PASS'

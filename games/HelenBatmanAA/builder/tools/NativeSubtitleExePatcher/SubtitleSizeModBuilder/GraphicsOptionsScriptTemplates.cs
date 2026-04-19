@@ -55,32 +55,21 @@ internal static class GraphicsOptionsScriptTemplates
     """;
 
     /// <summary>
-    /// Initializes the graphics options screen with fixed row bindings across all fifteen graphics rows.
+    /// Initializes the graphics options screen as a render-only preview with fixed rows and no runtime callbacks.
     /// </summary>
     public const string GraphicsOptionsFrame1 = """
     class rs.ui.BatmanGraphicsOptionsController
     {
        var Screen;
-       var ExitPrompt;
        var RowOrder;
-       var DraftState;
-       var InitialState;
-       var ExitPromptMode;
        function BatmanGraphicsOptionsController(screen)
        {
           this.Screen = screen;
           this.RowOrder = new Array();
-          this.DraftState = {};
-          this.InitialState = {};
-          this.ExitPromptMode = "none";
        }
        function Init()
        {
           this.RowOrder = new Array("Fullscreen","Resolution","VSync","MSAA","DetailLevel","Bloom","DynamicShadows","MotionBlur","Distortion","FogVolumes","SphericalHarmonicLighting","AmbientOcclusion","PhysX","Stereo3D","ApplyChanges");
-          this.LoadDraftValues();
-          this.CaptureInitialState();
-          this.BindFixedRows();
-          this.RefreshAllRows();
        }
        function BindFixedRows()
        {
@@ -142,109 +131,6 @@ internal static class GraphicsOptionsScriptTemplates
           this.RefreshRowClip(this.Screen.GraphicsRow14,"Stereo3D");
           this.RefreshRowClip(this.Screen.GraphicsRow15,"ApplyChanges");
        }
-       function GetTrackedDraftKeys()
-       {
-          return new Array("vsync","msaa","detailLevel","bloom","dynamicShadows","motionBlur","distortion","fogVolumes","sphericalHarmonicLighting","ambientOcclusion","physx","stereo");
-       }
-       function NormalizeInt(value, fallback)
-       {
-          if(value == undefined)
-          {
-             return fallback;
-          }
-          return int(value);
-       }
-       function ReadDraftInt(key, fallback)
-       {
-          return this.NormalizeInt(flash.external.ExternalInterface.call("Helen_GetInt",key),fallback);
-       }
-       function LoadDraftValues()
-       {
-          this.DraftState = {};
-          this.DraftState.fullscreen = this.ReadDraftInt("fullscreen",0);
-          this.DraftState.resolutionWidth = this.ReadDraftInt("resolutionWidth",0);
-          this.DraftState.resolutionHeight = this.ReadDraftInt("resolutionHeight",0);
-          this.DraftState.vsync = this.ReadDraftInt("vsync",0);
-          this.DraftState.msaa = this.ReadDraftInt("msaa",0);
-          this.DraftState.detailLevel = this.ReadDraftInt("detailLevel",1);
-          this.DraftState.bloom = this.ReadDraftInt("bloom",0);
-          this.DraftState.dynamicShadows = this.ReadDraftInt("dynamicShadows",0);
-          this.DraftState.motionBlur = this.ReadDraftInt("motionBlur",0);
-          this.DraftState.distortion = this.ReadDraftInt("distortion",0);
-          this.DraftState.fogVolumes = this.ReadDraftInt("fogVolumes",0);
-          this.DraftState.sphericalHarmonicLighting = this.ReadDraftInt("sphericalHarmonicLighting",0);
-          this.DraftState.ambientOcclusion = this.ReadDraftInt("ambientOcclusion",0);
-          this.DraftState.physx = this.ReadDraftInt("physx",0);
-          this.DraftState.stereo = this.ReadDraftInt("stereo",0);
-       }
-       function CaptureInitialState()
-       {
-          var _loc2_ = this.GetTrackedDraftKeys();
-          this.InitialState = {};
-          var _loc3_ = 0;
-          while(_loc3_ < _loc2_.length)
-          {
-             this.InitialState[_loc2_[_loc3_]] = this.DraftState[_loc2_[_loc3_]];
-             _loc3_ = _loc3_ + 1;
-          }
-       }
-       function RefreshFocusedRow()
-       {
-          this.RefreshAllRows();
-          this.Screen.ReUpdate();
-       }
-       function GetDraftKey(rowName)
-       {
-          if(rowName == "VSync")
-          {
-             return "vsync";
-          }
-          if(rowName == "MSAA")
-          {
-             return "msaa";
-          }
-          if(rowName == "DetailLevel")
-          {
-             return "detailLevel";
-          }
-          if(rowName == "Bloom")
-          {
-             return "bloom";
-          }
-          if(rowName == "DynamicShadows")
-          {
-             return "dynamicShadows";
-          }
-          if(rowName == "MotionBlur")
-          {
-             return "motionBlur";
-          }
-          if(rowName == "Distortion")
-          {
-             return "distortion";
-          }
-          if(rowName == "FogVolumes")
-          {
-             return "fogVolumes";
-          }
-          if(rowName == "SphericalHarmonicLighting")
-          {
-             return "sphericalHarmonicLighting";
-          }
-          if(rowName == "AmbientOcclusion")
-          {
-             return "ambientOcclusion";
-          }
-          if(rowName == "PhysX")
-          {
-             return "physx";
-          }
-          if(rowName == "Stereo3D")
-          {
-             return "stereo";
-          }
-          return undefined;
-       }
        function GetRowLabel(rowName)
        {
           if(rowName == "VSync")
@@ -285,265 +171,65 @@ internal static class GraphicsOptionsScriptTemplates
           }
           return rowName;
        }
-       function GetRowValues(rowName)
+       function GetRowDisplayValue(rowName)
        {
           if(rowName == "Fullscreen")
           {
-             return new Array("Windowed","Fullscreen");
+             return "Fullscreen";
           }
           if(rowName == "Resolution")
           {
-             return new Array(this.DraftState.resolutionWidth + " x " + this.DraftState.resolutionHeight);
+             return "1920 x 1080";
           }
           if(rowName == "VSync")
           {
-             return new Array("No","Yes");
+             return "Enabled";
           }
           if(rowName == "MSAA")
           {
-             return new Array("Disabled","2x","4x","8x","8xQ","16x","16xQ");
+             return "4x";
           }
           if(rowName == "DetailLevel")
           {
-             return new Array("Low","Medium","High","Very High","Custom");
+             return "High";
           }
-          if(rowName == "Bloom" || rowName == "DynamicShadows" || rowName == "MotionBlur" || rowName == "Distortion" || rowName == "FogVolumes" || rowName == "SphericalHarmonicLighting" || rowName == "AmbientOcclusion" || rowName == "Stereo3D")
+          if(rowName == "Bloom" || rowName == "DynamicShadows" || rowName == "MotionBlur" || rowName == "Distortion" || rowName == "FogVolumes" || rowName == "SphericalHarmonicLighting" || rowName == "AmbientOcclusion")
           {
-             return new Array("Disabled","Enabled");
+             return "Enabled";
           }
           if(rowName == "PhysX")
           {
-             return new Array("Off","Normal","High");
+             return "High";
+          }
+          if(rowName == "Stereo3D")
+          {
+             return "Disabled";
           }
           if(rowName == "ApplyChanges")
           {
-             return new Array("No Changes","Apply");
+             return "Preview Only";
           }
-          return new Array("Unavailable");
+          return "Unavailable";
        }
-       function IsApplyRow(rowName)
+       function GetRowValues(rowName)
        {
-          return rowName == "ApplyChanges";
-       }
-       function IsInteractiveRow(rowName)
-       {
-          return this.GetDraftKey(rowName) != undefined;
-       }
-       function IsRowEnabled(rowName)
-       {
-          if(rowName == "Fullscreen" || rowName == "Resolution")
-          {
-             return true;
-          }
-          if(this.IsApplyRow(rowName))
-          {
-             return this.HasUnsavedChanges();
-          }
-          if(this.IsInteractiveRow(rowName))
-          {
-             return true;
-          }
-          return false;
+          return new Array(this.GetRowDisplayValue(rowName));
        }
        function GetRowState(rowName)
        {
-          if(rowName == "Fullscreen")
-          {
-             return this.NormalizeInt(this.DraftState.fullscreen,0);
-          }
-          if(rowName == "Resolution")
-          {
-             return 0;
-          }
-          var _loc2_ = this.GetDraftKey(rowName);
-          if(_loc2_ != undefined)
-          {
-             return this.NormalizeInt(this.DraftState[_loc2_],0);
-          }
-          if(rowName == "ApplyChanges")
-          {
-             return this.HasUnsavedChanges() ? 1 : 0;
-          }
           return 0;
        }
-       function SetDraftRowState(rowName, nextState)
+       function IsInteractiveRow(rowName)
        {
-          var _loc2_ = this.GetDraftKey(rowName);
-          if(_loc2_ == undefined)
-          {
-             return false;
-          }
-          if(!flash.external.ExternalInterface.call("Helen_SetInt",_loc2_,nextState))
-          {
-             return false;
-          }
-          this.LoadDraftValues();
-          this.RefreshFocusedRow();
-          return true;
-       }
-       function StepDraftRowState(rowName, delta)
-       {
-          var _loc2_ = this.GetRowValues(rowName);
-          var _loc3_ = this.GetRowState(rowName);
-          var _loc4_ = _loc3_ + delta;
-          if(rowName == "DetailLevel" && _loc3_ == 4)
-          {
-             _loc4_ = delta > 0 ? 0 : 3;
-          }
-          if(_loc4_ < 0 || _loc4_ >= _loc2_.length)
-          {
-             return false;
-          }
-          if(rowName == "DetailLevel" && _loc4_ == 4)
-          {
-             return false;
-          }
-          return this.SetDraftRowState(rowName,_loc4_);
-       }
-       function CycleDraftRowState(rowName)
-       {
-          var _loc2_ = this.GetRowValues(rowName);
-          var _loc3_ = this.GetRowState(rowName);
-          var _loc4_ = _loc3_ + 1;
-          if(rowName == "DetailLevel" && _loc3_ == 4)
-          {
-             _loc4_ = 0;
-          }
-          if(_loc4_ >= _loc2_.length)
-          {
-             _loc4_ = 0;
-          }
-          if(rowName == "DetailLevel" && _loc4_ == 4)
-          {
-             _loc4_ = 0;
-          }
-          return this.SetDraftRowState(rowName,_loc4_);
-       }
-       function PlayStepSound(forward)
-       {
-          flash.external.ExternalInterface.call("FE_PlaySoundFromString",forward ? "UI_FrontEndSFX.UI_Forward" : "UI_FrontEndSFX.UI_Back");
-       }
-       function HandleRowAction(rowName)
-       {
-          if(this.IsApplyRow(rowName))
-          {
-             this.ApplyChanges();
-             return undefined;
-          }
-          if(this.IsInteractiveRow(rowName))
-          {
-             if(this.CycleDraftRowState(rowName))
-             {
-                this.PlayStepSound(true);
-             }
-          }
-       }
-       function IncrementRow(rowName)
-       {
-          if(this.IsInteractiveRow(rowName))
-          {
-             if(this.StepDraftRowState(rowName,1))
-             {
-                this.PlayStepSound(true);
-             }
-          }
-       }
-       function DecrementRow(rowName)
-       {
-          if(this.IsInteractiveRow(rowName))
-          {
-             if(this.StepDraftRowState(rowName,-1))
-             {
-                this.PlayStepSound(false);
-             }
-          }
-       }
-       function HasUnsavedChanges()
-       {
-          var _loc2_ = this.GetTrackedDraftKeys();
-          var _loc3_ = 0;
-          while(_loc3_ < _loc2_.length)
-          {
-             if(this.DraftState[_loc2_[_loc3_]] != this.InitialState[_loc2_[_loc3_]])
-             {
-                return true;
-             }
-             _loc3_ = _loc3_ + 1;
-          }
           return false;
        }
-       function EnsureExitPrompt()
+       function IsRowEnabled(rowName)
        {
-          if(this.ExitPrompt == undefined)
-          {
-             this.ExitPrompt = this.Screen.attachMovie("GraphicsExitPrompt","GraphicsExitPrompt",601);
-          }
-          return this.ExitPrompt;
-       }
-       function ShowUnsavedChangesPrompt()
-       {
-          this.EnsureExitPrompt();
-          this.ExitPromptMode = "unsaved";
-          this.ExitPrompt.ConfigureUnsavedChanges(this);
-          this.ExitPrompt.gotoAndPlay("in");
-       }
-       function RequestUnsavedChangesPrompt()
-       {
-          this.ShowUnsavedChangesPrompt();
-       }
-       function ShowRestartRequiredPrompt()
-       {
-          this.EnsureExitPrompt();
-          this.ExitPromptMode = "restart";
-          this.ExitPrompt.ConfigureRestartRequired(this);
-          this.ExitPrompt.gotoAndPlay("in");
-       }
-       function OnExitPromptResponse(response)
-       {
-          if(this.ExitPromptMode == "restart")
-          {
-             if(response == "apply" || response == "discard")
-             {
-                this.Screen.ReturnFromScreen();
-                return undefined;
-             }
-             if(response == "cancel")
-             {
-                return undefined;
-             }
-          }
-          if(response == "apply")
-          {
-             this.ApplyChanges();
-          }
-          else if(response == "discard")
-          {
-             this.Screen.ReturnFromScreen();
-          }
-          else if(response == "cancel")
-          {
-             return undefined;
-          }
-       }
-       function ApplyChanges()
-       {
-          if(!flash.external.ExternalInterface.call("Helen_RunCommand","applyBatmanGraphicsDraft"))
-          {
-             return undefined;
-          }
-          this.LoadDraftValues();
-          this.CaptureInitialState();
-          this.RefreshFocusedRow();
-          this.ShowRestartRequiredPrompt();
+          return true;
        }
     }
     function CancelScreen()
     {
-       if(this.GraphicsController.HasUnsavedChanges())
-       {
-          this.GraphicsController.RequestUnsavedChangesPrompt();
-          return undefined;
-       }
        ReturnFromScreen();
     }
     flash.external.ExternalInterface.call("FE_SetActiveScreenName","Graphics Options");
@@ -552,6 +238,7 @@ internal static class GraphicsOptionsScriptTemplates
     this.FocusIndex = 0;
     this.Flags = this.FLAG_OPTIONS;
     this.Init();
+    _root.TriggerEvent("Options");
     this.GraphicsController = new rs.ui.BatmanGraphicsOptionsController(this);
     this.GraphicsController.Init();
     if(this.Title != undefined)
@@ -574,6 +261,15 @@ internal static class GraphicsOptionsScriptTemplates
     this.AddItem(GraphicsRow14,12,14,-1,-1);
     this.AddItem(GraphicsRow15,13,0,-1,-1);
     _rotation = -2;
+    """;
+
+    /// <summary>
+    /// Settles the graphics options screen after the cloned timeline finishes loading and refreshes every fixed row.
+    /// </summary>
+    public const string GraphicsOptionsFrame15 = """
+    this.GraphicsController.BindFixedRows();
+    this.GraphicsController.RefreshAllRows();
+    stop();
     """;
 
     /// <summary>
@@ -602,14 +298,6 @@ internal static class GraphicsOptionsScriptTemplates
               this.Default = this.State;
               this.UpdateGraphicsRow();
            };
-           this.IsApplyRow = function()
-           {
-              return _parent.GraphicsController.IsApplyRow(this.RowName);
-           };
-           this.IsInteractiveRow = function()
-           {
-              return _parent.GraphicsController.IsInteractiveRow(this.RowName);
-           };
            this.IsEnabled = function()
            {
               return _parent.GraphicsController.IsRowEnabled(this.RowName);
@@ -617,8 +305,7 @@ internal static class GraphicsOptionsScriptTemplates
            this.UpdateGraphicsRow = function()
            {
               var _loc2_ = this.IsEnabled();
-              var _loc3_ = this.IsInteractiveRow();
-              var _loc4_ = this.Names[this.State];
+              var _loc3_ = this.Names[this.State];
               if(this.Label != undefined && this.Label.Label != undefined && this.Label.Label.Text != undefined)
               {
                  this.Label.Label.Text.text = this.LabelName;
@@ -631,33 +318,15 @@ internal static class GraphicsOptionsScriptTemplates
               {
                  this.Label.text = this.LabelName;
               }
-              if(_loc4_ == undefined)
+              if(_loc3_ == undefined)
               {
-                 _loc4_ = "";
+                 _loc3_ = "";
               }
-              this.ItemText.text = _loc4_;
+              this.ItemText.text = _loc3_;
               this.ItemText._alpha = _loc2_ ? 100 : 40;
               this.Label._alpha = _loc2_ ? 100 : 40;
-              if(this.IsApplyRow())
-              {
-                 this.LeftClicker._visible = false;
-                 this.RightClicker._visible = false;
-                 return undefined;
-              }
-              if(!_loc3_ || !_loc2_)
-              {
-                 this.LeftClicker._visible = false;
-                 this.RightClicker._visible = false;
-                 return undefined;
-              }
-              if(this.RowName == "DetailLevel" && this.State == 4)
-              {
-                 this.LeftClicker._visible = true;
-                 this.RightClicker._visible = true;
-                 return undefined;
-              }
-              this.LeftClicker._visible = this.State > 0;
-              this.RightClicker._visible = this.State < this.Names.length - 1;
+              this.LeftClicker._visible = false;
+              this.RightClicker._visible = false;
            };
            this.Update = function()
            {
@@ -677,53 +346,18 @@ internal static class GraphicsOptionsScriptTemplates
               {
                  _loc2_.SetPrompt(_loc2_.CI_B,"$UI.Cancel",this._parent.myListener.onPromptClick,100,100);
               }
-              if(this.IsApplyRow())
-              {
-                 if(this.IsEnabled())
-                 {
-                    _loc2_.SetPrompt(_loc2_.CI_Interact,"Apply",this._parent.myListener.onPromptClick,100,100);
-                 }
-                 return undefined;
-              }
-              if(this.IsInteractiveRow())
-              {
-                 _loc2_.SetPrompt(_loc2_.CI_Interact,"$UI.Cycle",this._parent.myListener.onPromptClick,100,100);
-              }
            };
            this.RunAction = function(bMouse)
            {
-              if(this.IsApplyRow())
-              {
-                 if(this.IsEnabled())
-                 {
-                    _parent.GraphicsController.HandleRowAction(this.RowName);
-                 }
-                 return undefined;
-              }
-              if(!this.IsInteractiveRow() || !this.IsEnabled())
-              {
-                 return undefined;
-              }
-              if(this.Names.length < 3 || !bMouse)
-              {
-                 _parent.GraphicsController.HandleRowAction(this.RowName);
-              }
-              else if(this._xmouse < 0)
-              {
-                 _parent.GraphicsController.DecrementRow(this.RowName);
-              }
-              else
-              {
-                 _parent.GraphicsController.IncrementRow(this.RowName);
-              }
+              return undefined;
            };
            this.Increment = function()
            {
-              _parent.GraphicsController.IncrementRow(this.RowName);
+              return undefined;
            };
            this.Decrement = function()
            {
-              _parent.GraphicsController.DecrementRow(this.RowName);
+              return undefined;
            };
            if(_parent.GraphicsController != undefined)
            {

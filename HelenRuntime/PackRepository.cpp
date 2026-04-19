@@ -795,6 +795,26 @@ namespace
             return !definition.Message.empty();
         }
 
+        if (definition.Kind == "load-batman-graphics-draft-into-config")
+        {
+            return true;
+        }
+
+        if (definition.Kind == "apply-batman-graphics-config")
+        {
+            return true;
+        }
+
+        if (definition.Kind == "sync-batman-graphics-detail-level")
+        {
+            return true;
+        }
+
+        if (definition.Kind == "sync-batman-graphics-detail-preset")
+        {
+            return true;
+        }
+
         return false;
     }
 

@@ -119,6 +119,10 @@ internal static class GraphicsOptionsAssetBuilder
             Path.Combine(scriptsRoot, "DefineSprite_600_ScreenOptionsGraphics", "frame_1", "DoAction.as"),
             GraphicsOptionsScriptTemplates.GraphicsOptionsFrame1);
 
+        WriteAllText(
+            Path.Combine(scriptsRoot, "DefineSprite_600_ScreenOptionsGraphics", "frame_15", "DoAction.as"),
+            GraphicsOptionsScriptTemplates.GraphicsOptionsFrame15);
+
         WriteGraphicsRowClipActions(scriptsRoot);
 
         WriteAllText(

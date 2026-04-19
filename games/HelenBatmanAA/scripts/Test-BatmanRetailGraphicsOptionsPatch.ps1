@@ -5,6 +5,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$HelperScriptPath = Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1'
+. $HelperScriptPath
 
 function Invoke-ExternalProcess {
     param(
@@ -56,6 +58,7 @@ if ([string]::IsNullOrWhiteSpace($RetailFrontendPackagePath)) {
 }
 
 $RetailFrontendPackagePath = [System.IO.Path]::GetFullPath($RetailFrontendPackagePath)
+Assert-UnrealPackageIsUnpacked -Path $RetailFrontendPackagePath -Context 'Test-BatmanRetailGraphicsOptionsPatch frontend base' | Out-Null
 
 $BuilderRoot = Join-Path $BatmanRoot 'builder'
 $SubtitleSizeModBuilderProjectPath = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj'
@@ -74,19 +77,20 @@ $RetailGraphicsExitPromptSpriteId = '4097'
 $ExpectedTokens = @(
     'Graphics Options',
     'ScreenOptionsGraphics',
+    'this.RowOrder = new Array("Fullscreen","Resolution","VSync","MSAA","DetailLevel","Bloom","DynamicShadows","MotionBlur","Distortion","FogVolumes","SphericalHarmonicLighting","AmbientOcclusion","PhysX","Stereo3D","ApplyChanges");',
+    'return new Array(this.GetRowDisplayValue(rowName));',
+    'this.AddItem(GraphicsRow1,14,1,-1,-1);',
+    'this.AddItem(GraphicsRow15,13,0,-1,-1);',
+    '_root.TriggerEvent("Options");'
+)
+
+$ForbiddenTokens = @(
     'Helen_GetInt',
     'Helen_SetInt',
     'Helen_RunCommand',
     'applyBatmanGraphicsDraft',
-    'this.BindFixedRow(this.Screen.GraphicsRow1,"Fullscreen");',
-    'this.BindFixedRow(this.Screen.GraphicsRow15,"ApplyChanges");',
-    'this.RefreshRowClip(this.Screen.GraphicsRow15,"ApplyChanges");',
-    'return new Array("Windowed","Fullscreen");',
-    'this.AddItem(GraphicsRow1,14,1,-1,-1);',
-    'this.AddItem(GraphicsRow15,13,0,-1,-1);'
-)
-
-$ForbiddenTokens = @(
+    'syncBatmanGraphicsDetailLevel',
+    'syncBatmanGraphicsPreset',
     'Helen_GfxLoad',
     'Helen_GfxGet',
     'Helen_GfxSet',
@@ -108,7 +112,13 @@ $ForbiddenTokens = @(
     'ScrollWindowUp',
     'ScrollWindowDown',
     'BaseMoveUPDown = this.MoveUPDown',
-    'return new Array(this.DraftState.fullscreen == 0 ? "Windowed" : "Fullscreen");'
+    'return new Array(this.DraftState.fullscreen == 0 ? "Windowed" : "Fullscreen");',
+    'return new Array("Windowed","Fullscreen");',
+    'this.ExitPromptMode = "unsaved";',
+    'this.ExitPromptMode = "restart";',
+    'this.LoadDraftValues();',
+    'this.CaptureInitialState();',
+    'HasUnsavedChanges'
 )
 
 $ExpectedFixedRowClipPaths = @(
@@ -134,7 +144,11 @@ $ForbiddenRowClipTokens = @(
     'OnVisibleRowClipLoaded',
     'HandleVisibleRowAction',
     'IncrementVisibleRow',
-    'DecrementVisibleRow'
+    'DecrementVisibleRow',
+    '_parent.GraphicsController.HandleRowAction(this.RowName);',
+    '_parent.GraphicsController.IncrementRow(this.RowName);',
+    '_parent.GraphicsController.DecrementRow(this.RowName);',
+    '_loc2_.SetPrompt(_loc2_.CI_Interact,"$UI.Cycle",this._parent.myListener.onPromptClick,100,100);'
 )
 
 if (-not (Test-Path -LiteralPath $FfdecPath)) {

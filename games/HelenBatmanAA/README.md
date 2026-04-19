@@ -18,7 +18,7 @@ Current layout:
   - maintained Batman build tool source under `tools\NativeSubtitleExePatcher`
   - local ignored builder prerequisites under `extracted`
   - local ignored builder outputs under `generated`
-  - the ignored local workspace is recreated by `scripts\Prepare-BatmanBuilderWorkspace.ps1` from a trusted `BmGame.u`, a trusted decompressed `Frontend.umap`, and an FFDec install
+  - the ignored local workspace is recreated by `scripts\Prepare-BatmanBuilderWorkspace.ps1` from a trusted unpacked `BmGame.u`, a trusted decompressed `Frontend.umap`, and an FFDec install
 - `scripts`
   - Batman-local rebuild, deploy, and launch helpers
 - `notes`
@@ -26,7 +26,7 @@ Current layout:
 
 Recommended Batman workflow:
 
-1. Prepare the ignored local builder workspace from trusted Batman base packages plus FFDec:
+1. Prepare the ignored local builder workspace from trusted unpacked Batman base packages plus FFDec:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\games\HelenBatmanAA\scripts\Prepare-BatmanBuilderWorkspace.ps1 `
@@ -234,6 +234,11 @@ Live smoke:
 11. Choose `Cancel` and confirm the draft is preserved.
 12. Choose `Apply Changes` and confirm the restart warning appears after restart-required edits.
 13. Reopen the screen and confirm the applied values persisted from `BmEngine.ini`.
+
+Automation note:
+
+- `Test-BatmanNavigateToGraphicsSimple.ps1` and `Test-BatmanNavigateToGraphics.ps1` now capture the exact Batman top-level window through `screenshot-cli` instead of taking a blind full-desktop screenshot.
+- If a blocking Windows dialog appears, the scripts capture that exact dialog window, analyze it through `recognition-cli` against `C:\dev\helenui\batman-aa.json`, classify it as `CrashDialog`, and fail with artifact paths for the dialog PNG, OCR JSON, and raw window snapshot JSON.
 
 ## Main Menu Subtitle Size Experiment
 

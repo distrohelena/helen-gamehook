@@ -20,6 +20,7 @@ $SourceDeltaPath = Join-Path $PackSource 'builds\steam-goty-1.0\assets\deltas\Fr
 $HelenGameHookPath = Join-Path $RepoRoot "bin\Win32\$Configuration\HelenGameHook.dll"
 $ProxyPath = Join-Path $RepoRoot "bin\Win32\$Configuration\dinput8.dll"
 $VerifierPath = Join-Path $PSScriptRoot 'Test-BatmanGraphicsOptionsPackage.ps1'
+$InstalledBaseVerifierPath = Join-Path $PSScriptRoot 'Test-BatmanInstalledBaseCompatibility.ps1'
 
 function Test-ExpectedVirtualFiles {
     param(
@@ -68,7 +69,7 @@ function Test-ExpectedVirtualFiles {
     }
 }
 
-foreach ($RequiredPath in @($PackSource, $SourceDeltaPath, $HelenGameHookPath, $ProxyPath, $VerifierPath)) {
+foreach ($RequiredPath in @($PackSource, $SourceDeltaPath, $HelenGameHookPath, $ProxyPath, $VerifierPath, $InstalledBaseVerifierPath)) {
     if (-not (Test-Path -LiteralPath $RequiredPath)) {
         throw "Batman deployment input not found: $RequiredPath"
     }
@@ -78,6 +79,12 @@ try {
     & $VerifierPath -BatmanRoot $BatmanRoot -BuilderRoot (Join-Path $BatmanRoot 'builder')
 } catch {
     throw "Batman graphics-options package verification failed before deployment. $($_.Exception.Message)"
+}
+
+try {
+    & $InstalledBaseVerifierPath -GameRoot $GameRoot -PackBuildRoot (Join-Path $PackSource 'builds\steam-goty-1.0')
+} catch {
+    throw "Batman graphics-options deployment refused to target an incompatible installed base. $($_.Exception.Message)"
 }
 
 Get-Process ShippingPC-BmGame -ErrorAction SilentlyContinue | Stop-Process -Force

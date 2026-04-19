@@ -29,7 +29,7 @@ $BindingsJsonPath = Join-Path $PackBuildRoot 'bindings.json'
 $CommandsJsonPath = Join-Path $PackBuildRoot 'commands.json'
 $FilesJsonPath = Join-Path $PackBuildRoot 'files.json'
 $DeltaPath = Join-Path $PackBuildRoot 'assets\deltas\Frontend-graphics-options.hgdelta'
-$TrustedFrontendBasePath = Join-Path $BuilderRoot 'extracted\frontend\frontend-umap-unpacked\Frontend.umap'
+$TrustedFrontendBasePath = Join-Path $BuilderRoot 'extracted\frontend-retail\Frontend.umap'
 $GeneratedFrontendPackagePath = Join-Path $BuilderRoot 'generated\graphics-options-experiment\Frontend-graphics-options.umap'
 $PrototypeExportScriptsRoot = Join-Path $BuilderRoot 'generated\graphics-options-experiment\prototype\_build\frontend-scripts'
 $BuildMatchScriptPath = Join-Path $PSScriptRoot 'Get-BatmanSteamBuildMatch.ps1'
@@ -38,21 +38,6 @@ $ExpectedConfigKeys = @(
     'fullscreen',
     'resolutionWidth',
     'resolutionHeight',
-    'vsync',
-    'msaa',
-    'detailLevel',
-    'bloom',
-    'dynamicShadows',
-    'motionBlur',
-    'distortion',
-    'fogVolumes',
-    'sphericalHarmonicLighting',
-    'ambientOcclusion',
-    'physx',
-    'stereo'
-)
-
-$ExpectedWritableConfigKeys = @(
     'vsync',
     'msaa',
     'detailLevel',
@@ -85,13 +70,13 @@ $ExpectedFixedRowClipPaths = @(
     'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_29\CLIPACTIONRECORD onClipEvent(load).as'
 )
 
-$RequiredFixedRowScriptTokens = @(
-    'this.BindFixedRow(this.Screen.GraphicsRow1,"Fullscreen");',
-    'this.BindFixedRow(this.Screen.GraphicsRow15,"ApplyChanges");',
-    'this.RefreshRowClip(this.Screen.GraphicsRow15,"ApplyChanges");',
-    'return new Array("Windowed","Fullscreen");',
+$RequiredStaticScreenTokens = @(
+    'this.RowOrder = new Array("Fullscreen","Resolution","VSync","MSAA","DetailLevel","Bloom","DynamicShadows","MotionBlur","Distortion","FogVolumes","SphericalHarmonicLighting","AmbientOcclusion","PhysX","Stereo3D","ApplyChanges");',
+    'return new Array(this.GetRowDisplayValue(rowName));',
     'this.AddItem(GraphicsRow1,14,1,-1,-1);',
-    'this.AddItem(GraphicsRow15,13,0,-1,-1);'
+    'this.AddItem(GraphicsRow15,13,0,-1,-1);',
+    '_root.TriggerEvent("Options");',
+    'this.Title.text = "Graphics Options";'
 )
 
 $ForbiddenScrollWindowTokens = @(
@@ -108,7 +93,17 @@ $ForbiddenScrollWindowTokens = @(
     'ScrollWindowUp',
     'ScrollWindowDown',
     'BaseMoveUPDown = this.MoveUPDown',
-    'return new Array(this.DraftState.fullscreen == 0 ? "Windowed" : "Fullscreen");'
+    'return new Array(this.DraftState.fullscreen == 0 ? "Windowed" : "Fullscreen");',
+    'return new Array("Windowed","Fullscreen");',
+    'flash.external.ExternalInterface.call("Helen_GetInt",key)',
+    'flash.external.ExternalInterface.call("Helen_SetInt"',
+    'flash.external.ExternalInterface.call("Helen_RunCommand","applyBatmanGraphicsDraft")',
+    'this.ExitPromptMode = "unsaved";',
+    'this.ExitPromptMode = "restart";',
+    'this.LoadDraftValues();',
+    'this.CaptureInitialState();',
+    'this.ApplyChanges();',
+    'HasUnsavedChanges'
 )
 
 $ForbiddenRowClipTokens = @(
@@ -116,7 +111,11 @@ $ForbiddenRowClipTokens = @(
     'OnVisibleRowClipLoaded',
     'HandleVisibleRowAction',
     'IncrementVisibleRow',
-    'DecrementVisibleRow'
+    'DecrementVisibleRow',
+    '_parent.GraphicsController.HandleRowAction(this.RowName);',
+    '_parent.GraphicsController.IncrementRow(this.RowName);',
+    '_parent.GraphicsController.DecrementRow(this.RowName);',
+    '_loc2_.SetPrompt(_loc2_.CI_Interact,"$UI.Cycle",this._parent.myListener.onPromptClick,100,100);'
 )
 
 if (-not (Test-Path -LiteralPath $PackJsonPath)) {
@@ -195,8 +194,8 @@ if ($BuildManifest.match.sha256 -ne $ExpectedBuildMatch.Sha256) {
 }
 
 $StartupCommands = @($BuildManifest.startupCommands)
-if ($StartupCommands.Count -ne 1 -or $StartupCommands[0] -ne 'loadBatmanGraphicsDraftIntoConfig') {
-    throw 'Batman graphics-options build startupCommands drifted.'
+if ($StartupCommands.Count -ne 0) {
+    throw 'Batman graphics-options build should not declare startupCommands for the render-only screen.'
 }
 
 $BindingsManifest = Get-Content -LiteralPath $BindingsJsonPath -Raw | ConvertFrom-Json
@@ -207,79 +206,14 @@ if ($null -ne $BindingsManifest.bindings) {
     $ExternalBindings = @($BindingsManifest.externalBindings)
 }
 
-$ExpectedBindingCount = ($ExpectedConfigKeys.Count * 1) + ($ExpectedWritableConfigKeys.Count * 1) + 1
-if ($ExternalBindings.Count -ne $ExpectedBindingCount) {
-    throw "Batman graphics-options binding count mismatch. Expected $ExpectedBindingCount but found $($ExternalBindings.Count)."
-}
-
-foreach ($ExpectedConfigKey in $ExpectedConfigKeys) {
-    $GetBindings = @(
-        $ExternalBindings | Where-Object {
-            $_.externalName -eq 'Helen_GetInt' -and $_.mode -eq 'get-int' -and $_.configKey -eq $ExpectedConfigKey
-        }
-    )
-
-    if ($GetBindings.Count -ne 1) {
-        throw "Batman graphics-options bindings are missing Helen_GetInt for '$ExpectedConfigKey'."
-    }
-}
-
-foreach ($ExpectedWritableConfigKey in $ExpectedWritableConfigKeys) {
-    $SetBindings = @(
-        $ExternalBindings | Where-Object {
-            $_.externalName -eq 'Helen_SetInt' -and $_.mode -eq 'set-int' -and $_.configKey -eq $ExpectedWritableConfigKey
-        }
-    )
-
-    if ($SetBindings.Count -ne 1) {
-        throw "Batman graphics-options bindings are missing Helen_SetInt for '$ExpectedWritableConfigKey'."
-    }
-}
-
-$ApplyBindings = @(
-    $ExternalBindings | Where-Object {
-        $_.externalName -eq 'Helen_RunCommand' -and $_.mode -eq 'run-command' -and $_.command -eq 'applyBatmanGraphicsDraft'
-    }
-)
-
-if ($ApplyBindings.Count -ne 1) {
-    throw 'Batman graphics-options bindings are missing Helen_RunCommand -> applyBatmanGraphicsDraft.'
+if ($ExternalBindings.Count -ne 0) {
+    throw "Batman graphics-options bindings should be empty for the render-only screen, but found $($ExternalBindings.Count)."
 }
 
 $CommandsManifest = Get-Content -LiteralPath $CommandsJsonPath -Raw | ConvertFrom-Json
 $Commands = @($CommandsManifest.commands)
-if ($Commands.Count -ne 2) {
-    throw "Batman graphics-options commands count mismatch. Expected 2 but found $($Commands.Count)."
-}
-
-$LoadDraftCommand = @($Commands | Where-Object { $_.id -eq 'loadBatmanGraphicsDraftIntoConfig' })
-if ($LoadDraftCommand.Count -ne 1) {
-    throw 'Batman graphics-options commands are missing loadBatmanGraphicsDraftIntoConfig.'
-}
-
-$LoadDraftSteps = @($LoadDraftCommand[0].steps)
-if ($LoadDraftSteps.Count -ne 1 -or $LoadDraftSteps[0].kind -ne 'load-batman-graphics-draft-into-config') {
-    throw 'Batman graphics-options load command drifted away from load-batman-graphics-draft-into-config.'
-}
-
-$ApplyDraftCommand = @($Commands | Where-Object { $_.id -eq 'applyBatmanGraphicsDraft' })
-if ($ApplyDraftCommand.Count -ne 1) {
-    throw 'Batman graphics-options commands are missing applyBatmanGraphicsDraft.'
-}
-
-$ApplyDraftStepKinds = @($ApplyDraftCommand[0].steps | ForEach-Object { $_.kind })
-$ExpectedApplyDraftStepKinds = @(
-    'apply-batman-graphics-config',
-    'load-batman-graphics-draft-into-config'
-)
-if ($ApplyDraftStepKinds.Count -ne $ExpectedApplyDraftStepKinds.Count) {
-    throw 'Batman graphics-options apply command step count drifted.'
-}
-
-for ($StepIndex = 0; $StepIndex -lt $ExpectedApplyDraftStepKinds.Count; $StepIndex++) {
-    if ($ApplyDraftStepKinds[$StepIndex] -ne $ExpectedApplyDraftStepKinds[$StepIndex]) {
-        throw "Batman graphics-options apply command step mismatch at index $StepIndex."
-    }
+if ($Commands.Count -ne 0) {
+    throw "Batman graphics-options commands should be empty for the render-only screen, but found $($Commands.Count)."
 }
 
 $FilesManifest = Get-Content -LiteralPath $FilesJsonPath -Raw | ConvertFrom-Json
@@ -294,9 +228,9 @@ if (-not (Test-Path -LiteralPath $GraphicsScreenScriptPath)) {
 }
 
 $GraphicsScreenScript = Get-Content -LiteralPath $GraphicsScreenScriptPath -Raw
-foreach ($RequiredFixedRowScriptToken in $RequiredFixedRowScriptTokens) {
-    if ($GraphicsScreenScript.IndexOf($RequiredFixedRowScriptToken, [System.StringComparison]::Ordinal) -lt 0) {
-        throw "Batman graphics-options prototype screen script is missing required fullscreen token: $RequiredFixedRowScriptToken"
+foreach ($RequiredStaticScreenToken in $RequiredStaticScreenTokens) {
+    if ($GraphicsScreenScript.IndexOf($RequiredStaticScreenToken, [System.StringComparison]::Ordinal) -lt 0) {
+        throw "Batman graphics-options prototype screen script is missing required render-only token: $RequiredStaticScreenToken"
     }
 }
 

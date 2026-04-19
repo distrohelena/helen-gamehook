@@ -1,5 +1,6 @@
 param(
-    [string]$BatmanRoot
+    [string]$BatmanRoot,
+    [string]$BuilderRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,7 +11,14 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
     $BatmanRoot = (Resolve-Path $BatmanRoot).Path
 }
 
-$GeneratedRoot = Join-Path $BatmanRoot 'builder\generated\main-menu-audio'
+if ([string]::IsNullOrWhiteSpace($BuilderRoot)) {
+    $BuilderRoot = Join-Path $BatmanRoot 'builder'
+} elseif (-not [System.IO.Path]::IsPathRooted($BuilderRoot)) {
+    $BuilderRoot = Join-Path $BatmanRoot $BuilderRoot
+}
+$BuilderRoot = [System.IO.Path]::GetFullPath($BuilderRoot)
+
+$GeneratedRoot = Join-Path $BuilderRoot 'generated\main-menu-audio'
 $FrontendXmlPath = Join-Path $GeneratedRoot '_build\MainV2-subtitle-size.xml'
 $FrontendFrame1ScriptPath = Join-Path $GeneratedRoot '_build\frontend-scripts\DefineSprite_359_ScreenOptionsAudio\frame_1\DoAction.as'
 $FrontendClipActionPath = Join-Path $GeneratedRoot '_build\frontend-scripts\DefineSprite_359_ScreenOptionsAudio\frame_1\PlaceObject2_290_List_Template_61\CLIPACTIONRECORD onClipEvent(load).as'

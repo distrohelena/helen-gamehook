@@ -1,3 +1,4 @@
+#include <HelenHook/BatmanGraphicsConfigService.h>
 #include <HelenHook/BuildRuntimeCoordinator.h>
 #include <HelenHook/BuildHookInstaller.h>
 #include <HelenHook/CommandDispatcher.h>
@@ -22,6 +23,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <shlobj.h>
 #include <windows.h>
 
 namespace
@@ -42,6 +44,8 @@ namespace
     std::optional<helen::LoadedBuildPack> g_active_pack;
     /** @brief Active runtime slot store that exposes Helen-managed writable slot addresses. */
     std::unique_ptr<helen::RuntimeValueStore> g_runtime_values;
+    /** @brief Batman-specific graphics config bridge bound to the user `BmEngine.ini` file. */
+    std::unique_ptr<helen::BatmanGraphicsConfigService> g_batman_graphics_config_service;
     /** @brief Declarative command executor for the active build declarations. */
     std::unique_ptr<helen::CommandExecutor> g_command_executor;
     /** @brief Generic coordinator that runs build startup commands and hosts declared live state observers. */
@@ -134,6 +138,34 @@ namespace
     std::wstring ToWideString(std::string_view text)
     {
         return std::wstring(text.begin(), text.end());
+    }
+
+    /**
+     * @brief Resolves the user-documents `BmEngine.ini` path used by Batman Arkham Asylum graphics settings.
+     * @return Absolute user-documents `BmEngine.ini` path when the Windows known-folder lookup succeeds; otherwise no value.
+     */
+    std::optional<std::filesystem::path> TryGetBatmanUserEngineIniPath()
+    {
+        PWSTR documents_path = nullptr;
+        const HRESULT result = SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT, nullptr, &documents_path);
+        if (FAILED(result) || documents_path == nullptr)
+        {
+            if (documents_path != nullptr)
+            {
+                CoTaskMemFree(documents_path);
+            }
+
+            return std::nullopt;
+        }
+
+        const std::filesystem::path ini_path = std::filesystem::path(documents_path) /
+            "Square Enix" /
+            "Batman Arkham Asylum GOTY" /
+            "BmGame" /
+            "Config" /
+            "BmEngine.ini";
+        CoTaskMemFree(documents_path);
+        return ini_path;
     }
 
     /**
@@ -374,7 +406,18 @@ namespace
             return false;
         }
 
-        g_command_executor = std::make_unique<helen::CommandExecutor>(*g_command_dispatcher, *g_runtime_values);
+        const std::optional<std::filesystem::path> batman_engine_ini_path = TryGetBatmanUserEngineIniPath();
+        if (!batman_engine_ini_path.has_value())
+        {
+            helen::Log(L"[runtime] failed to resolve the Batman user BmEngine.ini path.");
+            return false;
+        }
+
+        g_batman_graphics_config_service = std::make_unique<helen::BatmanGraphicsConfigService>(*batman_engine_ini_path);
+        g_command_executor = std::make_unique<helen::CommandExecutor>(
+            *g_command_dispatcher,
+            *g_runtime_values,
+            *g_batman_graphics_config_service);
         if (!RegisterDeclaredCommands(active_pack))
         {
             return false;
@@ -442,6 +485,7 @@ namespace
         g_asset_resolver.reset();
         g_external_bindings.reset();
         g_command_executor.reset();
+        g_batman_graphics_config_service.reset();
         g_runtime_values.reset();
     }
 

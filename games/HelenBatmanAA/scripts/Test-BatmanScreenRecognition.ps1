@@ -15,7 +15,7 @@
     Caminho para salvar a screenshot (padrão: artifacts\screenshot-recognition-test.png)
 
 .PARAMETER OcrEngine
-    Motor OCR a usar: 'windows_native' (padrão) ou 'tesseract'
+    Motor OCR a usar: 'tesseract' (padrão) ou 'windows_native'
 
 .PARAMETER TesseractPath
     Caminho para tesseract.exe se usar OcrEngine='tesseract'
@@ -33,7 +33,7 @@ param(
 
     [Parameter(Mandatory=$false)]
     [ValidateSet('windows_native', 'tesseract')]
-    [string]$OcrEngine = 'windows_native',
+    [string]$OcrEngine = 'tesseract',
 
     [Parameter(Mandatory=$false)]
     [string]$TesseractPath = "C:\Program Files\Tesseract-OCR\tesseract.exe"
@@ -42,6 +42,8 @@ param(
 # Paths
 $RecognitionCliProject = "C:\dev\helenui\plugins\recognition-cli"
 $BatmanAaProject = "C:\dev\helenui\batman-aa.json"
+$HelperScriptPath = Join-Path $PSScriptRoot 'BatmanWindowHelpers.ps1'
+. $HelperScriptPath
 
 Write-Host "=== Batman Screen Recognition Test ===" -ForegroundColor Cyan
 Write-Host ""
@@ -65,34 +67,28 @@ if (-not (Test-Path $outputDir)) {
 
 # Generate OCR config
 $TempOcrConfigPath = Join-Path $outputDir "temp-ocr-config.json"
-
-if ($OcrEngine -eq 'tesseract') {
-    if (-not (Test-Path $TesseractPath)) {
+if ($OcrEngine -eq 'tesseract' -and $TesseractPath -ne (Get-BatmanTesseractExecutablePath)) {
+    if (-not (Test-Path -LiteralPath $TesseractPath)) {
         Write-Host "ERROR: Tesseract not found at $TesseractPath" -ForegroundColor Red
         exit 1
     }
-    
-    $ocrConfig = @{
+
+    @{
         ocr = @{
             engines = @(
-                @{ type = "tesseract"; exePath = $TesseractPath },
-                @{ type = "windows_native" }
+                @{ type = 'tesseract'; exePath = $TesseractPath }
             )
         }
-    }
-    Write-Host "Using Tesseract OCR: $TesseractPath" -ForegroundColor Yellow
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $TempOcrConfigPath
 } else {
-    $ocrConfig = @{
-        ocr = @{
-            engines = @(
-                @{ type = "windows_native" }
-            )
-        }
-    }
-    Write-Host "Using Windows Native OCR" -ForegroundColor Yellow
+    Write-BatmanRecognitionOcrConfig -OutputPath $TempOcrConfigPath -PreferredEngine $OcrEngine
 }
 
-$ocrConfig | ConvertTo-Json -Depth 4 | Set-Content -Path $TempOcrConfigPath
+if ($OcrEngine -eq 'tesseract') {
+    Write-Host "Using Tesseract OCR: $TesseractPath" -ForegroundColor Yellow
+} else {
+    Write-Host "Using Windows Native OCR" -ForegroundColor Yellow
+}
 
 # Capture screenshot
 Write-Host "Capturing screenshot..." -ForegroundColor Green

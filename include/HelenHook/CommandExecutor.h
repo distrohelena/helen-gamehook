@@ -8,6 +8,7 @@
 
 namespace helen
 {
+    class BatmanGraphicsConfigService;
     class CommandDispatcher;
     class RuntimeValueStore;
 
@@ -24,8 +25,12 @@ namespace helen
          * @brief Binds the executor to the config dispatcher and declared runtime slot store it should mutate.
          * @param dispatcher Registered config dispatcher used by read-config-int steps.
          * @param runtime_values Declared runtime slot store updated by set-live-double steps.
+         * @param graphics_config_service Batman-specific graphics config bridge used by the Batman graphics command steps.
          */
-        CommandExecutor(CommandDispatcher& dispatcher, RuntimeValueStore& runtime_values);
+        CommandExecutor(
+            CommandDispatcher& dispatcher,
+            RuntimeValueStore& runtime_values,
+            BatmanGraphicsConfigService& graphics_config_service);
 
         /**
          * @brief Registers one command definition by its stable identifier.
@@ -74,6 +79,8 @@ namespace helen
         CommandDispatcher& dispatcher_;
         /** @brief Declared runtime slot store updated by set-live-double steps and restored when a command run fails. */
         RuntimeValueStore& runtime_values_;
+        /** @brief Batman-specific graphics config bridge used by the Batman graphics command steps. */
+        BatmanGraphicsConfigService& graphics_config_service_;
         /** @brief Registered command definitions keyed by their stable identifiers. */
         std::map<std::string, CommandDefinition> commands_;
     };

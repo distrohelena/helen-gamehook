@@ -1,5 +1,6 @@
 param(
-    [string]$BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+    [string]$BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
+    [string]$BuilderRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,14 +60,25 @@ function Read-HgdeltaHeader {
     }
 }
 
-$PackBuildRoot = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles\builds\steam-goty-1.0'
+$BuilderRoot = if ([string]::IsNullOrWhiteSpace($BuilderRoot)) {
+    Join-Path $BatmanRoot 'builder'
+} elseif ([System.IO.Path]::IsPathRooted($BuilderRoot)) {
+    $BuilderRoot
+} else {
+    Join-Path $BatmanRoot $BuilderRoot
+}
+$BuilderRoot = [System.IO.Path]::GetFullPath($BuilderRoot)
+
+$PackRoot = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles'
+$PackBuildRoot = Join-Path $PackRoot 'builds\steam-goty-1.0'
+$PackJsonPath = Join-Path $PackRoot 'pack.json'
 $FilesJsonPath = Join-Path $PackBuildRoot 'files.json'
 $GameplayDeltaPath = Join-Path $PackBuildRoot 'assets\deltas\BmGame-subtitle-signal.hgdelta'
 $FrontendDeltaPath = Join-Path $PackBuildRoot 'assets\deltas\Frontend-main-menu-subtitle-size.hgdelta'
-$TrustedGameplayBasePath = Join-Path $BatmanRoot 'builder\extracted\bmgame-unpacked\BmGame.u'
-$GeneratedGameplayPackagePath = Join-Path $BatmanRoot 'builder\generated\pause-runtime-scale\BmGame-subtitle-signal.u'
-$TrustedFrontendBasePath = Join-Path $BatmanRoot 'builder\extracted\frontend\frontend-umap-unpacked\Frontend.umap'
-$GeneratedFrontendPackagePath = Join-Path $BatmanRoot 'builder\generated\main-menu-audio\Frontend-main-menu-subtitle-size.umap'
+$TrustedGameplayBasePath = Join-Path $BuilderRoot 'extracted\bmgame-unpacked\BmGame.u'
+$GeneratedGameplayPackagePath = Join-Path $BuilderRoot 'generated\pause-runtime-scale\BmGame-subtitle-signal.u'
+$TrustedFrontendBasePath = Join-Path $BuilderRoot 'extracted\frontend\frontend-umap-unpacked\Frontend.umap'
+$GeneratedFrontendPackagePath = Join-Path $BuilderRoot 'generated\main-menu-audio\Frontend-main-menu-subtitle-size.umap'
 $ExpectedVirtualFiles = @(
     @{
         Id = 'bmgameGameplayPackage'
@@ -98,6 +110,10 @@ if (-not (Test-Path $FilesJsonPath)) {
     throw "Batman gameplay package manifest not found: $FilesJsonPath"
 }
 
+if (-not (Test-Path -LiteralPath $PackJsonPath)) {
+    throw "Batman subtitle pack manifest not found: $PackJsonPath"
+}
+
 foreach ($ExpectedVirtualFile in $ExpectedVirtualFiles) {
     foreach ($RequiredPath in @($ExpectedVirtualFile.BasePath, $ExpectedVirtualFile.TargetPath, $ExpectedVirtualFile.DeltaFilePath)) {
         if (-not (Test-Path -LiteralPath $RequiredPath)) {
@@ -107,6 +123,7 @@ foreach ($ExpectedVirtualFile in $ExpectedVirtualFiles) {
 }
 
 $FilesManifest = Get-Content -LiteralPath $FilesJsonPath -Raw | ConvertFrom-Json
+$PackManifest = Get-Content -LiteralPath $PackJsonPath -Raw | ConvertFrom-Json
 $VirtualFiles = @($FilesManifest.virtualFiles)
 if ($VirtualFiles.Count -ne $ExpectedVirtualFiles.Count) {
     throw "Batman gameplay package manifest expected exactly $($ExpectedVirtualFiles.Count) virtual files, found $($VirtualFiles.Count)."
@@ -224,6 +241,88 @@ foreach ($ExpectedVirtualFile in $ExpectedVirtualFiles) {
 
     if ([int64]$VirtualFile.source.chunkSize -ne [int64]$DeltaHeader.ChunkSize) {
         throw "Batman gameplay package manifest/header chunk size mismatch for $($ExpectedVirtualFile.Id)."
+    }
+}
+
+$ExpectedIniFiles = @(
+    @{
+        id = 'user-engine'
+        root = 'documents'
+        path = 'Square Enix/Batman Arkham Asylum GOTY/BmGame/Config/BmEngine.ini'
+    }
+)
+
+$ExpectedIniStores = @(
+    @{
+        id = 'batmanFrontendUi'
+        files = @('user-engine')
+        keys = @('subtitleSize')
+    }
+)
+
+$ExpectedIniKeys = @(
+    @{
+        id = 'subtitleSize'
+        file = 'user-engine'
+        section = 'Engine.HUD'
+        key = 'ConsoleFontSize'
+        type = 'choice-map'
+        writable = $true
+        ownership = 'hijacked-native-key'
+        valueMap = @(
+            @{ match = 0; encodedValue = 5 },
+            @{ match = 1; encodedValue = 6 },
+            @{ match = 2; encodedValue = 7 }
+        )
+    }
+)
+
+if (@($PackManifest.iniFiles).Count -ne $ExpectedIniFiles.Count) {
+    throw "Batman subtitle pack expected exactly $($ExpectedIniFiles.Count) iniFiles entry, found $(@($PackManifest.iniFiles).Count)."
+}
+
+if (@($PackManifest.iniStores).Count -ne $ExpectedIniStores.Count) {
+    throw "Batman subtitle pack expected exactly $($ExpectedIniStores.Count) iniStores entry, found $(@($PackManifest.iniStores).Count)."
+}
+
+if (@($PackManifest.iniKeys).Count -ne $ExpectedIniKeys.Count) {
+    throw "Batman subtitle pack expected exactly $($ExpectedIniKeys.Count) iniKeys entry, found $(@($PackManifest.iniKeys).Count)."
+}
+
+$ActualIniFile = @($PackManifest.iniFiles)[0]
+if ($ActualIniFile.id -ne $ExpectedIniFiles[0].id -or
+    $ActualIniFile.root -ne $ExpectedIniFiles[0].root -or
+    $ActualIniFile.path -ne $ExpectedIniFiles[0].path) {
+    throw 'Batman subtitle pack iniFiles declaration did not match the expected batmanFrontendUi source file.'
+}
+
+$ActualIniStore = @($PackManifest.iniStores)[0]
+if ($ActualIniStore.id -ne $ExpectedIniStores[0].id -or
+    (@($ActualIniStore.files) -join ',') -ne (@($ExpectedIniStores[0].files) -join ',') -or
+    (@($ActualIniStore.keys) -join ',') -ne (@($ExpectedIniStores[0].keys) -join ',')) {
+    throw 'Batman subtitle pack iniStores declaration did not match the expected batmanFrontendUi store.'
+}
+
+$ActualIniKey = @($PackManifest.iniKeys)[0]
+if ($ActualIniKey.id -ne $ExpectedIniKeys[0].id -or
+    $ActualIniKey.file -ne $ExpectedIniKeys[0].file -or
+    $ActualIniKey.section -ne $ExpectedIniKeys[0].section -or
+    $ActualIniKey.key -ne $ExpectedIniKeys[0].key -or
+    $ActualIniKey.type -ne $ExpectedIniKeys[0].type -or
+    $ActualIniKey.writable -ne $ExpectedIniKeys[0].writable -or
+    $ActualIniKey.ownership -ne $ExpectedIniKeys[0].ownership) {
+    throw 'Batman subtitle pack iniKeys declaration did not match the expected hijacked native key.'
+}
+
+$ActualIniValueMap = @($ActualIniKey.valueMap)
+if ($ActualIniValueMap.Count -ne $ExpectedIniKeys[0].valueMap.Count) {
+    throw 'Batman subtitle pack iniKeys value map count did not match the expected choice-map.'
+}
+
+for ($Index = 0; $Index -lt $ExpectedIniKeys[0].valueMap.Count; $Index++) {
+    if ($ActualIniValueMap[$Index].match -ne $ExpectedIniKeys[0].valueMap[$Index].match -or
+        $ActualIniValueMap[$Index].encodedValue -ne $ExpectedIniKeys[0].valueMap[$Index].encodedValue) {
+        throw "Batman subtitle pack iniKeys value map mismatch at index $Index."
     }
 }
 
