@@ -538,44 +538,33 @@ void RunPackRepositoryTests()
             38758728,
             "4dac1f5e2ac6710b7378fdce74601f616f4753e3756cb5fda63c7519cc2eb028");
         Expect(loaded_batman_pack.has_value(), "Expected the checked-in Batman pack to load for the matching executable fingerprint.");
-        Expect(loaded_batman_pack->Build.VirtualFiles.size() == 2, "Checked-in Batman pack virtual file count mismatch.");
+        Expect(loaded_batman_pack->Pack.Id == "batman-aa-graphics-options", "Checked-in Batman default pack selection mismatch.");
+        Expect(loaded_batman_pack->Build.VirtualFiles.size() == 1, "Checked-in Batman graphics pack virtual file count mismatch.");
+        Expect(loaded_batman_pack->Build.RuntimeSlots.empty(), "Checked-in Batman graphics pack unexpectedly declared runtime slots.");
+        Expect(loaded_batman_pack->Build.StateObservers.empty(), "Checked-in Batman graphics pack unexpectedly declared state observers.");
+        Expect(loaded_batman_pack->Build.Hooks.empty(), "Checked-in Batman graphics pack unexpectedly declared hooks.");
+        Expect(loaded_batman_pack->Build.Commands.empty(), "Checked-in Batman graphics pack unexpectedly declared commands.");
+        Expect(loaded_batman_pack->Build.ExternalBindings.empty(), "Checked-in Batman graphics pack unexpectedly declared external bindings.");
 
-        const helen::VirtualFileDefinition* checked_in_gameplay_file = nullptr;
-        const helen::VirtualFileDefinition* checked_in_frontend_file = nullptr;
+        const helen::VirtualFileDefinition* checked_in_graphics_frontend_file = nullptr;
         for (const helen::VirtualFileDefinition& virtual_file : loaded_batman_pack->Build.VirtualFiles)
         {
-            if (virtual_file.Id == "bmgameGameplayPackage")
+            if (virtual_file.Id == "frontendGraphicsOptionsPackage")
             {
-                checked_in_gameplay_file = &virtual_file;
-            }
-            else if (virtual_file.Id == "frontendMapPackage")
-            {
-                checked_in_frontend_file = &virtual_file;
+                checked_in_graphics_frontend_file = &virtual_file;
             }
         }
 
-        Expect(checked_in_gameplay_file != nullptr, "Checked-in Batman gameplay virtual file was not found.");
-        Expect(checked_in_frontend_file != nullptr, "Checked-in Batman frontend virtual file was not found.");
-        Expect(checked_in_gameplay_file->Mode == "delta-on-read", "Checked-in Batman gameplay package is not delta-backed.");
-        Expect(checked_in_gameplay_file->Source.Kind == helen::VirtualFileSourceKind::DeltaFile, "Checked-in Batman gameplay package source kind mismatch.");
-        Expect(checked_in_gameplay_file->Source.Path == std::filesystem::path("assets/deltas/BmGame-subtitle-signal.hgdelta"), "Checked-in Batman gameplay package delta path mismatch.");
-        Expect(checked_in_gameplay_file->Source.Base.FileSize == 100365345, "Checked-in Batman gameplay package base size mismatch.");
-        Expect(checked_in_gameplay_file->Source.Base.Sha256 == "621a5c8d99c9f7c7283531d05a4a6d56bdf15ad93ede0d5bf2f5d3e45117ff36", "Checked-in Batman gameplay package base hash mismatch.");
-        Expect(checked_in_gameplay_file->Source.Target.FileSize == 101115741, "Checked-in Batman gameplay package target size mismatch.");
-        Expect(checked_in_gameplay_file->Source.Target.Sha256 == "d1e97fbd81e5eec121538873b5fc95c4a47dca98dbae51898cf3e80210639d39", "Checked-in Batman gameplay package target hash mismatch.");
-        Expect(checked_in_gameplay_file->Source.ChunkSize == 65536, "Checked-in Batman gameplay package chunk size mismatch.");
-        Expect(checked_in_frontend_file->Mode == "delta-on-read", "Checked-in Batman frontend package is not delta-backed.");
-        Expect(checked_in_frontend_file->Source.Kind == helen::VirtualFileSourceKind::DeltaFile, "Checked-in Batman frontend package source kind mismatch.");
-        Expect(checked_in_frontend_file->GamePath == std::filesystem::path("BmGame/CookedPC/Maps/Frontend/Frontend.umap"), "Checked-in Batman frontend package path mismatch.");
-        Expect(checked_in_frontend_file->Source.Path == std::filesystem::path("assets/deltas/Frontend-main-menu-subtitle-size.hgdelta"), "Checked-in Batman frontend delta path mismatch.");
-        Expect(checked_in_frontend_file->Source.Base.FileSize == 11739909, "Checked-in Batman frontend package base size mismatch.");
-        Expect(checked_in_frontend_file->Source.Base.Sha256 == "05fa5608eeda5c12f964b1fafca121d3db60eef60094fa9bb567d9be5a620a50", "Checked-in Batman frontend package base hash mismatch.");
-        Expect(checked_in_frontend_file->Source.Target.FileSize == 12555168, "Checked-in Batman frontend package target size mismatch.");
-        Expect(checked_in_frontend_file->Source.Target.Sha256 == "7b49ddc634eb18c1dcd61885770030154c9465562b7d2a8be5520c78671d45fb", "Checked-in Batman frontend package target hash mismatch.");
-        Expect(checked_in_frontend_file->Source.ChunkSize == 65536, "Checked-in Batman frontend chunk size mismatch.");
-        Expect(loaded_batman_pack->Build.StateObservers.size() == 1, "Checked-in Batman pack state observer count mismatch.");
-        Expect(loaded_batman_pack->Build.StateObservers[0].ScanStartAddress == 0x2B000000, "Checked-in Batman observer scan start drifted from the investigated hot heap window.");
-        Expect(loaded_batman_pack->Build.StateObservers[0].ScanEndAddress == 0x30000000, "Checked-in Batman observer scan end drifted from the investigated hot heap window.");
+        Expect(checked_in_graphics_frontend_file != nullptr, "Checked-in Batman graphics frontend virtual file was not found.");
+        Expect(checked_in_graphics_frontend_file->Mode == "delta-on-read", "Checked-in Batman graphics frontend package is not delta-backed.");
+        Expect(checked_in_graphics_frontend_file->Source.Kind == helen::VirtualFileSourceKind::DeltaFile, "Checked-in Batman graphics frontend package source kind mismatch.");
+        Expect(checked_in_graphics_frontend_file->GamePath == std::filesystem::path("BmGame/CookedPC/Maps/Frontend/Frontend.umap"), "Checked-in Batman graphics frontend package path mismatch.");
+        Expect(checked_in_graphics_frontend_file->Source.Path == std::filesystem::path("assets/deltas/Frontend-graphics-options.hgdelta"), "Checked-in Batman graphics frontend delta path mismatch.");
+        Expect(checked_in_graphics_frontend_file->Source.Base.FileSize == 2988548, "Checked-in Batman graphics frontend package base size mismatch.");
+        Expect(checked_in_graphics_frontend_file->Source.Base.Sha256 == "271916b888f83374122af0fccc5c685804f4c8286a92a772cd71e4f48a00f2cc", "Checked-in Batman graphics frontend package base hash mismatch.");
+        Expect(checked_in_graphics_frontend_file->Source.Target.FileSize == 12591869, "Checked-in Batman graphics frontend package target size mismatch.");
+        Expect(checked_in_graphics_frontend_file->Source.Target.Sha256 == "a76933144f38c1586bbda88c78c0eff85233e68b6a9b4d02fef7fb6c950e00c5", "Checked-in Batman graphics frontend package target hash mismatch.");
+        Expect(checked_in_graphics_frontend_file->Source.ChunkSize == 65536, "Checked-in Batman graphics frontend chunk size mismatch.");
     }
     catch (...)
     {

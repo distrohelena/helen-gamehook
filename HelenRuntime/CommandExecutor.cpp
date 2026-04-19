@@ -1,3 +1,4 @@
+#include <HelenHook/BatmanGraphicsConfigService.h>
 #include <HelenHook/CommandExecutor.h>
 
 #include <HelenHook/CommandDispatcher.h>
@@ -78,9 +79,13 @@ namespace helen
      * @param dispatcher Registered config dispatcher used by read-config-int steps.
      * @param runtime_values Declared runtime slot store updated by set-live-double steps.
      */
-    CommandExecutor::CommandExecutor(CommandDispatcher& dispatcher, RuntimeValueStore& runtime_values)
+    CommandExecutor::CommandExecutor(
+        CommandDispatcher& dispatcher,
+        RuntimeValueStore& runtime_values,
+        BatmanGraphicsConfigService& graphics_config_service)
         : dispatcher_(dispatcher),
-          runtime_values_(runtime_values)
+          runtime_values_(runtime_values),
+          graphics_config_service_(graphics_config_service)
     {
     }
 
@@ -261,6 +266,26 @@ namespace helen
 
             Log(ToWideString(step.Message));
             return true;
+        }
+
+        if (step.Kind == "load-batman-graphics-draft-into-config")
+        {
+            return graphics_config_service_.LoadIntoDispatcher(dispatcher_);
+        }
+
+        if (step.Kind == "apply-batman-graphics-config")
+        {
+            return graphics_config_service_.ApplyFromDispatcher(dispatcher_);
+        }
+
+        if (step.Kind == "sync-batman-graphics-detail-level")
+        {
+            return graphics_config_service_.SyncDetailLevelFromDispatcher(dispatcher_);
+        }
+
+        if (step.Kind == "sync-batman-graphics-detail-preset")
+        {
+            return graphics_config_service_.ApplySelectedDetailLevelToDispatcher(dispatcher_);
         }
 
         return false;

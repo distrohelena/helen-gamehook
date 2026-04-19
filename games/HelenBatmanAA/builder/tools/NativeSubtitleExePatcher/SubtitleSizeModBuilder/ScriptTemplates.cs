@@ -52,7 +52,8 @@ internal static class ScriptTemplates
        }
        function ReadSubtitleSizeState()
        {
-          return this.NormalizeStoredSubtitleState(flash.external.ExternalInterface.call("Helen_GetInt","ui.subtitleSize"));
+          flash.external.ExternalInterface.call("Helen_Ini_LoadDraft","batmanFrontendUi");
+          return this.NormalizeStoredSubtitleState(flash.external.ExternalInterface.call("Helen_Ini_GetInt","batmanFrontendUi","subtitleSize"));
        }
        function IsBinarySubtitleToggle()
        {
@@ -68,7 +69,7 @@ internal static class ScriptTemplates
        }
        function StoreSubtitleSizeState()
        {
-          flash.external.ExternalInterface.call("Helen_SetInt","ui.subtitleSize",this.State);
+          flash.external.ExternalInterface.call("Helen_Ini_SetInt","batmanFrontendUi","subtitleSize",this.State);
        }
        function ApplySubtitleSizeRuntime()
        {

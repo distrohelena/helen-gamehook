@@ -6,7 +6,7 @@
     Este script:
     1. Detecta qual tela o Batman esta exibindo via recognition CLI
     2. Toma decisoes de navegacao baseadas na tela atual
-    3. Envia inputs de teclado/mouse para navegar nos menus
+    3. Envia inputs de teclado para navegar nos menus
     4. Continua ate detectar o menu Graphics Options
 
     Fluxo de navegacao esperado:
@@ -38,456 +38,490 @@
 #>
 
 param(
-    [Parameter(Mandatory=$false)]
-    [string]$GamePath = "C:\Program Files (x86)\Steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\ShippingPC-BmGame.exe",
+    [Parameter(Mandatory = $false)]
+    [string]$GamePath = 'D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\ShippingPC-BmGame.exe',
 
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
     [switch]$NoLaunch,
 
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
     [int]$MaxSteps = 50,
 
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
     [int]$StepDelayMs = 800,
 
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
     [int]$RecognitionDelayMs = 2000
 )
 
-# Paths
-$RecognitionCliProject = "C:\dev\helenui\plugins\recognition-cli"
-$BatmanAaProject = "C:\dev\helenui\batman-aa.json"
-$OutputDir = "$PSScriptRoot\..\..\artifacts\navigation-screenshots"
-$TempOcrConfigPath = Join-Path $OutputDir "temp-ocr-config.json"
+$ErrorActionPreference = 'Stop'
 
-# Create output directory
+$RecognitionCliProject = 'C:\dev\helenui\plugins\recognition-cli'
+$ScreenshotCliProject = 'C:\dev\helenui\plugins\screenshot-cli'
+$BatmanAaProject = 'C:\dev\helenui\batman-aa.json'
+$OutputDir = Join-Path $PSScriptRoot '..\..\artifacts\navigation-screenshots'
+$TempOcrConfigPath = Join-Path $OutputDir 'temp-ocr-config.json'
+$HelperScriptPath = Join-Path $PSScriptRoot 'BatmanWindowHelpers.ps1'
+
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
 
-# Generate OCR config
-$ocrConfig = @{
-    ocr = @{
-        engines = @(
-            @{ type = "windows_native" }
-        )
-    }
-}
-$ocrConfig | ConvertTo-Json -Depth 4 | Set-Content -Path $TempOcrConfigPath
+. $HelperScriptPath
+Add-Type -AssemblyName System.Windows.Forms
 
-Write-Host "=== Batman Navigation to Graphics Options ===" -ForegroundColor Cyan
-Write-Host "Game: $GamePath" -ForegroundColor Yellow
-Write-Host "NoLaunch: $NoLaunch" -ForegroundColor Yellow
-Write-Host "Max steps: $MaxSteps" -ForegroundColor Yellow
-Write-Host ""
+Write-BatmanRecognitionOcrConfig -OutputPath $TempOcrConfigPath
 
-# Check prerequisites
-if (-not $NoLaunch -and -not (Test-Path $GamePath)) {
-    Write-Host "ERROR: Game executable not found at $GamePath" -ForegroundColor Red
-    exit 1
+function Get-ArtifactLabel {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    $Sanitized = $Value -replace '[^A-Za-z0-9_-]+', '-'
+    return $Sanitized.Trim('-')
 }
 
-if (-not (Test-Path "$RecognitionCliProject\src\RecognitionCli\RecognitionCli.csproj")) {
-    Write-Host "ERROR: Recognition CLI project not found" -ForegroundColor Red
-    exit 1
-}
-
-if (-not (Test-Path $BatmanAaProject)) {
-    Write-Host "ERROR: Batman AA project JSON not found" -ForegroundColor Red
-    exit 1
-}
-
-# Win32 P/Invoke for input simulation
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-
-public class Win32Input {
-    [DllImport("user32.dll")]
-    public static extern bool SetForegroundWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-
-    [DllImport("user32.dll")]
-    public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, IntPtr dwExtraInfo);
-
-    public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
-    public const uint MOUSEEVENTF_LEFTUP = 0x0004;
-}
-"@
-
-# Start the game
-$gameProcess = $null
-if (-not $NoLaunch) {
-    Write-Host "Launching Batman Arkham Asylum..." -ForegroundColor Green
-    $gameProcess = Start-Process -FilePath $GamePath -PassThru
-    Write-Host "Game launched (PID: $($gameProcess.Id))" -ForegroundColor Green
-    Write-Host "Waiting 15 seconds for game to initialize..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 15
-} else {
-    Write-Host "NoLaunch specified - assuming game is already running" -ForegroundColor Yellow
-    Start-Sleep -Seconds 2
-}
-
-# Focus game window
 function Focus-GameWindow {
-    $windowTitle = "Batman"
-    $hwnd = [Win32Input]::FindWindow($null, $windowTitle)
-
-    if ($hwnd -eq [IntPtr]::Zero) {
-        # Try partial match
-        $processes = Get-Process -Name "ShippingPC-BmGame" -ErrorAction SilentlyContinue
-        if ($processes -and $processes.Count -gt 0) {
-            $hwnd = $processes[0].MainWindowHandle
-        }
+    $MainWindow = Get-BatmanMainWindowSnapshot
+    if ($null -eq $MainWindow) {
+        return $false
     }
 
-    if ($hwnd -ne [IntPtr]::Zero) {
-        [Win32Input]::SetForegroundWindow($hwnd)
-        return $true
-    }
-
-    return $false
+    [BatmanWindowNative]::SetForegroundWindow($MainWindow.HandleValue) | Out-Null
+    Start-Sleep -Milliseconds 300
+    return $true
 }
 
-# Send key input
+function Assert-BatmanReady {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+
+    $ArtifactLabel = Get-ArtifactLabel -Value $Label
+    Assert-NoBatmanDialog `
+        -ArtifactsRoot $OutputDir `
+        -Label $ArtifactLabel `
+        -ScreenshotCliProject $ScreenshotCliProject `
+        -RecognitionCliProject $RecognitionCliProject `
+        -BatmanProjectPath $BatmanAaProject `
+        -OcrConfigPath $TempOcrConfigPath
+
+    if (-not (Focus-GameWindow)) {
+        throw "Batman main window not found while handling '$Label'."
+    }
+}
+
 function Send-GameKey {
-    param([string]$key)
+    param(
+        [string]$Key,
+        [string]$Label
+    )
 
-    Focus-GameWindow
-    Start-Sleep -Milliseconds 100
-    [System.Windows.Forms.SendKeys]::SendWait($key)
+    Assert-BatmanReady -Label "before-$Label"
+    [System.Windows.Forms.SendKeys]::SendWait($Key)
+    Start-Sleep -Milliseconds $StepDelayMs
+
+    Assert-NoBatmanDialog `
+        -ArtifactsRoot $OutputDir `
+        -Label (Get-ArtifactLabel -Value "after-$Label") `
+        -ScreenshotCliProject $ScreenshotCliProject `
+        -RecognitionCliProject $RecognitionCliProject `
+        -BatmanProjectPath $BatmanAaProject `
+        -OcrConfigPath $TempOcrConfigPath
 }
 
-# Send mouse click at position
-function Send-Click {
-    param([int]$x, [int]$y)
-
-    Focus-GameWindow
-    Start-Sleep -Milliseconds 100
-
-    # Get window bounds
-    $processes = Get-Process -Name "ShippingPC-BmGame" -ErrorAction SilentlyContinue
-    if ($processes -and $processes.Count -gt 0) {
-        $hwnd = $processes[0].MainWindowHandle
-        if ($hwnd -ne [IntPtr]::Zero) {
-            Add-Type -AssemblyName System.Windows.Forms
-            $rect = New-Object System.Drawing.Rectangle
-            # Use absolute positioning
-            [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($x, $y)
-            Start-Sleep -Milliseconds 50
-            [Win32Input]::mouse_event([Win32Input]::MOUSEEVENTF_LEFTDOWN, 0, 0, 0, [IntPtr]::Zero)
-            Start-Sleep -Milliseconds 50
-            [Win32Input]::mouse_event([Win32Input]::MOUSEEVENTF_LEFTUP, 0, 0, 0, [IntPtr]::Zero)
-            return
-        }
-    }
-
-    # Fallback: just send Enter
-    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-}
-
-# Capture screenshot
 function Capture-Screenshot {
-    param([string]$filename)
+    param(
+        [string]$Filename
+    )
 
-    $screenshotPath = Join-Path $OutputDir $filename
-    Add-Type -AssemblyName System.Windows.Forms
-    $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-    $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
-    $graphics.Dispose()
-    $bitmap.Dispose()
-    return $screenshotPath
+    Assert-BatmanReady -Label "capture-$Filename"
+    $ScreenshotPath = Join-Path $OutputDir $Filename
+    Capture-BatmanMainWindowImage -OutputPath $ScreenshotPath -ScreenshotCliProject $ScreenshotCliProject | Out-Null
+    return $ScreenshotPath
 }
 
-# Run recognition
 function Run-Recognition {
-    param([string]$screenshotPath)
+    param(
+        [string]$ScreenshotPath
+    )
 
-    $output = dotnet run --project "$RecognitionCliProject\src\RecognitionCli\RecognitionCli.csproj" `
-        -- analyze `
-        --project $BatmanAaProject `
-        --image $screenshotPath `
-        --config $TempOcrConfigPath 2>&1
+    try {
+        return Invoke-RecognitionCliAnalyzeImage `
+            -ImagePath $ScreenshotPath `
+            -RecognitionCliProject $RecognitionCliProject `
+            -BatmanProjectPath $BatmanAaProject `
+            -OcrConfigPath $TempOcrConfigPath
+    } catch {
+        Write-Host "Recognition failed for '$ScreenshotPath': $($_.Exception.Message)" -ForegroundColor Yellow
+        return $null
+    }
+}
 
-    if ($LASTEXITCODE -ne 0) {
+function Get-VariableStateValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Recognition,
+        [Parameter(Mandatory = $true)]
+        [string]$VariableName
+    )
+
+    $Variable = @($Recognition.variable_states | Where-Object { $_.variable_name -eq $VariableName }) | Select-Object -First 1
+    if ($null -eq $Variable -or -not $Variable.matched -or [string]::IsNullOrWhiteSpace($Variable.value)) {
         return $null
     }
 
-    return ($output | ConvertFrom-Json)
+    return $Variable.value
 }
 
-# Navigation logic - SIMPLIFIED (no recognition dependency for inputs)
-function Get-NavigationAction {
+function Get-ScreenScore {
     param(
-        [string]$screenName,
-        [string]$highlightedItem,
-        [int]$stepCount,
-        [int]$consecutiveWaits
+        [Parameter(Mandatory = $true)]
+        [object]$Recognition,
+        [Parameter(Mandatory = $true)]
+        [string]$ScreenName
     )
 
-    # If we don't know the screen, use heuristic navigation
-    if ([string]::IsNullOrEmpty($screenName) -or $screenName -eq "Unknown") {
-        # Heuristic: try to progress through menus with Enter/Down
-        if ($stepCount -le 2) {
+    $Screen = @($Recognition.diagnostics.candidate_screen_scores | Where-Object { $_.screen_name -eq $ScreenName }) | Select-Object -First 1
+    if ($null -eq $Screen) {
+        return 0
+    }
+
+    return [double]$Screen.score
+}
+
+function Resolve-DetectedScreenName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Recognition
+    )
+
+    $MatchedScreen = if ($Recognition.screen_match -and $Recognition.screen_match.screen_name) {
+        $Recognition.screen_match.screen_name
+    } else {
+        'Unknown'
+    }
+
+    $GraphicsScore = Get-ScreenScore -Recognition $Recognition -ScreenName 'GraphicsOptions'
+    $AudioScore = Get-ScreenScore -Recognition $Recognition -ScreenName 'AudioOptions'
+    $OptionsScore = Get-ScreenScore -Recognition $Recognition -ScreenName 'Options'
+
+    if ($GraphicsScore -ge 1 -and $GraphicsScore -ge $OptionsScore) {
+        return 'GraphicsOptions'
+    }
+
+    if ($AudioScore -ge 1 -and $AudioScore -ge $OptionsScore) {
+        return 'AudioOptions'
+    }
+
+    return $MatchedScreen
+}
+
+function Get-NavigationAction {
+    param(
+        [string]$ScreenName,
+        [string]$HighlightedItem,
+        [int]$StepCount,
+        [int]$ConsecutiveWaits
+    )
+
+    if ([string]::IsNullOrEmpty($ScreenName) -or $ScreenName -eq 'Unknown') {
+        if ($StepCount -le 2) {
             return @{
-                Action = "PressEnter"
-                Description = "Starting: pressing Enter to get past title/save screens"
+                Action = 'PressEnter'
+                Description = 'Starting: pressing Enter to get past title/save screens'
             }
-        } elseif ($stepCount -le 6) {
+        }
+
+        if ($StepCount -le 6) {
             return @{
-                Action = "PressEnter"
-                Description = "Navigating main menu: pressing Enter to reach Options"
+                Action = 'PressEnter'
+                Description = 'Navigating main menu: pressing Enter to reach Options'
             }
-        } elseif ($stepCount -le 10) {
+        }
+
+        if ($StepCount -le 10) {
             return @{
-                Action = "PressDown"
-                Description = "Looking for Options: pressing Down"
+                Action = 'PressDown'
+                Description = 'Looking for Options: pressing Down'
             }
-        } elseif ($stepCount -le 15) {
+        }
+
+        if ($StepCount -le 15) {
             return @{
-                Action = "PressEnter"
-                Description = "Trying to enter Options menu"
+                Action = 'PressEnter'
+                Description = 'Trying to enter Options menu'
             }
-        } else {
-            return @{
-                Action = "PressDown"
-                Description = "Searching for Graphics option"
-            }
+        }
+
+        return @{
+            Action = 'PressDown'
+            Description = 'Searching for Graphics option'
         }
     }
 
-    switch ($screenName) {
-        "Title" {
-            # Click to start or press Enter
+    switch ($ScreenName) {
+        'Title' {
             return @{
-                Action = "PressEnter"
-                Description = "Pressing Enter to start from title screen"
+                Action = 'PressEnter'
+                Description = 'Pressing Enter to start from title screen'
             }
         }
-        "Saves" {
-            # Select first save or press Enter
+        'Saves' {
             return @{
-                Action = "PressEnter"
-                Description = "Selecting save to reach main menu"
+                Action = 'PressEnter'
+                Description = 'Selecting save to reach main menu'
             }
         }
-        "Loading" {
-            # Wait for loading to complete
+        'Loading' {
             return @{
-                Action = "Wait"
-                Description = "Waiting for loading to complete"
+                Action = 'Wait'
+                Description = 'Waiting for loading to complete'
             }
         }
-        "Main" {
-            # Navigate to Options - need to press DOWN multiple times
-            # Typical main menu: Continue/Challenge/DLC/Bios/Trophies/Options/Exit
-            # Options is usually near the bottom
-            if ($highlightedItem -and $highlightedItem -ne "Options") {
+        'Main' {
+            if ($HighlightedItem -and $HighlightedItem -ne 'Options') {
                 return @{
-                    Action = "PressDown"
-                    Description = "Navigating down from '$highlightedItem' towards 'Options'"
-                }
-            } else {
-                return @{
-                    Action = "PressEnter"
-                    Description = "Entering Options menu"
+                    Action = 'PressDown'
+                    Description = "Navigating down from '$HighlightedItem' towards 'Options'"
                 }
             }
+
+            return @{
+                Action = 'PressEnter'
+                Description = 'Entering Options menu'
+            }
         }
-        "Options" {
-            # Navigate to Graphics
-            if ($highlightedItem -and $highlightedItem -ne "Graphics") {
+        'Options' {
+            if ($HighlightedItem -eq 'Audio Options') {
                 return @{
-                    Action = "PressDown"
-                    Description = "Navigating down from '$highlightedItem' towards 'Graphics'"
+                    Action = 'Failure'
+                    Description = 'Graphics option is absent. Options menu advanced from Game Options to Audio Options instead.'
                 }
-            } else {
+            }
+
+            if ($HighlightedItem -and $HighlightedItem -ne 'Graphics') {
                 return @{
-                    Action = "PressEnter"
-                    Description = "Entering Graphics menu"
+                    Action = 'PressDown'
+                    Description = "Navigating down from '$HighlightedItem' towards 'Graphics'"
                 }
             }
-        }
-        "GraphicsOptions" {
+
             return @{
-                Action = "Success"
-                Description = "Graphics Options menu detected!"
+                Action = 'PressEnter'
+                Description = 'Entering Graphics menu'
             }
         }
-        "AudioOptions" {
-            # Went too far, go back up
+        'GraphicsOptions' {
             return @{
-                Action = "PressUp"
-                Description = "Went past Graphics, going back up to Options"
+                Action = 'Success'
+                Description = 'Graphics Options menu detected!'
             }
         }
-        "PauseMenu" {
-            # Need to resume first
+        'CrashDialog' {
             return @{
-                Action = "PressEscape"
-                Description = "Exiting pause menu"
+                Action = 'Failure'
+                Description = 'Crash dialog detected'
             }
         }
-        "Game" {
-            # Pause the game first
+        'AudioOptions' {
             return @{
-                Action = "PressEscape"
-                Description = "Pausing the game"
+                Action = 'Failure'
+                Description = 'Expected Graphics Options but reached Audio Options instead.'
             }
         }
-        "CutScene" {
+        'PauseMenu' {
             return @{
-                Action = "Wait"
-                Description = "Waiting for cutscene to end"
+                Action = 'PressEscape'
+                Description = 'Exiting pause menu'
+            }
+        }
+        'Game' {
+            return @{
+                Action = 'PressEscape'
+                Description = 'Pausing the game'
+            }
+        }
+        'CutScene' {
+            return @{
+                Action = 'Wait'
+                Description = 'Waiting for cutscene to end'
             }
         }
         default {
-            # Unknown screen, try pressing Enter
             return @{
-                Action = "PressEnter"
-                Description = "Unknown screen '$screenName', pressing Enter"
+                Action = 'PressEnter'
+                Description = "Unknown screen '$ScreenName', pressing Enter"
             }
         }
     }
 }
 
-# Main navigation loop
-$stepCount = 0
-$success = $false
-$lastScreenName = ""
-$consecutiveWaits = 0
-$consecutiveSameScreen = 0
+$GameProcess = $null
+$StepCount = 0
+$Success = $false
+$LastScreenName = ''
+$ConsecutiveWaits = 0
+$ConsecutiveSameScreen = 0
 
-Write-Host ""
-Write-Host "=== Starting Navigation Loop ===" -ForegroundColor Cyan
-Write-Host ""
+try {
+    Write-Host '=== Batman Navigation to Graphics Options ===' -ForegroundColor Cyan
+    Write-Host "Game: $GamePath" -ForegroundColor Yellow
+    Write-Host "NoLaunch: $NoLaunch" -ForegroundColor Yellow
+    Write-Host "Max steps: $MaxSteps" -ForegroundColor Yellow
+    Write-Host ''
 
-while ($stepCount -lt $MaxSteps -and -not $success) {
-    $stepCount++
-
-    # Capture screenshot
-    $screenshotPath = Capture-Screenshot -filename "nav_step_$(('{0:D3}' -f $stepCount)).png"
-    Write-Host "[$stepCount/$MaxSteps] " -NoNewline
-
-    # Run recognition
-    $result = Run-Recognition -screenshotPath $screenshotPath
-
-    if (-not $result) {
-        Write-Host "Recognition failed, waiting..." -ForegroundColor Red
-        Start-Sleep -Milliseconds ($RecognitionDelayMs * 2)
-        $consecutiveWaits++
-        continue
+    if (-not $NoLaunch -and -not (Test-Path $GamePath)) {
+        Write-Host "ERROR: Game executable not found at $GamePath" -ForegroundColor Red
+        exit 1
     }
 
-    $screenMatch = $result.screen_match
-    $currentScreen = if ($screenMatch -and $screenMatch.screen_name) { $screenMatch.screen_name } else { "Unknown" }
-
-    # Get highlighted item
-    $highlightedItem = $null
-    $mainMenuItem = $result.variable_states | Where-Object { $_.variable_name -eq "MainMenuItem" }
-    if ($mainMenuItem -and $mainMenuItem.value -and $mainMenuItem.matched) {
-        $highlightedItem = $mainMenuItem.value
-    }
-
-    # Display state
-    if ($currentScreen -ne $lastScreenName) {
-        Write-Host "Screen: $currentScreen" -ForegroundColor Green
-        if ($highlightedItem) {
-            Write-Host "           Highlighted: $highlightedItem" -ForegroundColor Yellow
-        }
+    if (-not $NoLaunch) {
+        Write-Host 'Launching Batman Arkham Asylum...' -ForegroundColor Green
+        $GameProcess = Start-Process -FilePath $GamePath -PassThru
+        Write-Host "Game launched (PID: $($GameProcess.Id))" -ForegroundColor Green
+        Write-Host 'Waiting 15 seconds for game to initialize...' -ForegroundColor Yellow
+        Start-Sleep -Seconds 15
     } else {
-        Write-Host "Still: $currentScreen" -ForegroundColor DarkGray
-        $consecutiveSameScreen++
+        Write-Host 'NoLaunch specified - assuming game is already running' -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
     }
 
-    $lastScreenName = $currentScreen
+    Assert-BatmanReady -Label 'post-launch'
 
-    # Get navigation action
-    $navAction = Get-NavigationAction -screenName $currentScreen -highlightedItem $highlightedItem -stepCount $stepCount -consecutiveWaits $consecutiveWaits
+    Write-Host ''
+    Write-Host '=== Starting Navigation Loop ===' -ForegroundColor Cyan
+    Write-Host ''
 
-    switch ($navAction.Action) {
-        "Success" {
-            Write-Host "           >> $($navAction.Description)" -ForegroundColor Cyan
-            $success = $true
-            break
-        }
-        "Wait" {
-            Write-Host "           >> $($navAction.Description)" -ForegroundColor Yellow
+    while ($StepCount -lt $MaxSteps -and -not $Success) {
+        $StepCount++
+        $ScreenshotPath = Capture-Screenshot -Filename "nav_step_$(('{0:D3}' -f $StepCount)).png"
+        Write-Host "[$StepCount/$MaxSteps] " -NoNewline
+
+        $Result = Run-Recognition -ScreenshotPath $ScreenshotPath
+        if ($null -eq $Result) {
+            Write-Host 'Recognition failed, waiting...' -ForegroundColor Red
             Start-Sleep -Milliseconds ($RecognitionDelayMs * 2)
-            $consecutiveWaits++
-            if ($consecutiveWaits -gt 10) {
-                Write-Host "           >> Too many waits, pressing Enter to progress" -ForegroundColor Yellow
-                Send-GameKey "{ENTER}"
+            $ConsecutiveWaits++
+            continue
+        }
+
+        $CurrentScreen = Resolve-DetectedScreenName -Recognition $Result
+
+        $HighlightedItem = $null
+        if ($CurrentScreen -eq 'Main') {
+            $HighlightedItem = Get-VariableStateValue -Recognition $Result -VariableName 'MainMenuItem'
+        } elseif ($CurrentScreen -eq 'Options') {
+            $HighlightedItem = Get-VariableStateValue -Recognition $Result -VariableName 'OptionsMenuItem'
+        }
+
+        if ($CurrentScreen -ne $LastScreenName) {
+            Write-Host "Screen: $CurrentScreen" -ForegroundColor Green
+            if ($HighlightedItem) {
+                Write-Host "           Highlighted: $HighlightedItem" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "Still: $CurrentScreen" -ForegroundColor DarkGray
+            $ConsecutiveSameScreen++
+        }
+
+        $LastScreenName = $CurrentScreen
+        $NavigationAction = Get-NavigationAction `
+            -ScreenName $CurrentScreen `
+            -HighlightedItem $HighlightedItem `
+            -StepCount $StepCount `
+            -ConsecutiveWaits $ConsecutiveWaits
+
+        switch ($NavigationAction.Action) {
+            'Success' {
+                Write-Host "           >> $($NavigationAction.Description)" -ForegroundColor Cyan
+                $Success = $true
+                break
+            }
+            'Failure' {
+                throw $NavigationAction.Description
+            }
+            'Wait' {
+                Write-Host "           >> $($NavigationAction.Description)" -ForegroundColor Yellow
+                Start-Sleep -Milliseconds ($RecognitionDelayMs * 2)
+                $ConsecutiveWaits++
+                if ($ConsecutiveWaits -gt 10) {
+                    Write-Host '           >> Too many waits, pressing Enter to progress' -ForegroundColor Yellow
+                    Send-GameKey -Key '{ENTER}' -Label 'auto-progress-enter'
+                    Start-Sleep -Milliseconds $RecognitionDelayMs
+                    $ConsecutiveWaits = 0
+                }
+            }
+            'PressSpace' {
+                Write-Host "           >> $($NavigationAction.Description)" -ForegroundColor White
+                Send-GameKey -Key ' ' -Label 'recognition-space'
                 Start-Sleep -Milliseconds $RecognitionDelayMs
-                $consecutiveWaits = 0
+                $ConsecutiveWaits = 0
+                $ConsecutiveSameScreen = 0
+            }
+            'PressEnter' {
+                Write-Host "           >> $($NavigationAction.Description)" -ForegroundColor White
+                Send-GameKey -Key '{ENTER}' -Label 'recognition-enter'
+                Start-Sleep -Milliseconds $RecognitionDelayMs
+                $ConsecutiveWaits = 0
+                $ConsecutiveSameScreen = 0
+            }
+            'PressDown' {
+                Write-Host "           >> $($NavigationAction.Description)" -ForegroundColor White
+                Send-GameKey -Key '{DOWN}' -Label 'recognition-down-1'
+                Start-Sleep -Milliseconds $StepDelayMs
+                Send-GameKey -Key '{DOWN}' -Label 'recognition-down-2'
+                Start-Sleep -Milliseconds $RecognitionDelayMs
+                $ConsecutiveWaits = 0
+                $ConsecutiveSameScreen = 0
+            }
+            'PressUp' {
+                Write-Host "           >> $($NavigationAction.Description)" -ForegroundColor White
+                Send-GameKey -Key '{UP}' -Label 'recognition-up'
+                Start-Sleep -Milliseconds $RecognitionDelayMs
+                $ConsecutiveWaits = 0
+                $ConsecutiveSameScreen = 0
+            }
+            'PressEscape' {
+                Write-Host "           >> $($NavigationAction.Description)" -ForegroundColor White
+                Send-GameKey -Key '{ESC}' -Label 'recognition-escape'
+                Start-Sleep -Milliseconds $RecognitionDelayMs
+                $ConsecutiveWaits = 0
+                $ConsecutiveSameScreen = 0
             }
         }
-        "PressEnter" {
-            Write-Host "           >> $($navAction.Description)" -ForegroundColor White
-            Send-GameKey "{ENTER}"
-            Start-Sleep -Milliseconds $RecognitionDelayMs
-            $consecutiveWaits = 0
-            $consecutiveSameScreen = 0
-        }
-        "PressDown" {
-            Write-Host "           >> $($navAction.Description)" -ForegroundColor White
-            Send-GameKey "{DOWN}"
-            Start-Sleep -Milliseconds $StepDelayMs
-            Send-GameKey "{DOWN}"
-            Start-Sleep -Milliseconds $RecognitionDelayMs
-            $consecutiveWaits = 0
-            $consecutiveSameScreen = 0
-        }
-        "PressUp" {
-            Write-Host "           >> $($navAction.Description)" -ForegroundColor White
-            Send-GameKey "{UP}"
-            Start-Sleep -Milliseconds $RecognitionDelayMs
-            $consecutiveWaits = 0
-            $consecutiveSameScreen = 0
-        }
-        "PressEscape" {
-            Write-Host "           >> $($navAction.Description)" -ForegroundColor White
-            Send-GameKey "{ESC}"
-            Start-Sleep -Milliseconds $RecognitionDelayMs
-            $consecutiveWaits = 0
-            $consecutiveSameScreen = 0
-        }
+    }
+
+    Write-Host ''
+    Write-Host '=== Navigation Summary ===' -ForegroundColor Cyan
+    Write-Host "Total steps: $StepCount" -ForegroundColor White
+    Write-Host "Reached Graphics Options: $Success" -ForegroundColor White
+    Write-Host "Screenshots saved to: $OutputDir" -ForegroundColor White
+
+    if ($Success) {
+        Write-Host ''
+        Write-Host '========================================' -ForegroundColor Cyan
+        Write-Host '  NAVIGATION SUCCESSFUL!' -ForegroundColor Cyan
+        Write-Host '  Graphics Options menu reached!' -ForegroundColor Cyan
+        Write-Host '========================================' -ForegroundColor Cyan
+    } else {
+        Write-Host ''
+        Write-Host "WARNING: Did not reach Graphics Options in $MaxSteps steps" -ForegroundColor Red
+        Write-Host "Check screenshots in $OutputDir to debug" -ForegroundColor Yellow
+    }
+
+    if ($GameProcess -and -not $GameProcess.HasExited) {
+        Write-Host ''
+        Write-Host "NOTE: Game is still running (PID: $($GameProcess.Id))" -ForegroundColor Yellow
+    }
+
+    Write-Host ''
+    Write-Host 'Done!' -ForegroundColor Green
+}
+finally {
+    if (Test-Path $TempOcrConfigPath) {
+        Remove-Item $TempOcrConfigPath -Force -ErrorAction SilentlyContinue
     }
 }
-
-# Summary
-Write-Host ""
-Write-Host "=== Navigation Summary ===" -ForegroundColor Cyan
-Write-Host "Total steps: $stepCount" -ForegroundColor White
-Write-Host "Reached Graphics Options: $success" -ForegroundColor White
-Write-Host "Screenshots saved to: $OutputDir" -ForegroundColor White
-
-if ($success) {
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  NAVIGATION SUCCESSFUL!" -ForegroundColor Cyan
-    Write-Host "  Graphics Options menu reached!" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-} else {
-    Write-Host ""
-    Write-Host "WARNING: Did not reach Graphics Options in $MaxSteps steps" -ForegroundColor Red
-    Write-Host "Check screenshots in $OutputDir to debug" -ForegroundColor Yellow
-}
-
-# Clean up
-if (Test-Path $TempOcrConfigPath) {
-    Remove-Item $TempOcrConfigPath -Force -ErrorAction SilentlyContinue
-}
-
-if ($gameProcess -and -not $gameProcess.HasExited) {
-    Write-Host ""
-    Write-Host "NOTE: Game is still running (PID: $($gameProcess.Id))" -ForegroundColor Yellow
-}
-
-Write-Host ""
-Write-Host "Done!" -ForegroundColor Green

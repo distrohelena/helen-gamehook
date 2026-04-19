@@ -1,5 +1,6 @@
 param(
-    [string]$BatmanRoot
+    [string]$BatmanRoot,
+    [string]$BuilderRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,7 +11,14 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
     $BatmanRoot = (Resolve-Path $BatmanRoot).Path
 }
 
-$GeneratedRoot = Join-Path $BatmanRoot 'builder\generated'
+if ([string]::IsNullOrWhiteSpace($BuilderRoot)) {
+    $BuilderRoot = Join-Path $BatmanRoot 'builder'
+} elseif (-not [System.IO.Path]::IsPathRooted($BuilderRoot)) {
+    $BuilderRoot = Join-Path $BatmanRoot $BuilderRoot
+}
+$BuilderRoot = [System.IO.Path]::GetFullPath($BuilderRoot)
+
+$GeneratedRoot = Join-Path $BuilderRoot 'generated'
 $PauseXmlPath = Join-Path $GeneratedRoot 'pause-runtime-scale\_build\Pause-runtime-scale.xml'
 $PauseAudioFrame1ScriptPath = Join-Path $GeneratedRoot 'pause-runtime-scale\_build\pause-scripts\DefineSprite_394_ScreenOptionsAudio\frame_1\DoAction.as'
 

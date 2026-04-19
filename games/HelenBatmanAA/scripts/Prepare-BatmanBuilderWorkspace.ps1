@@ -11,23 +11,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-
-function Resolve-OptionalBuilderRoot {
-    param(
-        [string]$BatmanRootPath,
-        [string]$BuilderRootPath
-    )
-
-    if ([string]::IsNullOrWhiteSpace($BuilderRootPath)) {
-        return [System.IO.Path]::GetFullPath((Join-Path $BatmanRootPath 'builder'))
-    }
-
-    if ([System.IO.Path]::IsPathRooted($BuilderRootPath)) {
-        return [System.IO.Path]::GetFullPath($BuilderRootPath)
-    }
-
-    return [System.IO.Path]::GetFullPath((Join-Path $BatmanRootPath $BuilderRootPath))
-}
+$HelperScriptPath = Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1'
+. $HelperScriptPath
 
 function Invoke-CheckedCommand {
     param(
@@ -73,6 +58,10 @@ $BuilderRoot = Resolve-OptionalBuilderRoot -BatmanRootPath $BatmanRoot -BuilderR
 $BasePackagePath = (Resolve-Path $BasePackagePath).Path
 $FrontendBasePackagePath = (Resolve-Path $FrontendBasePackagePath).Path
 $FfdecCliPath = (Resolve-Path $FfdecCliPath).Path
+
+Assert-UnrealPackageIsUnpacked -Path $BasePackagePath -Context 'Prepare-BatmanBuilderWorkspace gameplay base input' | Out-Null
+Assert-UnrealPackageIsUnpacked -Path $FrontendBasePackagePath -Context 'Prepare-BatmanBuilderWorkspace frontend base input' | Out-Null
+
 $SourceBuilderRoot = Join-Path $BatmanRoot 'builder'
 $ExtractedRoot = Join-Path $BuilderRoot 'extracted'
 $ToolRoot = Join-Path $SourceBuilderRoot 'tools\NativeSubtitleExePatcher'

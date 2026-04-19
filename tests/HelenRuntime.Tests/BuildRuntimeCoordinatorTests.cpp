@@ -1,3 +1,4 @@
+#include <HelenHook/BatmanGraphicsConfigService.h>
 #include <HelenHook/BuildRuntimeCoordinator.h>
 #include <HelenHook/CommandDefinition.h>
 #include <HelenHook/CommandDispatcher.h>
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <stdexcept>
 
 namespace
@@ -181,6 +183,20 @@ namespace
         definition.Mappings.push_back(helen::MemoryStateObserverMapEntryDefinition{ .Match = 4103, .Value = 2 });
         return definition;
     }
+
+    /**
+     * @brief Builds a unique temporary `BmEngine.ini` path for the current test process.
+     * @return Absolute temporary path reserved for the current test run.
+     */
+    std::filesystem::path CreateTemporaryBatmanGraphicsIniPath()
+    {
+        const DWORD process_id = GetCurrentProcessId();
+        return
+            std::filesystem::temp_directory_path() /
+            "HelenRuntimeTests" /
+            ("runtime-coordinator-" + std::to_string(process_id)) /
+            "BmEngine.ini";
+    }
 }
 
 /**
@@ -205,7 +221,9 @@ void RunBuildRuntimeCoordinatorTests()
     helen::RuntimeValueStore runtime_values;
     Expect(runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the subtitle scale runtime slot.");
 
-    helen::CommandExecutor executor(dispatcher, runtime_values);
+    const std::filesystem::path unused_batman_ini_path = CreateTemporaryBatmanGraphicsIniPath();
+    helen::BatmanGraphicsConfigService graphics_config_service(unused_batman_ini_path);
+    helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
     Expect(executor.RegisterCommand(CreateApplySubtitleSizeCommand("applySubtitleSize")), "Failed to register applySubtitleSize.");
     Expect(executor.RegisterCommand(CreateApplySavedSubtitleSizeCommand()), "Failed to register applySavedSubtitleSize.");
 

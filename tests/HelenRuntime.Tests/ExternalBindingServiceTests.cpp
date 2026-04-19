@@ -1,3 +1,4 @@
+#include <HelenHook/BatmanGraphicsConfigService.h>
 #include <HelenHook/CommandDefinition.h>
 #include <HelenHook/CommandDispatcher.h>
 #include <HelenHook/CommandExecutor.h>
@@ -6,7 +7,9 @@
 #include <HelenHook/ExternalBindingService.h>
 #include <HelenHook/RuntimeValueStore.h>
 
+#include <filesystem>
 #include <stdexcept>
+#include <windows.h>
 
 namespace
 {
@@ -134,6 +137,20 @@ namespace
         });
         return command;
     }
+
+    /**
+     * @brief Builds a unique temporary `BmEngine.ini` path for the current test process.
+     * @return Absolute temporary path reserved for the current test run.
+     */
+    std::filesystem::path CreateTemporaryBatmanGraphicsIniPath()
+    {
+        const DWORD process_id = GetCurrentProcessId();
+        return
+            std::filesystem::temp_directory_path() /
+            "HelenRuntimeTests" /
+            ("external-bindings-" + std::to_string(process_id)) /
+            "BmEngine.ini";
+    }
 }
 
 /**
@@ -148,7 +165,9 @@ void RunExternalBindingServiceTests()
     helen::RuntimeValueStore runtime_values;
     Expect(runtime_values.RegisterSlot(CreatePrimarySubtitleScaleSlot()), "Failed to register the primary runtime slot.");
     Expect(runtime_values.RegisterSlot(CreateAlternateSubtitleScaleSlot()), "Failed to register the alternate runtime slot.");
-    helen::CommandExecutor executor(dispatcher, runtime_values);
+    const std::filesystem::path unused_batman_ini_path = CreateTemporaryBatmanGraphicsIniPath();
+    helen::BatmanGraphicsConfigService graphics_config_service(unused_batman_ini_path);
+    helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
     Expect(executor.RegisterCommand(CreateApplySubtitleSizeCommand()), "Failed to register the primary subtitle-size command.");
     Expect(executor.RegisterCommand(CreateApplyAlternateSubtitleSizeCommand()), "Failed to register the alternate subtitle-size command.");
     Expect(executor.RegisterCommand(CreateFailingCommand()), "Failed to register the failing transaction command.");

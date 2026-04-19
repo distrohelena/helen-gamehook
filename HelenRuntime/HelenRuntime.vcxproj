@@ -71,6 +71,7 @@
     <Lib />
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="BatmanGraphicsConfigService.cpp" />
     <ClCompile Include="BuildRuntimeCoordinator.cpp" />
     <ClCompile Include="BuildHookInstaller.cpp" />
     <ClCompile Include="CommandDispatcher.cpp" />
@@ -101,6 +102,7 @@
     <ClCompile Include="VirtualFileService.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\include\HelenHook\BatmanGraphicsConfigService.h" />
     <ClInclude Include="..\include\HelenHook\BuildRuntimeCoordinator.h" />
     <ClInclude Include="..\include\HelenHook\BuildHookInstaller.h" />
     <ClInclude Include="..\include\HelenHook\BuildDefinition.h" />

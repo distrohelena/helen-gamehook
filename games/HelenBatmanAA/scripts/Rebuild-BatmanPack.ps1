@@ -5,18 +5,16 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$HelperScriptPath = Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1'
+. $HelperScriptPath
 
 if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
     $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 } else {
     $BatmanRoot = (Resolve-Path $BatmanRoot).Path
 }
-if ([string]::IsNullOrWhiteSpace($BuilderRoot)) {
-    $BuilderRoot = Join-Path $BatmanRoot 'builder'
-} elseif (-not [System.IO.Path]::IsPathRooted($BuilderRoot)) {
-    $BuilderRoot = Join-Path $BatmanRoot $BuilderRoot
-}
-$BuilderRoot = [System.IO.Path]::GetFullPath($BuilderRoot)
+
+$BuilderRoot = Resolve-OptionalBuilderRoot -BatmanRootPath $BatmanRoot -BuilderRootPath $BuilderRoot
 $SourceBuilderRoot = Join-Path $BatmanRoot 'builder'
 $ExtractedRoot = Join-Path $BuilderRoot 'extracted'
 $GeneratedRoot = Join-Path $BuilderRoot 'generated'
@@ -25,6 +23,7 @@ $NativeSubtitleExePatcherProjectPath = Join-Path $ToolRoot 'NativeSubtitleExePat
 $SubtitleSizeModBuilderProjectPath = Join-Path $ToolRoot 'SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj'
 $BmGameGfxPatcherProjectPath = Join-Path $ToolRoot 'BmGameGfxPatcher\BmGameGfxPatcher.csproj'
 $PackBuildRoot = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles\builds\steam-goty-1.0'
+$PackJsonPath = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles\pack.json'
 $BuildAssetsRoot = Join-Path $GeneratedRoot 'pause-runtime-scale'
 $FrontendBuildRoot = Join-Path $GeneratedRoot 'main-menu-audio'
 $FrontendPackBuildVersion = 'v1.1.13'
@@ -73,6 +72,9 @@ if ($missingBuilderWorkspacePaths.Count -gt 0) {
     throw "Batman builder workspace is incomplete. Run `"$PrepareBuilderWorkspaceScriptPath`" with trusted BmGame.u, trusted Frontend.umap, and FFDec before rebuilding.$([Environment]::NewLine)Missing paths:$([Environment]::NewLine)$missingBuilderWorkspaceText"
 }
 
+Assert-UnrealPackageIsUnpacked -Path $BasePackagePath -Context 'Rebuild-BatmanPack gameplay base' | Out-Null
+Assert-UnrealPackageIsUnpacked -Path $FrontendBasePackagePath -Context 'Rebuild-BatmanPack frontend base' | Out-Null
+
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GeneratedGameplayPackagePath) | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GeneratedFrontendPackagePath) | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GameplayDeltaPath) | Out-Null
@@ -103,7 +105,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Pause runtime scale asset build failed."
 }
 
-& powershell -ExecutionPolicy Bypass -File $PauseAudioLayoutVerifierPath -BatmanRoot $BatmanRoot
+& powershell -ExecutionPolicy Bypass -File $PauseAudioLayoutVerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot
 if ($LASTEXITCODE -ne 0) {
     throw "Pause audio layout verification failed."
 }
@@ -155,7 +157,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Main-menu audio asset build failed."
 }
 
-& powershell -ExecutionPolicy Bypass -File $FrontendAudioLayoutVerifierPath -BatmanRoot $BatmanRoot
+& powershell -ExecutionPolicy Bypass -File $FrontendAudioLayoutVerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot
 if ($LASTEXITCODE -ne 0) {
     throw "Main-menu audio layout verification failed."
 }
@@ -219,7 +221,77 @@ $filesManifest = @{
     )
 }
 
+$packManifest = [ordered]@{
+    schemaVersion = 1
+    id = 'batman-aa-subtitles'
+    name = 'Batman Arkham Asylum Gameplay Subtitle Slice'
+    description = 'Gameplay-only Helen sample pack for Batman subtitle experiments.'
+    targets = @(
+        @{
+            gameId = 'batman-arkham-asylum'
+            executables = @('ShippingPC-BmGame.exe')
+        }
+    )
+    config = @(
+        @{
+            key = 'ui.subtitleSize'
+            type = 'int'
+            defaultValue = 1
+        }
+    )
+    features = @(
+        @{
+            id = 'subtitleSize'
+            name = 'Subtitle Size'
+            kind = 'enum'
+            configKey = 'ui.subtitleSize'
+            defaultValue = 1
+        }
+    )
+    iniFiles = @(
+        @{
+            id = 'user-engine'
+            root = 'documents'
+            path = 'Square Enix/Batman Arkham Asylum GOTY/BmGame/Config/BmEngine.ini'
+        }
+    )
+    iniStores = @(
+        @{
+            id = 'batmanFrontendUi'
+            files = @('user-engine')
+            keys = @('subtitleSize')
+        }
+    )
+    iniKeys = @(
+        @{
+            id = 'subtitleSize'
+            file = 'user-engine'
+            section = 'Engine.HUD'
+            key = 'ConsoleFontSize'
+            type = 'choice-map'
+            writable = $true
+            ownership = 'hijacked-native-key'
+            valueMap = @(
+                @{
+                    match = 0
+                    encodedValue = 5
+                },
+                @{
+                    match = 1
+                    encodedValue = 6
+                },
+                @{
+                    match = 2
+                    encodedValue = 7
+                }
+            )
+        }
+    )
+    builds = @('steam-goty-1.0')
+}
+
 $filesManifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $FilesJsonPath
+$packManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $PackJsonPath
 
 & dotnet run --project $NativeSubtitleExePatcherProjectPath -c $Configuration -- `
     export-global-text-scale-blob `
@@ -229,7 +301,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Global text scale blob export failed."
 }
 
-& powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-BatmanPauseRuntimeScaleBuilder.ps1') -BatmanRoot $BatmanRoot
+& powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-BatmanPauseRuntimeScaleBuilder.ps1') -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot
 if ($LASTEXITCODE -ne 0) {
     throw "Pause runtime scale verification failed."
 }

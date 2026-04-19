@@ -5,6 +5,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$HelperScriptPath = Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1'
+. $HelperScriptPath
 
 function Write-Utf8TextFile {
     param(
@@ -30,11 +32,9 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
 
 if ([string]::IsNullOrWhiteSpace($BuilderRoot)) {
     $BuilderRoot = Join-Path $BatmanRoot 'builder'
-} elseif (-not [System.IO.Path]::IsPathRooted($BuilderRoot)) {
-    $BuilderRoot = Join-Path $BatmanRoot $BuilderRoot
 }
 
-$BuilderRoot = [System.IO.Path]::GetFullPath($BuilderRoot)
+$BuilderRoot = Resolve-OptionalBuilderRoot -BatmanRootPath $BatmanRoot -BuilderRootPath $BuilderRoot
 $SourceBuilderRoot = Join-Path $BatmanRoot 'builder'
 $GeneratedRoot = Join-Path $BuilderRoot 'generated'
 $ExperimentRoot = Join-Path $GeneratedRoot 'graphics-options-experiment'
@@ -53,7 +53,8 @@ $BuildMatchScriptPath = Join-Path $PSScriptRoot 'Get-BatmanSteamBuildMatch.ps1'
 $FfdecPath = Join-Path $SourceBuilderRoot 'extracted\ffdec\ffdec-cli.exe'
 $SubtitleSizeModBuilderProjectPath = Join-Path $SourceBuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj'
 $BmGameGfxPatcherProjectPath = Join-Path $SourceBuilderRoot 'tools\NativeSubtitleExePatcher\BmGameGfxPatcher\BmGameGfxPatcher.csproj'
-$RetailFrontendBasePackagePath = Join-Path $SourceBuilderRoot 'extracted\frontend\frontend-umap-unpacked\Frontend.umap'
+$FrontendBasePackagePath = Join-Path $SourceBuilderRoot 'extracted\frontend\frontend-umap-unpacked\Frontend.umap'
+$RetailFrontendBasePackagePath = Join-Path $BuilderRoot 'extracted\frontend-retail\Frontend.umap'
 $BuildHgdeltaScriptPath = Join-Path $PSScriptRoot 'Build-Hgdelta.ps1'
 
 foreach ($RequiredPath in @(
@@ -61,6 +62,7 @@ foreach ($RequiredPath in @(
     $SubtitleSizeModBuilderProjectPath,
     $BmGameGfxPatcherProjectPath,
     $BuildMatchScriptPath,
+    $FrontendBasePackagePath,
     $RetailFrontendBasePackagePath,
     (Join-Path $SourceBuilderRoot 'extracted\frontend\mainv2\frontend-mainv2.xml'),
     (Join-Path $SourceBuilderRoot 'extracted\frontend\mainv2\frontend-mainv2.gfx'),
@@ -70,6 +72,8 @@ foreach ($RequiredPath in @(
         throw "Batman graphics-options build input was not found: $RequiredPath"
     }
 }
+
+Assert-UnrealPackageIsUnpacked -Path $FrontendBasePackagePath -Context 'Rebuild-BatmanGraphicsOptionsExperiment frontend base' | Out-Null
 
 if (Test-Path -LiteralPath $ExperimentRoot) {
     Remove-Item -LiteralPath $ExperimentRoot -Recurse -Force
@@ -103,7 +107,7 @@ if ($LASTEXITCODE -ne 0) {
 
 & dotnet run --project $BmGameGfxPatcherProjectPath -c $Configuration -- `
     patch-mainv2-graphics-options `
-    --package $RetailFrontendBasePackagePath `
+    --package $FrontendBasePackagePath `
     --output $GeneratedFrontendPackagePath `
     --prototype-gfx $PrototypeGfxPath
 if ($LASTEXITCODE -ne 0) {
@@ -184,68 +188,15 @@ $BuildJsonObject = [ordered]@{
         fileSize = $BuildMatch.FileSize
         sha256 = $BuildMatch.Sha256
     }
-    startupCommands = @(
-        'loadBatmanGraphicsDraftIntoConfig'
-    )
+    startupCommands = @()
 }
 
 $BindingsObject = [ordered]@{
-    bindings = @(
-        [ordered]@{ id = 'graphicsGetFullscreen'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'fullscreen' },
-        [ordered]@{ id = 'graphicsGetResolutionWidth'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'resolutionWidth' },
-        [ordered]@{ id = 'graphicsGetResolutionHeight'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'resolutionHeight' },
-        [ordered]@{ id = 'graphicsGetVsync'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'vsync' },
-        [ordered]@{ id = 'graphicsGetMsaa'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'msaa' },
-        [ordered]@{ id = 'graphicsGetDetailLevel'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'detailLevel' },
-        [ordered]@{ id = 'graphicsGetBloom'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'bloom' },
-        [ordered]@{ id = 'graphicsGetDynamicShadows'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'dynamicShadows' },
-        [ordered]@{ id = 'graphicsGetMotionBlur'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'motionBlur' },
-        [ordered]@{ id = 'graphicsGetDistortion'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'distortion' },
-        [ordered]@{ id = 'graphicsGetFogVolumes'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'fogVolumes' },
-        [ordered]@{ id = 'graphicsGetSphericalHarmonicLighting'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'sphericalHarmonicLighting' },
-        [ordered]@{ id = 'graphicsGetAmbientOcclusion'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'ambientOcclusion' },
-        [ordered]@{ id = 'graphicsGetPhysx'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'physx' },
-        [ordered]@{ id = 'graphicsGetStereo'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'stereo' },
-        [ordered]@{ id = 'graphicsSetVsync'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'vsync' },
-        [ordered]@{ id = 'graphicsSetMsaa'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'msaa' },
-        [ordered]@{ id = 'graphicsSetDetailLevel'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'detailLevel' },
-        [ordered]@{ id = 'graphicsSetBloom'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'bloom' },
-        [ordered]@{ id = 'graphicsSetDynamicShadows'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'dynamicShadows' },
-        [ordered]@{ id = 'graphicsSetMotionBlur'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'motionBlur' },
-        [ordered]@{ id = 'graphicsSetDistortion'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'distortion' },
-        [ordered]@{ id = 'graphicsSetFogVolumes'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'fogVolumes' },
-        [ordered]@{ id = 'graphicsSetSphericalHarmonicLighting'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'sphericalHarmonicLighting' },
-        [ordered]@{ id = 'graphicsSetAmbientOcclusion'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'ambientOcclusion' },
-        [ordered]@{ id = 'graphicsSetPhysx'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'physx' },
-        [ordered]@{ id = 'graphicsSetStereo'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'stereo' },
-        [ordered]@{ id = 'graphicsApplyDraft'; externalName = 'Helen_RunCommand'; mode = 'run-command'; command = 'applyBatmanGraphicsDraft' }
-    )
+    bindings = @()
 }
 
 $CommandsObject = [ordered]@{
-    commands = @(
-        [ordered]@{
-            id = 'loadBatmanGraphicsDraftIntoConfig'
-            name = 'Load Batman Graphics Draft Into Config'
-            steps = @(
-                [ordered]@{
-                    kind = 'load-batman-graphics-draft-into-config'
-                }
-            )
-        },
-        [ordered]@{
-            id = 'applyBatmanGraphicsDraft'
-            name = 'Apply Batman Graphics Draft'
-            steps = @(
-                [ordered]@{
-                    kind = 'apply-batman-graphics-config'
-                },
-                [ordered]@{
-                    kind = 'load-batman-graphics-draft-into-config'
-                }
-            )
-        }
-    )
+    commands = @()
 }
 
 Write-Utf8TextFile -Path $PackJsonPath -Contents ($PackJsonObject | ConvertTo-Json -Depth 5)

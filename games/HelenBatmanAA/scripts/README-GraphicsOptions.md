@@ -26,7 +26,7 @@ O recognition CLI suporta dois motores de OCR:
   "ocr": {
     "engines": [
       { "type": "tesseract", "exePath": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe" },
-      { "type": "windows_native" }
+      { "type": "tesseract", "exePath": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe" }
     ]
   }
 }
