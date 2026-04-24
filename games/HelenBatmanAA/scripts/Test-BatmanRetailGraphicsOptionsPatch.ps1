@@ -174,6 +174,7 @@ $RequiredCleanRetailSpriteIds = @(
     '154',
     '157',
     '232',
+    '356',
     '393',
     '395'
 )
@@ -274,6 +275,30 @@ foreach ($RequiredCleanRetailSpriteId in $RequiredCleanRetailSpriteIds) {
     }
 }
 
+$RetailOptionsHeaderBacking = $Document.SelectSingleNode("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='333']/subTags/item[@type='PlaceObject2Tag' and @depth='39' and @characterId='118' and @characterId!='0']")
+if ($null -eq $RetailOptionsHeaderBacking) {
+    throw 'Retail-patched ScreenOptionsMenu should keep the vanilla Options header backing shell on depth 39.'
+}
+
+$RetailOptionsTitlePlacement = $Document.SelectSingleNode("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='333']/subTags/item[@type='PlaceObject2Tag' and @depth='40' and @characterId='326' and @characterId!='0']")
+if ($null -eq $RetailOptionsTitlePlacement) {
+    throw 'Retail-patched ScreenOptionsMenu should keep the vanilla $UI.Options title on depth 40.'
+}
+
+$RetailRelocatedOptionsHeaderTimeline = @(
+    $Document.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='333']/subTags/item[((@depth='41' or @depth='42')) and (@type='PlaceObject2Tag' or @type='RemoveObject2Tag')]")
+)
+if ($RetailRelocatedOptionsHeaderTimeline.Count -ne 0) {
+    throw 'Retail-patched ScreenOptionsMenu should not relocate the vanilla Options header timeline onto depths 41 or 42.'
+}
+
+$RetailInjectedGameOptionsHeader = @(
+    $Document.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='333']/subTags/item[@type='PlaceObject2Tag' and ((@depth='146' and @characterId='118') or (@depth='147' and @characterId='340'))]")
+)
+if ($RetailInjectedGameOptionsHeader.Count -ne 0) {
+    throw 'Retail-patched ScreenOptionsMenu should not inject a Game Options submenu header into the main Options chooser.'
+}
+
 $RetailGraphicsScreenDefinitions = @(
     $Document.SelectNodes("/swf/tags/item[starts-with(@type,'Define') and (@shapeId='$RetailScreenOptionsGraphicsSpriteId' or @spriteId='$RetailScreenOptionsGraphicsSpriteId' or @characterID='$RetailScreenOptionsGraphicsSpriteId' or @characterId='$RetailScreenOptionsGraphicsSpriteId' or @buttonId='$RetailScreenOptionsGraphicsSpriteId' or @fontId='$RetailScreenOptionsGraphicsSpriteId')]")
 )
@@ -283,6 +308,21 @@ if ($RetailGraphicsScreenDefinitions.Count -ne 1) {
 
 if ($RetailGraphicsScreenDefinitions[0].Attributes['type'].Value -ne 'DefineSpriteTag') {
     throw "Expected id $RetailScreenOptionsGraphicsSpriteId to belong to DefineSpriteTag, but found $($RetailGraphicsScreenDefinitions[0].Attributes['type'].Value)."
+}
+
+$RetailGraphicsTitlePlacement = $Document.SelectSingleNode("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='$RetailScreenOptionsGraphicsSpriteId']/subTags/item[@type='PlaceObject2Tag' and @depth='147' and @characterId='340' and @characterId!='0']")
+if ($null -eq $RetailGraphicsTitlePlacement) {
+    throw "Expected retail-patched ScreenOptionsGraphics title placement at depth 147 for character 340."
+}
+
+$RetailGraphicsTitlePlacementName = $RetailGraphicsTitlePlacement.Attributes['name']
+if ($null -eq $RetailGraphicsTitlePlacementName -or $RetailGraphicsTitlePlacementName.Value -ne 'Title') {
+    throw "Retail-patched ScreenOptionsGraphics title placement should be named 'Title', but found '$($RetailGraphicsTitlePlacementName.Value)'."
+}
+
+$RetailGraphicsTitleHasNameFlag = $RetailGraphicsTitlePlacement.Attributes['placeFlagHasName']
+if ($null -eq $RetailGraphicsTitleHasNameFlag -or $RetailGraphicsTitleHasNameFlag.Value -ne 'true') {
+    throw "Retail-patched ScreenOptionsGraphics title placement should set placeFlagHasName='true', but found '$($RetailGraphicsTitleHasNameFlag.Value)'."
 }
 
 $RetailGraphicsExitPromptDefinitions = @(
