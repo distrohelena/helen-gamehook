@@ -170,8 +170,8 @@ $ExpectedGraphicsShellPlacements = @(
     @{ Depth = '1'; CharacterId = '141'; TranslateX = '-7126'; TranslateY = '899' },
     @{ Depth = '3'; CharacterId = '307'; TranslateX = '-7879'; TranslateY = '-287' },
     @{ Depth = '26'; CharacterId = '332'; TranslateX = '-1641'; TranslateY = '4609' },
-    @{ Depth = '146'; CharacterId = '118'; TranslateX = '-6582'; TranslateY = '-2000' },
-    @{ Depth = '147'; CharacterId = '340'; TranslateX = '-8292'; TranslateY = '-2656' }
+    @{ Depth = '146'; CharacterId = '118'; TranslateX = '-6582'; TranslateY = '-8200' },
+    @{ Depth = '147'; CharacterId = '340'; TranslateX = '-8292'; TranslateY = '-8856' }
 )
 
 $RequiredFixedRowControllerTokens = @(
