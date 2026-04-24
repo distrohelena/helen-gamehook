@@ -114,14 +114,14 @@ internal static class GraphicsOptionsXmlPatcher
     private const int GraphicsHeaderTitleDepth = 147;
 
     /// <summary>
-    /// Target Y translation for the graphics header backing block after moving it to the top shell position.
+    /// Target Y translation for the graphics header backing block after moving it near the top of the graphics screen.
     /// </summary>
-    private const int GraphicsHeaderBackingTranslateY = -697;
+    private const int GraphicsHeaderBackingTranslateY = -2000;
 
     /// <summary>
-    /// Target Y translation for the graphics title text after moving it to the top shell position.
+    /// Target Y translation for the graphics title text after moving it near the top of the graphics screen.
     /// </summary>
-    private const int GraphicsHeaderTitleTranslateY = -1353;
+    private const int GraphicsHeaderTitleTranslateY = -2656;
 
     /// <summary>
     /// Source row depth cloned to create missing fullscreen graphics rows from the game screen.
