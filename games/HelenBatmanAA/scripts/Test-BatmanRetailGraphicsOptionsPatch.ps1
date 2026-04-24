@@ -45,6 +45,25 @@ function Invoke-ExternalProcess {
     }
 }
 
+function Get-DefineSpriteNodeOuterXml {
+    param(
+        [Parameter(Mandatory = $true)]
+        [xml]$Document,
+        [Parameter(Mandatory = $true)]
+        [string]$SpriteId
+    )
+
+    $Nodes = @(
+        $Document.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='$SpriteId']")
+    )
+
+    if ($Nodes.Count -ne 1) {
+        throw "Expected exactly one DefineSpriteTag sprite with id $SpriteId, found $($Nodes.Count)."
+    }
+
+    return $Nodes[0].OuterXml
+}
+
 if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
     $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 } else {
@@ -52,21 +71,22 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($RetailFrontendPackagePath)) {
-    $RetailFrontendPackagePath = Join-Path $BatmanRoot 'builder\extracted\frontend\frontend-umap-unpacked\Frontend.umap'
+    $RetailFrontendPackagePath = Join-Path $BatmanRoot 'builder\extracted\frontend-retail\Frontend.umap'
 } elseif (-not [System.IO.Path]::IsPathRooted($RetailFrontendPackagePath)) {
     $RetailFrontendPackagePath = Join-Path $BatmanRoot $RetailFrontendPackagePath
 }
 
 $RetailFrontendPackagePath = [System.IO.Path]::GetFullPath($RetailFrontendPackagePath)
-Assert-UnrealPackageIsUnpacked -Path $RetailFrontendPackagePath -Context 'Test-BatmanRetailGraphicsOptionsPatch frontend base' | Out-Null
 
 $BuilderRoot = Join-Path $BatmanRoot 'builder'
 $SubtitleSizeModBuilderProjectPath = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj'
 $ProjectPath = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\BmGameGfxPatcher\BmGameGfxPatcher.csproj'
 $FfdecPath = Join-Path $BuilderRoot 'extracted\ffdec\ffdec-cli.exe'
+$CleanMainV2XmlPath = Join-Path $BuilderRoot 'extracted\frontend\mainv2\frontend-mainv2.xml'
 $OutputRoot = Join-Path $BuilderRoot 'generated\test-retail-main-menu-graphics-options'
 $PrototypeBuildRoot = Join-Path $OutputRoot 'prototype'
 $PrototypeGfxPath = Join-Path $PrototypeBuildRoot 'MainV2-graphics-options.gfx'
+$DecompressedRetailFrontendPackagePath = Join-Path $OutputRoot 'Frontend-retail.decompressed.umap'
 $PatchedPackagePath = Join-Path $OutputRoot 'Frontend-graphics-options.umap'
 $ExtractedGfxPath = Join-Path $OutputRoot 'MainV2-graphics-options.gfx'
 $OutputXmlPath = Join-Path $OutputRoot 'MainV2-graphics-options.xml'
@@ -77,20 +97,21 @@ $RetailGraphicsExitPromptSpriteId = '4097'
 $ExpectedTokens = @(
     'Graphics Options',
     'ScreenOptionsGraphics',
-    'this.RowOrder = new Array("Fullscreen","Resolution","VSync","MSAA","DetailLevel","Bloom","DynamicShadows","MotionBlur","Distortion","FogVolumes","SphericalHarmonicLighting","AmbientOcclusion","PhysX","Stereo3D","ApplyChanges");',
-    'return new Array(this.GetRowDisplayValue(rowName));',
-    'this.AddItem(GraphicsRow1,14,1,-1,-1);',
-    'this.AddItem(GraphicsRow15,13,0,-1,-1);',
-    '_root.TriggerEvent("Options");'
-)
-
-$ForbiddenTokens = @(
     'Helen_GetInt',
     'Helen_SetInt',
     'Helen_RunCommand',
     'applyBatmanGraphicsDraft',
-    'syncBatmanGraphicsDetailLevel',
-    'syncBatmanGraphicsPreset',
+    'this.BindFixedRow(this.Screen.GraphicsRow1,"Fullscreen");',
+    'this.BindFixedRow(this.Screen.GraphicsRow15,"ApplyChanges");',
+    'this.RefreshRowClip(this.Screen.GraphicsRow15,"ApplyChanges");',
+    'return new Array("Windowed","Fullscreen");',
+    'this.AddItem(GraphicsRow1,14,1,-1,-1);',
+    'this.AddItem(GraphicsRow15,13,0,-1,-1);'
+)
+
+$ForbiddenTokens = @(
+    'var PCVersionString = "',
+    'Subtitle Size',
     'Helen_GfxLoad',
     'Helen_GfxGet',
     'Helen_GfxSet',
@@ -112,13 +133,7 @@ $ForbiddenTokens = @(
     'ScrollWindowUp',
     'ScrollWindowDown',
     'BaseMoveUPDown = this.MoveUPDown',
-    'return new Array(this.DraftState.fullscreen == 0 ? "Windowed" : "Fullscreen");',
-    'return new Array("Windowed","Fullscreen");',
-    'this.ExitPromptMode = "unsaved";',
-    'this.ExitPromptMode = "restart";',
-    'this.LoadDraftValues();',
-    'this.CaptureInitialState();',
-    'HasUnsavedChanges'
+    'return new Array(this.DraftState.fullscreen == 0 ? "Windowed" : "Fullscreen");'
 )
 
 $ExpectedFixedRowClipPaths = @(
@@ -139,20 +154,40 @@ $ExpectedFixedRowClipPaths = @(
     'frame_1\PlaceObject2_290_List_Template_29\CLIPACTIONRECORD onClipEvent(load).as'
 )
 
+$RequiredRowClipTokens = @(
+    '_parent.GraphicsController.HandleRowAction(this.RowName);',
+    '_parent.GraphicsController.IncrementRow(this.RowName);',
+    '_parent.GraphicsController.DecrementRow(this.RowName);',
+    '"$UI.Cycle"'
+)
+
 $ForbiddenRowClipTokens = @(
     'this.RowOffset =',
     'OnVisibleRowClipLoaded',
     'HandleVisibleRowAction',
     'IncrementVisibleRow',
-    'DecrementVisibleRow',
-    '_parent.GraphicsController.HandleRowAction(this.RowName);',
-    '_parent.GraphicsController.IncrementRow(this.RowName);',
-    '_parent.GraphicsController.DecrementRow(this.RowName);',
-    '_loc2_.SetPrompt(_loc2_.CI_Interact,"$UI.Cycle",this._parent.myListener.onPromptClick,100,100);'
+    'DecrementVisibleRow'
+)
+
+$RequiredCleanRetailSpriteIds = @(
+    '153',
+    '154',
+    '157',
+    '232',
+    '393',
+    '395'
 )
 
 if (-not (Test-Path -LiteralPath $FfdecPath)) {
     throw "FFDec CLI was not found at '$FfdecPath'."
+}
+
+if (-not (Test-Path -LiteralPath $RetailFrontendPackagePath)) {
+    throw "Retail frontend package was not found at '$RetailFrontendPackagePath'."
+}
+
+if (-not (Test-Path -LiteralPath $CleanMainV2XmlPath)) {
+    throw "Clean MainV2 XML baseline was not found at '$CleanMainV2XmlPath'."
 }
 
 if (-not (Test-Path -LiteralPath $SubtitleSizeModBuilderProjectPath)) {
@@ -175,8 +210,16 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 & dotnet run --project $ProjectPath -c $Configuration -- `
-    patch-mainv2-graphics-options `
+    decompress `
     --package $RetailFrontendPackagePath `
+    --output $DecompressedRetailFrontendPackagePath
+if ($LASTEXITCODE -ne 0) {
+    throw 'decompress failed for the retail graphics patch test.'
+}
+
+& dotnet run --project $ProjectPath -c $Configuration -- `
+    patch-mainv2-graphics-options `
+    --package $DecompressedRetailFrontendPackagePath `
     --output $PatchedPackagePath `
     --prototype-gfx $PrototypeGfxPath
 if ($LASTEXITCODE -ne 0) {
@@ -220,6 +263,17 @@ foreach ($ForbiddenExportToken in @(
 }
 
 [xml]$Document = Get-Content -LiteralPath $OutputXmlPath
+[xml]$CleanMainV2Document = Get-Content -LiteralPath $CleanMainV2XmlPath
+
+foreach ($RequiredCleanRetailSpriteId in $RequiredCleanRetailSpriteIds) {
+    $PatchedOuterXml = Get-DefineSpriteNodeOuterXml -Document $Document -SpriteId $RequiredCleanRetailSpriteId
+    $CleanOuterXml = Get-DefineSpriteNodeOuterXml -Document $CleanMainV2Document -SpriteId $RequiredCleanRetailSpriteId
+
+    if ($PatchedOuterXml -cne $CleanOuterXml) {
+        throw "Patched MainV2 changed clean retail sprite id $RequiredCleanRetailSpriteId. Graphics-only patch must preserve baseline title/profile/main sprite tags."
+    }
+}
+
 $RetailGraphicsScreenDefinitions = @(
     $Document.SelectNodes("/swf/tags/item[starts-with(@type,'Define') and (@shapeId='$RetailScreenOptionsGraphicsSpriteId' or @spriteId='$RetailScreenOptionsGraphicsSpriteId' or @characterID='$RetailScreenOptionsGraphicsSpriteId' or @characterId='$RetailScreenOptionsGraphicsSpriteId' or @buttonId='$RetailScreenOptionsGraphicsSpriteId' or @fontId='$RetailScreenOptionsGraphicsSpriteId')]")
 )
@@ -265,6 +319,12 @@ foreach ($ExpectedFixedRowClipPath in $ExpectedFixedRowClipPaths) {
     }
 
     $FixedRowClipScript = Get-Content -LiteralPath $ResolvedFixedRowClipPath -Raw
+    foreach ($RequiredRowClipToken in $RequiredRowClipTokens) {
+        if ($FixedRowClipScript.IndexOf($RequiredRowClipToken, [System.StringComparison]::Ordinal) -lt 0) {
+            throw "Required interactive token was not found in exported row clip '$ResolvedFixedRowClipPath': $RequiredRowClipToken"
+        }
+    }
+
     foreach ($ForbiddenRowClipToken in $ForbiddenRowClipTokens) {
         if ($FixedRowClipScript.IndexOf($ForbiddenRowClipToken, [System.StringComparison]::Ordinal) -ge 0) {
             throw "Forbidden scroll-window token was found in exported row clip '$ResolvedFixedRowClipPath': $ForbiddenRowClipToken"

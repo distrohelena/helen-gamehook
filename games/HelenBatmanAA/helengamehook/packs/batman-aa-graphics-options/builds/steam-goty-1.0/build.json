@@ -6,6 +6,6 @@
                   "sha256":  "4DAC1F5E2AC6710B7378FDCE74601F616F4753E3756CB5FDA63C7519CC2EB028"
               },
     "startupCommands":  [
-
+                            "loadBatmanGraphicsDraftIntoConfig"
                         ]
 }

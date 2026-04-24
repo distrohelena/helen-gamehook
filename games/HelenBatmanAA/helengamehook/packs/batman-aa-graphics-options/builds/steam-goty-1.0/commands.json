@@ -1,5 +1,25 @@
 {
     "commands":  [
-
+                     {
+                         "id":  "loadBatmanGraphicsDraftIntoConfig",
+                         "name":  "Load Batman Graphics Draft Into Config",
+                         "steps":  [
+                                       {
+                                           "kind":  "load-batman-graphics-draft-into-config"
+                                       }
+                                   ]
+                     },
+                     {
+                         "id":  "applyBatmanGraphicsDraft",
+                         "name":  "Apply Batman Graphics Draft",
+                         "steps":  [
+                                       {
+                                           "kind":  "apply-batman-graphics-config"
+                                       },
+                                       {
+                                           "kind":  "load-batman-graphics-draft-into-config"
+                                       }
+                                   ]
+                     }
                  ]
 }

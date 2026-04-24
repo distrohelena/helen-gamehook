@@ -8,4 +8,11 @@
     <AssemblyName>BmGameGfxPatcher</AssemblyName>
     <RootNamespace>BmGameGfxPatcher</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\MiniLzoDll\MiniLzoDll.dll">
+      <Link>MiniLzoDll.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
 </Project>
