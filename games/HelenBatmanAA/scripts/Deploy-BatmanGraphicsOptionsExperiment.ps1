@@ -1,6 +1,6 @@
 param(
     [string]$GameBin = 'D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries',
-    [string]$Configuration = 'Debug'
+    [string]$Configuration = 'Release'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,12 +10,15 @@ $RepoRoot = (Resolve-Path (Join-Path $BatmanRoot '..\..')).Path
 $GameRoot = [System.IO.Path]::GetFullPath((Join-Path $GameBin '..'))
 $PackSource = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-graphics-options'
 $PackDestination = Join-Path $GameBin 'helengamehook\packs\batman-aa-graphics-options'
+$ConflictingPackDestination = Join-Path $GameBin 'helengamehook\packs\batman-aa-subtitles'
 $PackParent = Split-Path -Path $PackDestination -Parent
 $PackLeaf = Split-Path -Path $PackDestination -Leaf
 $PackStagingDestination = Join-Path $PackParent "$PackLeaf.staging.$([System.Guid]::NewGuid().ToString('N'))"
 $PackBackupDestination = Join-Path $PackParent "$PackLeaf.backup.$([System.Guid]::NewGuid().ToString('N'))"
 $PackBuildRoot = Join-Path $PackDestination 'builds\steam-goty-1.0'
 $DeployedFilesJsonPath = Join-Path $PackBuildRoot 'files.json'
+$DeployedHooksJsonPath = Join-Path $PackBuildRoot 'hooks.json'
+$SourceHooksJsonPath = Join-Path $PackSource 'builds\steam-goty-1.0\hooks.json'
 $SourceDeltaPath = Join-Path $PackSource 'builds\steam-goty-1.0\assets\deltas\Frontend-graphics-options.hgdelta'
 $HelenGameHookPath = Join-Path $RepoRoot "bin\Win32\$Configuration\HelenGameHook.dll"
 $ProxyPath = Join-Path $RepoRoot "bin\Win32\$Configuration\dinput8.dll"
@@ -75,6 +78,10 @@ foreach ($RequiredPath in @($PackSource, $SourceDeltaPath, $HelenGameHookPath, $
     }
 }
 
+if (Test-Path -LiteralPath $SourceHooksJsonPath) {
+    throw "Batman graphics-options source pack should not declare hooks.json: $SourceHooksJsonPath"
+}
+
 try {
     & $VerifierPath -BatmanRoot $BatmanRoot -BuilderRoot (Join-Path $BatmanRoot 'builder')
 } catch {
@@ -92,12 +99,21 @@ Start-Sleep -Seconds 2
 
 New-Item -ItemType Directory -Force -Path $PackParent | Out-Null
 
+if (Test-Path -LiteralPath $ConflictingPackDestination) {
+    Remove-Item -LiteralPath $ConflictingPackDestination -Recurse -Force
+}
+
 $HadExistingPack = $false
 $ActivatedNewPack = $false
 
 try {
     New-Item -ItemType Directory -Force -Path $PackStagingDestination | Out-Null
     Copy-Item -Path (Join-Path $PackSource '*') -Destination $PackStagingDestination -Recurse -Force
+
+    $StagedHooksJsonPath = Join-Path $PackStagingDestination 'builds\steam-goty-1.0\hooks.json'
+    if (Test-Path -LiteralPath $StagedHooksJsonPath) {
+        throw "Batman graphics-options staged pack should not declare hooks.json: $StagedHooksJsonPath"
+    }
 
     if (Test-Path -LiteralPath $PackDestination) {
         Move-Item -LiteralPath $PackDestination -Destination $PackBackupDestination
@@ -146,5 +162,11 @@ try {
 if (Test-Path -LiteralPath $DeployedFilesJsonPath) {
     Test-ExpectedVirtualFiles -ManifestPath $DeployedFilesJsonPath -BuildRoot $PackBuildRoot -Label 'deployment'
 }
+
+if (Test-Path -LiteralPath $DeployedHooksJsonPath) {
+    throw "Batman graphics-options deployment should not contain hooks.json: $DeployedHooksJsonPath"
+}
+
+Get-ChildItem (Join-Path $GameBin 'helengamehook\logs') -ErrorAction SilentlyContinue | Remove-Item -Force
 
 Write-Output 'DEPLOYED'

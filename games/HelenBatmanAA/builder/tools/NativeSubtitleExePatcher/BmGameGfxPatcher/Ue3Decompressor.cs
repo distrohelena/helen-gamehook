@@ -1,14 +1,18 @@
-using System;
-using System.IO;
 using System.Runtime.InteropServices;
 
 namespace BmGameGfxPatcher;
 
 /// <summary>
-/// UE3 LZO decompressor with correct header parsing for v576.
+/// Decompresses chunk-compressed UE3 packages into the logical package bytes that the
+/// existing Unreal export-table tooling can parse.
 /// </summary>
-public static class Ue3Decompressor
+internal static class Ue3Decompressor
 {
+    /// <summary>
+    /// Stores the expected chunk signature used by Batman's compressed frontend package.
+    /// </summary>
+    private const uint ChunkSignature = 0x9E2A83C1;
+
     [DllImport("MiniLzoDll.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int minilzo_init();
 
@@ -20,185 +24,226 @@ public static class Ue3Decompressor
 
     public static byte[] DecompressAndFixPackage(string inputPath)
     {
-        byte[] data = DecompressPackage(inputPath);
-        // Clear compression flags for decompressed file
-        // Need to re-parse header to find correct offset
-        int folderLen = BitConverter.ToInt32(data, 12);
-        int compFlagsOffset = 48 + folderLen;
-        BitConverter.GetBytes(0u).CopyTo(data, compFlagsOffset);
-        BitConverter.GetBytes(0).CopyTo(data, compFlagsOffset + 4);
-        return data;
+        return DecompressAndFixPackage(File.ReadAllBytes(Path.GetFullPath(inputPath)));
+    }
+
+    public static byte[] DecompressAndFixPackage(byte[] rawPackageBytes)
+    {
+        byte[] decompressedBytes = DecompressPackage(rawPackageBytes);
+        Ue3CompressionLayout layout = Ue3CompressionLayout.Read(rawPackageBytes);
+
+        if (layout.HasCompressedChunks)
+        {
+            BitConverter.GetBytes(0u).CopyTo(decompressedBytes, layout.CompressionFlagsOffset);
+            BitConverter.GetBytes(0).CopyTo(decompressedBytes, layout.CompressionFlagsOffset + 4);
+        }
+
+        return decompressedBytes;
     }
 
     public static byte[] DecompressPackage(string inputPath)
     {
-        byte[] raw = File.ReadAllBytes(inputPath);
-        minilzo_init();
-        
+        return DecompressPackage(File.ReadAllBytes(Path.GetFullPath(inputPath)));
+    }
+
+    public static byte[] DecompressPackage(byte[] rawPackageBytes)
+    {
+        Ue3CompressionLayout layout = Ue3CompressionLayout.Read(rawPackageBytes);
+        if (!layout.HasCompressedChunks)
+        {
+            return rawPackageBytes.ToArray();
+        }
+
+        MiniLzoNative.EnsureLoaded();
+        int initializeResult = minilzo_init();
+        if (initializeResult != 0)
+        {
+            throw new InvalidOperationException($"MiniLZO initialization failed with status {initializeResult}.");
+        }
+
         try
         {
-            // Parse UE3 v576 header
-            int folderLen = BitConverter.ToInt32(raw, 12);
-            int genCount = BitConverter.ToInt32(raw, 64 + folderLen);
-            // guid=48+folderLen, genCount=64+folderLen, genInfo=68+folderLen (12 bytes each),
-            // engineVer=68+folderLen+12*gen+4, cookerVer=engineVer+4,
-            // compFlags=cookerVer+4, chunkCount=compFlags+4
-            int compFlagsOffset = 76 + folderLen + genCount * 12;
-            int chunkCount = BitConverter.ToInt32(raw, compFlagsOffset + 4);
-            int chunkTableOffset = compFlagsOffset + 8;
-            uint compFlags = BitConverter.ToUInt32(raw, compFlagsOffset);
-            
-            Console.WriteLine($"[DEBUG] FolderLen={folderLen}, GenCount={genCount}, CompFlags=0x{compFlags:X8}, Chunks={chunkCount}");
-            Console.WriteLine($"[DEBUG] CompFlags offset: {compFlagsOffset}, Chunk table: {chunkTableOffset}");
-            
-            if (chunkCount == 0)
+            int logicalLength = GetLogicalPackageLength(layout);
+            byte[] logicalBytes = new byte[logicalLength];
+            rawPackageBytes.AsSpan(0, layout.LogicalPrefixLength).CopyTo(logicalBytes);
+
+            for (int chunkIndex = 0; chunkIndex < layout.Chunks.Count; chunkIndex++)
             {
-                Console.WriteLine("[DEBUG] No compression");
-                return raw;
+                Ue3CompressionLayout.ChunkTableEntry chunk = layout.Chunks[chunkIndex];
+                Ue3CompressionLayout.ChunkHeader chunkHeader = layout.ReadChunkHeader(rawPackageBytes, chunk);
+                ValidateChunkHeader(chunkIndex, chunk, chunkHeader);
+                DecompressChunk(rawPackageBytes, logicalBytes, chunkIndex, chunk, chunkHeader);
             }
-            
-            // Read chunk table
-            var chunks = new (int uncompOffset, int uncompSize, int compOffset, int compSize)[chunkCount];
-            int maxOffset = 0;
-            
-            for (int i = 0; i < chunkCount; i++)
-            {
-                int off = chunkTableOffset + i * 16;
-                chunks[i] = (
-                    BitConverter.ToInt32(raw, off),
-                    BitConverter.ToInt32(raw, off + 4),
-                    BitConverter.ToInt32(raw, off + 8),
-                    BitConverter.ToInt32(raw, off + 12)
-                );
-                
-                int end = chunks[i].uncompOffset + chunks[i].uncompSize;
-                if (end > maxOffset) maxOffset = end;
-                
-                Console.WriteLine($"[DEBUG] Chunk {i}: uncompOff={chunks[i].uncompOffset}, uncompSize={chunks[i].uncompSize}, compOff=0x{chunks[i].compOffset:X} ({chunks[i].compOffset}), compSize={chunks[i].compSize}");
-            }
-            
-            Console.WriteLine($"[DEBUG] Total uncompressed: {maxOffset} bytes");
-            
-            // Create output buffer
-            byte[] logical = new byte[maxOffset];
-            
-            // Copy uncompressed header
-            int firstOffset = chunks[0].uncompOffset;
-            Array.Copy(raw, 0, logical, 0, firstOffset);
-            Console.WriteLine($"[DEBUG] Copied {firstOffset} bytes header");
-            
-            // Decompress each chunk
-            for (int i = 0; i < chunkCount; i++)
-            {
-                var chunk = chunks[i];
-                if (chunk.uncompSize == 0) continue;
-                
-                int hdrOff = chunk.compOffset;
-                if (hdrOff + 16 > raw.Length)
-                {
-                    Console.WriteLine($"[DEBUG] Chunk {i}: header offset 0x{hdrOff:X} out of bounds");
-                    continue;
-                }
-                
-                uint tag = BitConverter.ToUInt32(raw, hdrOff);
-                if (tag != 0x9E2A83C1)
-                {
-                    Console.WriteLine($"[DEBUG] Chunk {i}: invalid tag 0x{tag:X8}");
-                    continue;
-                }
-                
-                int blockSize = BitConverter.ToInt32(raw, hdrOff + 4);
-                int totalComp = BitConverter.ToInt32(raw, hdrOff + 8);
-                int totalUncomp = BitConverter.ToInt32(raw, hdrOff + 12);
-                
-                Console.WriteLine($"[DEBUG] Chunk {i}: blockSz={blockSize}, compSz={totalComp}, uncompSz={totalUncomp}");
-                
-                int blockCnt = (totalUncomp + blockSize - 1) / blockSize;
-                int blocksOff = hdrOff + 16;
-                int dataOff = blocksOff;
-                int outOff = chunk.uncompOffset;
-                int done = 0;
-                
-                Console.WriteLine($"[DEBUG] Chunk {i}: {blockCnt} blocks, headers at 0x{blocksOff:X}, data at 0x{dataOff:X}");
-                
-                for (int j = 0; j < blockCnt && done < chunk.uncompSize; j++)
-                {
-                    if (dataOff + 8 > raw.Length)
-                    {
-                        Console.WriteLine($"[DEBUG] Chunk {i} Block {j}: dataOff+8={dataOff+8} > raw.Length={raw.Length}");
-                        break;
-                    }
-                    
-                    int blkComp = BitConverter.ToInt32(raw, dataOff);
-                    int blkUncomp = BitConverter.ToInt32(raw, dataOff + 4);
-                    dataOff += 8;
-                    
-                    if (j == 0) Console.WriteLine($"[DEBUG] Chunk {i} Block 0: blkComp={blkComp}, blkUncomp={blkUncomp}");
-                    
-                    int thisBlock = Math.Min(blkUncomp, chunk.uncompSize - done);
-                    
-                    if (blkComp == 0)
-                    {
-                        int cp = Math.Min(blkUncomp, thisBlock);
-                        if (dataOff + cp <= raw.Length && outOff + cp <= logical.Length)
-                            Array.Copy(raw, dataOff, logical, outOff, cp);
-                        dataOff += blkUncomp;
-                        outOff += cp;
-                        done += cp;
-                        continue;
-                    }
-                    
-                    if (blkComp < 0 || blkUncomp <= 0 || dataOff + blkComp > raw.Length)
-                    {
-                        Console.WriteLine($"[DEBUG] Chunk {i} Block {j}: bad sizes comp={blkComp} uncomp={blkUncomp}");
-                        break;
-                    }
-                    
-                    // Safety check: limit block sizes to reasonable values
-                    if (blkComp > 200000 || blkUncomp > 200000)
-                    {
-                        Console.WriteLine($"[DEBUG] Chunk {i} Block {j}: suspiciously large sizes comp={blkComp} uncomp={blkUncomp}");
-                        break;
-                    }
-                    
-                    byte[] compData = new byte[blkComp];
-                    Array.Copy(raw, dataOff, compData, 0, blkComp);
-                    dataOff += blkComp;
-                    
-                    byte[] uncompData = new byte[blkUncomp];
-                    GCHandle ih = GCHandle.Alloc(compData, GCHandleType.Pinned);
-                    GCHandle oh = GCHandle.Alloc(uncompData, GCHandleType.Pinned);
-                    
-                    try
-                    {
-                        uint outLen = (uint)blkUncomp;
-                        int res = minilzo_decompress(ih.AddrOfPinnedObject(), (uint)blkComp, oh.AddrOfPinnedObject(), ref outLen);
-                        
-                        if (res == 0)
-                        {
-                            int cp = Math.Min((int)outLen, thisBlock);
-                            if (outOff + cp <= logical.Length)
-                                Array.Copy(uncompData, 0, logical, outOff, cp);
-                        }
-                        else
-                        {
-                            Console.WriteLine($"[DEBUG] Chunk {i} Block {j}: LZO error {res}");
-                            break;
-                        }
-                    }
-                    finally { ih.Free(); oh.Free(); }
-                    
-                    outOff += thisBlock;
-                    done += thisBlock;
-                }
-                
-                Console.WriteLine($"[DEBUG] Chunk {i}: decompressed {done}/{chunk.uncompSize}");
-            }
-            
-            Console.WriteLine($"[DEBUG] Output: {logical.Length} bytes");
-            return logical;
+
+            return logicalBytes;
         }
-        finally { minilzo_cleanup(); }
+        finally
+        {
+            minilzo_cleanup();
+        }
+    }
+
+    private static int GetLogicalPackageLength(Ue3CompressionLayout layout)
+    {
+        Ue3CompressionLayout.ChunkTableEntry lastChunk = layout.Chunks[^1];
+        return checked(lastChunk.UncompressedOffset + lastChunk.UncompressedSize);
+    }
+
+    private static void ValidateChunkHeader(
+        int chunkIndex,
+        Ue3CompressionLayout.ChunkTableEntry chunk,
+        Ue3CompressionLayout.ChunkHeader chunkHeader)
+    {
+        if (chunkHeader.Signature != ChunkSignature)
+        {
+            throw new InvalidOperationException($"Chunk {chunkIndex} had invalid signature 0x{chunkHeader.Signature:X8}.");
+        }
+
+        if (chunkHeader.BlockSize <= 0)
+        {
+            throw new InvalidOperationException($"Chunk {chunkIndex} reported invalid block size {chunkHeader.BlockSize}.");
+        }
+
+        if (chunkHeader.UncompressedSize != chunk.UncompressedSize)
+        {
+            throw new InvalidOperationException(
+                $"Chunk {chunkIndex} header uncompressed size {chunkHeader.UncompressedSize} did not match the table value {chunk.UncompressedSize}.");
+        }
+
+        if (chunk.CompressedSize < 16)
+        {
+            throw new InvalidOperationException($"Chunk {chunkIndex} compressed size {chunk.CompressedSize} was too small.");
+        }
+    }
+
+    private static void DecompressChunk(
+        byte[] rawPackageBytes,
+        byte[] logicalBytes,
+        int chunkIndex,
+        Ue3CompressionLayout.ChunkTableEntry chunk,
+        Ue3CompressionLayout.ChunkHeader chunkHeader)
+    {
+        int blockCount = GetBlockCount(chunkHeader.UncompressedSize, chunkHeader.BlockSize);
+        int blockHeadersOffset = checked(chunk.CompressedOffset + 16);
+        int compressedDataOffset = checked(blockHeadersOffset + (blockCount * 8));
+        int currentDataOffset = compressedDataOffset;
+        int currentOutputOffset = chunk.UncompressedOffset;
+
+        for (int blockIndex = 0; blockIndex < blockCount; blockIndex++)
+        {
+            int blockHeaderOffset = checked(blockHeadersOffset + (blockIndex * 8));
+            int compressedSize = ReadInt32(rawPackageBytes, blockHeaderOffset);
+            int uncompressedSize = ReadInt32(rawPackageBytes, blockHeaderOffset + 4);
+            ValidateBlockHeader(chunkIndex, blockIndex, compressedSize, uncompressedSize, chunkHeader.BlockSize);
+
+            if (compressedSize == 0)
+            {
+                CopyStoredBlock(rawPackageBytes, logicalBytes, chunkIndex, blockIndex, currentDataOffset, currentOutputOffset, uncompressedSize);
+            }
+            else
+            {
+                DecompressStoredBlock(rawPackageBytes, logicalBytes, chunkIndex, blockIndex, currentDataOffset, currentOutputOffset, compressedSize, uncompressedSize);
+            }
+
+            currentDataOffset = checked(currentDataOffset + compressedSize);
+            currentOutputOffset = checked(currentOutputOffset + uncompressedSize);
+        }
+
+        if (currentOutputOffset != chunk.UncompressedOffset + chunk.UncompressedSize)
+        {
+            throw new InvalidOperationException($"Chunk {chunkIndex} decompressed to {currentOutputOffset - chunk.UncompressedOffset} bytes instead of {chunk.UncompressedSize}.");
+        }
+    }
+
+    private static int GetBlockCount(int chunkUncompressedSize, int blockSize)
+    {
+        return (int)Math.Ceiling(chunkUncompressedSize / (double)blockSize);
+    }
+
+    private static void ValidateBlockHeader(int chunkIndex, int blockIndex, int compressedSize, int uncompressedSize, int blockSize)
+    {
+        if (compressedSize < 0 || uncompressedSize <= 0 || uncompressedSize > blockSize)
+        {
+            throw new InvalidOperationException(
+                $"Chunk {chunkIndex} block {blockIndex} had invalid sizes comp={compressedSize} uncomp={uncompressedSize} blockSize={blockSize}.");
+        }
+    }
+
+    private static void CopyStoredBlock(
+        byte[] rawPackageBytes,
+        byte[] logicalBytes,
+        int chunkIndex,
+        int blockIndex,
+        int dataOffset,
+        int outputOffset,
+        int length)
+    {
+        ValidateSlice(rawPackageBytes.Length, dataOffset, length, $"chunk {chunkIndex} block {blockIndex} source");
+        ValidateSlice(logicalBytes.Length, outputOffset, length, $"chunk {chunkIndex} block {blockIndex} destination");
+        Array.Copy(rawPackageBytes, dataOffset, logicalBytes, outputOffset, length);
+    }
+
+    private static void DecompressStoredBlock(
+        byte[] rawPackageBytes,
+        byte[] logicalBytes,
+        int chunkIndex,
+        int blockIndex,
+        int dataOffset,
+        int outputOffset,
+        int compressedSize,
+        int uncompressedSize)
+    {
+        ValidateSlice(rawPackageBytes.Length, dataOffset, compressedSize, $"chunk {chunkIndex} block {blockIndex} compressed source");
+        ValidateSlice(logicalBytes.Length, outputOffset, uncompressedSize, $"chunk {chunkIndex} block {blockIndex} logical destination");
+
+        byte[] compressedBlock = new byte[compressedSize];
+        byte[] uncompressedBlock = new byte[uncompressedSize];
+        Array.Copy(rawPackageBytes, dataOffset, compressedBlock, 0, compressedSize);
+
+        GCHandle inputHandle = GCHandle.Alloc(compressedBlock, GCHandleType.Pinned);
+        GCHandle outputHandle = GCHandle.Alloc(uncompressedBlock, GCHandleType.Pinned);
+
+        try
+        {
+            uint actualOutputLength = (uint)uncompressedSize;
+            int result = minilzo_decompress(
+                inputHandle.AddrOfPinnedObject(),
+                (uint)compressedSize,
+                outputHandle.AddrOfPinnedObject(),
+                ref actualOutputLength);
+
+            if (result != 0)
+            {
+                throw new InvalidOperationException($"MiniLZO decompression failed for chunk {chunkIndex} block {blockIndex} with status {result}.");
+            }
+
+            if (actualOutputLength != uncompressedSize)
+            {
+                throw new InvalidOperationException(
+                    $"MiniLZO decompressed chunk {chunkIndex} block {blockIndex} to {actualOutputLength} bytes instead of {uncompressedSize}.");
+            }
+
+            Array.Copy(uncompressedBlock, 0, logicalBytes, outputOffset, uncompressedSize);
+        }
+        finally
+        {
+            inputHandle.Free();
+            outputHandle.Free();
+        }
+    }
+
+    private static int ReadInt32(byte[] buffer, int offset)
+    {
+        ValidateSlice(buffer.Length, offset, sizeof(int), $"Int32 read at {offset}");
+        return BitConverter.ToInt32(buffer, offset);
+    }
+
+    private static void ValidateSlice(int bufferLength, int offset, int length, string description)
+    {
+        if (offset < 0 || length < 0 || offset + length > bufferLength)
+        {
+            throw new InvalidOperationException($"{description} pointed outside the buffer. offset={offset} length={length} bufferLength={bufferLength}");
+        }
     }
 
     public static byte[]? ExtractMainV2Payload(byte[] data)

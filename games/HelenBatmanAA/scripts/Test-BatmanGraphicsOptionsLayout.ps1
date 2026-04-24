@@ -190,24 +190,19 @@ $RequiredFixedRowControllerTokens = @(
     'this.BindFixedRow(this.Screen.GraphicsRow13,"PhysX");',
     'this.BindFixedRow(this.Screen.GraphicsRow14,"Stereo3D");',
     'this.BindFixedRow(this.Screen.GraphicsRow15,"ApplyChanges");',
-    'return new Array(this.GetRowDisplayValue(rowName));',
+    'flash.external.ExternalInterface.call("Helen_GetInt",key)',
+    'flash.external.ExternalInterface.call("Helen_SetInt"',
+    'flash.external.ExternalInterface.call("Helen_RunCommand","applyBatmanGraphicsDraft")',
+    'HasUnsavedChanges',
+    'return new Array("Windowed","Fullscreen");',
     '_root.TriggerEvent("Options");',
     'this.AddItem(GraphicsRow1,14,1,-1,-1);',
     'this.AddItem(GraphicsRow15,13,0,-1,-1);'
 )
 
 $ForbiddenInteractiveControllerTokens = @(
-    'flash.external.ExternalInterface.call("Helen_GetInt",key)',
-    'flash.external.ExternalInterface.call("Helen_SetInt"',
-    'flash.external.ExternalInterface.call("Helen_RunCommand","applyBatmanGraphicsDraft")',
-    'this.ExitPromptMode = "unsaved";',
-    'this.ExitPromptMode = "restart";',
-    'if(this.ExitPromptMode == "restart")',
-    'this.Screen.ReturnFromScreen();',
-    'this.LoadDraftValues();',
-    'this.CaptureInitialState();',
-    'HasUnsavedChanges',
-    'return new Array("Windowed","Fullscreen");',
+    'return new Array(this.GetRowDisplayValue(rowName));',
+    'return "Preview Only";',
     'return new Array(this.DraftState.fullscreen == 0 ? "Windowed" : "Fullscreen");'
 )
 
@@ -497,6 +492,10 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedGraphicsRowClipPaths.Count; $RowIndex
         '_parent.GraphicsController.GetRowValues(rowName);',
         'this.Names = _parent.GraphicsController.GetRowValues(this.RowName);',
         'this.State = _parent.GraphicsController.GetRowState(this.RowName);',
+        '_parent.GraphicsController.HandleRowAction(this.RowName);',
+        '_parent.GraphicsController.IncrementRow(this.RowName);',
+        '_parent.GraphicsController.DecrementRow(this.RowName);',
+        '"$UI.Cycle"',
         'this.LeftClicker._visible = false;',
         'this.RightClicker._visible = false;'
     )) {
@@ -516,11 +515,7 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedGraphicsRowClipPaths.Count; $RowIndex
         'GetLogicalRowNameByOffset',
         '_parent.GraphicsController.GetRowDisplayLabel(rowName);',
         '_parent.GraphicsController.GetValueForRow(this.RowName);',
-        'this.Init(rowName,"","");',
-        '_parent.GraphicsController.HandleRowAction(this.RowName);',
-        '_parent.GraphicsController.IncrementRow(this.RowName);',
-        '_parent.GraphicsController.DecrementRow(this.RowName);',
-        '_loc2_.SetPrompt(_loc2_.CI_Interact,"$UI.Cycle",this._parent.myListener.onPromptClick,100,100);'
+        'this.Init(rowName,"","");'
     )) {
         if ($GraphicsRowClipScript.IndexOf($ForbiddenControllerToken, [System.StringComparison]::Ordinal) -ge 0) {
             throw "Graphics row clip script still contains unsupported controller token '$ForbiddenControllerToken': $ResolvedGraphicsRowClipPath"
@@ -584,12 +579,11 @@ foreach ($ForbiddenFailSoftToken in @(
     }
 }
 
-if ($GraphicsScreenScript.IndexOf('return new Array(this.GetRowDisplayValue(rowName));', [System.StringComparison]::Ordinal) -lt 0) {
-    throw 'Graphics screen script is missing the expected static row display contract.'
+if ($GraphicsScreenScript.IndexOf('return new Array("Windowed","Fullscreen");', [System.StringComparison]::Ordinal) -lt 0) {
+    throw 'Graphics screen script is missing the expected two-value Fullscreen display contract.'
 }
 
 foreach ($ForbiddenFullscreenDisplayToken in @(
-    'return new Array("Windowed","Fullscreen");',
     'return new Array(this.DraftState.fullscreen == 0 ? "Windowed" : "Fullscreen");'
 )) {
     if ($GraphicsScreenScript.IndexOf($ForbiddenFullscreenDisplayToken, [System.StringComparison]::Ordinal) -ge 0) {

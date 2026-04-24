@@ -24,6 +24,11 @@ internal static class MainMenuGraphicsOptionsGfxPatcher
     private const int ShowFrameTagCode = 1;
 
     /// <summary>
+    /// Stores the SWF tag code for DoAction.
+    /// </summary>
+    private const int DoActionTagCode = 12;
+
+    /// <summary>
     /// Stores the SWF tag code for DefineSprite.
     /// </summary>
     private const int DefineSpriteTagCode = 39;
@@ -42,6 +47,11 @@ internal static class MainMenuGraphicsOptionsGfxPatcher
     /// Stores the sprite id used by <c>ScreenOptionsMenu</c> inside MainMenu.MainV2.
     /// </summary>
     private const ushort ScreenOptionsMenuSpriteId = 333;
+
+    /// <summary>
+    /// Stores the sprite id used by <c>ScreenOptionsAudio</c> inside MainMenu.MainV2.
+    /// </summary>
+    private const ushort ScreenOptionsAudioSpriteId = 359;
 
     /// <summary>
     /// Stores the source sprite id emitted by the prototype builder for <c>ScreenOptionsGraphics</c>.
@@ -154,8 +164,9 @@ internal static class MainMenuGraphicsOptionsGfxPatcher
     }
 
     /// <summary>
-    /// Patches one retail MainV2 GFX payload by replacing only the options-menu sprite
-    /// and appending the prototype graphics screen assets before the retail root ShowFrame.
+    /// Patches one retail MainV2 GFX payload by replacing the root script, audio screen,
+    /// and options-menu sprite while appending the prototype graphics screen assets before
+    /// the retail root ShowFrame.
     /// </summary>
     /// <param name="retailGfxBytes">Original retail MainV2 GFX payload bytes.</param>
     /// <param name="prototypeGfxPath">Path to the generated graphics-options prototype MainV2 GFX file.</param>
@@ -170,6 +181,15 @@ internal static class MainMenuGraphicsOptionsGfxPatcher
             retailGfxBytes,
             ScreenOptionsMenuSpriteId,
             "retail ScreenOptionsMenu sprite");
+        SwfTag retailAudioScreenTag = FindDefineSpriteTag(
+            retailGfxBytes,
+            ScreenOptionsAudioSpriteId,
+            "retail ScreenOptionsAudio sprite");
+        SwfTag retailRootDoActionTag = FindTagByCodeOccurrence(
+            retailGfxBytes,
+            DoActionTagCode,
+            1,
+            "retail MainV2 root DoAction tag");
         SwfTag retailRootShowFrameTag = FindUniqueTagByCode(
             retailGfxBytes,
             ShowFrameTagCode,
@@ -178,6 +198,15 @@ internal static class MainMenuGraphicsOptionsGfxPatcher
             prototypeGfxBytes,
             ScreenOptionsMenuSpriteId,
             "prototype ScreenOptionsMenu sprite");
+        SwfTag prototypeAudioScreenTag = FindDefineSpriteTag(
+            prototypeGfxBytes,
+            ScreenOptionsAudioSpriteId,
+            "prototype ScreenOptionsAudio sprite");
+        SwfTag prototypeRootDoActionTag = FindTagByCodeOccurrence(
+            prototypeGfxBytes,
+            DoActionTagCode,
+            1,
+            "prototype MainV2 root DoAction tag");
         SwfTag prototypeGraphicsScreenTag = FindDefineSpriteTag(
             prototypeGfxBytes,
             PrototypeScreenOptionsGraphicsSpriteId,
@@ -213,11 +242,17 @@ internal static class MainMenuGraphicsOptionsGfxPatcher
             retailGfxBytes,
             RetailGraphicsExitPromptSpriteId,
             "GraphicsExitPrompt");
+        EnsureMatchingTagCode(retailRootDoActionTag, prototypeRootDoActionTag, "MainV2 root DoAction tag");
+        EnsureMatchingTagCode(retailAudioScreenTag, prototypeAudioScreenTag, "ScreenOptionsAudio sprite");
         EnsureMatchingTagCode(retailOptionsMenuTag, prototypeOptionsMenuTag, "ScreenOptionsMenu sprite");
         return RewritePatchedTags(
             retailGfxBytes,
+            retailRootDoActionTag,
+            retailAudioScreenTag,
             retailOptionsMenuTag,
             retailRootShowFrameTag,
+            prototypeRootDoActionTag,
+            prototypeAudioScreenTag,
             prototypeOptionsMenuTag,
             prototypeGraphicsScreenTag,
             prototypeGraphicsScreenExportTag,
@@ -565,6 +600,52 @@ internal static class MainMenuGraphicsOptionsGfxPatcher
     }
 
     /// <summary>
+    /// Finds one top-level tag by SWF tag code and 1-based occurrence index.
+    /// </summary>
+    /// <param name="gfxBytes">Complete GFX payload bytes.</param>
+    /// <param name="tagCode">SWF tag code to locate.</param>
+    /// <param name="occurrence">1-based occurrence index for the requested tag code.</param>
+    /// <param name="description">Human-readable description used in failure messages.</param>
+    /// <returns>Resolved top-level tag.</returns>
+    private static SwfTag FindTagByCodeOccurrence(
+        ReadOnlySpan<byte> gfxBytes,
+        int tagCode,
+        int occurrence,
+        string description)
+    {
+        if (occurrence <= 0)
+        {
+            throw new InvalidOperationException($"Tag occurrence must be positive for {description}.");
+        }
+
+        int offset = GetFirstTagOffset(gfxBytes);
+        int seen = 0;
+
+        while (offset < gfxBytes.Length)
+        {
+            SwfTag tag = ReadTagHeader(gfxBytes, offset);
+
+            if (tag.Code == 0)
+            {
+                break;
+            }
+
+            if (tag.Code == tagCode)
+            {
+                seen++;
+                if (seen == occurrence)
+                {
+                    return tag;
+                }
+            }
+
+            offset = tag.DataOffset + tag.DataLength;
+        }
+
+        throw new InvalidOperationException($"Could not find {description} at occurrence {occurrence}.");
+    }
+
+    /// <summary>
     /// Finds the unique top-level ExportAssets tag whose payload contains every required ASCII token.
     /// </summary>
     /// <param name="gfxBytes">Complete GFX payload bytes.</param>
@@ -676,12 +757,16 @@ internal static class MainMenuGraphicsOptionsGfxPatcher
     }
 
     /// <summary>
-    /// Rewrites the retail payload by replacing the options-menu sprite and inserting the
-    /// prototype graphics screen tags before the retail root ShowFrame tag.
+    /// Rewrites the retail payload by replacing the root script, audio screen, and options-menu
+    /// sprite while inserting the prototype graphics screen tags before the retail root ShowFrame tag.
     /// </summary>
     /// <param name="retailGfxBytes">Original retail MainV2 payload bytes.</param>
+    /// <param name="retailRootDoActionTag">Retail top-level root DoAction tag.</param>
+    /// <param name="retailAudioScreenTag">Retail ScreenOptionsAudio sprite tag.</param>
     /// <param name="retailOptionsMenuTag">Retail ScreenOptionsMenu sprite tag.</param>
     /// <param name="retailRootShowFrameTag">Retail root ShowFrame tag.</param>
+    /// <param name="prototypeRootDoActionTag">Prototype top-level root DoAction tag.</param>
+    /// <param name="prototypeAudioScreenTag">Prototype ScreenOptionsAudio sprite tag.</param>
     /// <param name="prototypeOptionsMenuTag">Prototype ScreenOptionsMenu sprite tag.</param>
     /// <param name="prototypeGraphicsScreenTag">Prototype ScreenOptionsGraphics sprite tag.</param>
     /// <param name="prototypeGraphicsScreenExportTag">Prototype ScreenOptionsGraphics export tag.</param>
@@ -693,8 +778,12 @@ internal static class MainMenuGraphicsOptionsGfxPatcher
     /// <returns>Patched MainV2 payload bytes.</returns>
     private static byte[] RewritePatchedTags(
         ReadOnlySpan<byte> retailGfxBytes,
+        SwfTag retailRootDoActionTag,
+        SwfTag retailAudioScreenTag,
         SwfTag retailOptionsMenuTag,
         SwfTag retailRootShowFrameTag,
+        SwfTag prototypeRootDoActionTag,
+        SwfTag prototypeAudioScreenTag,
         SwfTag prototypeOptionsMenuTag,
         SwfTag prototypeGraphicsScreenTag,
         SwfTag prototypeGraphicsScreenExportTag,
@@ -704,11 +793,15 @@ internal static class MainMenuGraphicsOptionsGfxPatcher
         SwfTag prototypeGraphicsExitPromptDoInitActionTag,
         ReadOnlySpan<byte> prototypeGfxBytes)
     {
-        if (retailOptionsMenuTag.Offset >= retailRootShowFrameTag.Offset)
+        if (retailRootDoActionTag.Offset >= retailRootShowFrameTag.Offset ||
+            retailAudioScreenTag.Offset >= retailRootShowFrameTag.Offset ||
+            retailOptionsMenuTag.Offset >= retailRootShowFrameTag.Offset)
         {
-            throw new InvalidOperationException("Expected the retail ScreenOptionsMenu sprite tag to appear before the retail root ShowFrame tag.");
+            throw new InvalidOperationException("Expected the retail root, audio, and options tags to appear before the retail root ShowFrame tag.");
         }
 
+        byte[] replacementRootDoActionTagBytes = SerializeTag(prototypeGfxBytes, prototypeRootDoActionTag);
+        byte[] replacementAudioScreenTagBytes = SerializeTag(prototypeGfxBytes, prototypeAudioScreenTag);
         byte[] replacementOptionsMenuTagBytes = SerializeTag(prototypeGfxBytes, prototypeOptionsMenuTag);
         byte[] graphicsScreenTagBytes = SerializeDefineSpriteTagWithSpriteId(
             prototypeGfxBytes,
@@ -742,7 +835,14 @@ internal static class MainMenuGraphicsOptionsGfxPatcher
             prototypeGraphicsExitPromptDoInitActionTag,
             RetailGraphicsExitPromptSpriteId,
             "prototype GraphicsExitPrompt DoInitAction tag");
-        int retailOptionsMenuEndOffset = retailOptionsMenuTag.DataOffset + retailOptionsMenuTag.DataLength;
+        var replacements = new[]
+        {
+            (Offset: retailRootDoActionTag.Offset, EndOffset: retailRootDoActionTag.DataOffset + retailRootDoActionTag.DataLength, Bytes: replacementRootDoActionTagBytes),
+            (Offset: retailAudioScreenTag.Offset, EndOffset: retailAudioScreenTag.DataOffset + retailAudioScreenTag.DataLength, Bytes: replacementAudioScreenTagBytes),
+            (Offset: retailOptionsMenuTag.Offset, EndOffset: retailOptionsMenuTag.DataOffset + retailOptionsMenuTag.DataLength, Bytes: replacementOptionsMenuTagBytes)
+        }
+        .OrderBy(replacement => replacement.Offset)
+        .ToArray();
         int insertedTagBytesLength =
             graphicsScreenTagBytes.Length +
             graphicsScreenExportTagBytes.Length +
@@ -750,21 +850,44 @@ internal static class MainMenuGraphicsOptionsGfxPatcher
             graphicsExitPromptExportTagBytes.Length +
             graphicsScreenDoInitActionTagBytes.Length +
             graphicsExitPromptDoInitActionTagBytes.Length;
-        int patchedLength = retailOptionsMenuTag.Offset +
-            replacementOptionsMenuTagBytes.Length +
-            (retailRootShowFrameTag.Offset - retailOptionsMenuEndOffset) +
-            insertedTagBytesLength +
-            (retailGfxBytes.Length - retailRootShowFrameTag.Offset);
+        int retailCursor = 0;
+        int patchedLength = 0;
+        foreach (var replacement in replacements)
+        {
+            if (replacement.Offset < retailCursor)
+            {
+                throw new InvalidOperationException("Retail tag replacement order overlapped unexpectedly.");
+            }
+
+            patchedLength += replacement.Offset - retailCursor;
+            patchedLength += replacement.Bytes.Length;
+            retailCursor = replacement.EndOffset;
+        }
+
+        if (retailRootShowFrameTag.Offset < retailCursor)
+        {
+            throw new InvalidOperationException("Retail root ShowFrame tag overlapped an earlier replacement tag.");
+        }
+
+        patchedLength += retailRootShowFrameTag.Offset - retailCursor;
+        patchedLength += insertedTagBytesLength;
+        patchedLength += retailGfxBytes.Length - retailRootShowFrameTag.Offset;
         byte[] patchedGfx = new byte[patchedLength];
         int writeOffset = 0;
+        retailCursor = 0;
 
-        retailGfxBytes[..retailOptionsMenuTag.Offset].CopyTo(patchedGfx);
-        writeOffset += retailOptionsMenuTag.Offset;
+        foreach (var replacement in replacements)
+        {
+            ReadOnlySpan<byte> retainedBytes = retailGfxBytes[retailCursor..replacement.Offset];
+            retainedBytes.CopyTo(patchedGfx.AsSpan(writeOffset));
+            writeOffset += retainedBytes.Length;
 
-        replacementOptionsMenuTagBytes.CopyTo(patchedGfx.AsSpan(writeOffset));
-        writeOffset += replacementOptionsMenuTagBytes.Length;
+            replacement.Bytes.CopyTo(patchedGfx.AsSpan(writeOffset));
+            writeOffset += replacement.Bytes.Length;
+            retailCursor = replacement.EndOffset;
+        }
 
-        ReadOnlySpan<byte> middleBytes = retailGfxBytes[retailOptionsMenuEndOffset..retailRootShowFrameTag.Offset];
+        ReadOnlySpan<byte> middleBytes = retailGfxBytes[retailCursor..retailRootShowFrameTag.Offset];
         middleBytes.CopyTo(patchedGfx.AsSpan(writeOffset));
         writeOffset += middleBytes.Length;
 
