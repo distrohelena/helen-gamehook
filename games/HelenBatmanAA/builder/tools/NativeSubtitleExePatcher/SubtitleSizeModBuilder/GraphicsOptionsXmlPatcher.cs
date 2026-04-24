@@ -36,7 +36,7 @@ internal static class GraphicsOptionsXmlPatcher
     /// <summary>
     /// Depth used by the top options-menu Game button after rebalance.
     /// </summary>
-    private const int GameButtonDepth = 39;
+    private const int GameButtonDepth = 43;
 
     /// <summary>
     /// Depth used by the new options-menu Graphics button after rebalance.
@@ -62,6 +62,16 @@ internal static class GraphicsOptionsXmlPatcher
     /// Temporary depth used to relocate legacy non-button depth-39 timeline tags before the new Game button is assigned to depth 39.
     /// </summary>
     private const int LegacyDepth39RelocationDepth = 41;
+
+    /// <summary>
+    /// Source depth used by the options-menu title text timeline.
+    /// </summary>
+    private const int OptionsMenuTitleDepth = 40;
+
+    /// <summary>
+    /// Target depth used to lift the options-menu title above the relocated legacy depth-39 overlay.
+    /// </summary>
+    private const int OptionsMenuRaisedTitleDepth = 42;
 
     /// <summary>
     /// Source depth used by the yes/no prompt "No" button timeline.
@@ -92,6 +102,26 @@ internal static class GraphicsOptionsXmlPatcher
     /// X translation used by full-page graphics rows so the list aligns with the broader Game Options column.
     /// </summary>
     private const int ListTemplateTranslateX = -781;
+
+    /// <summary>
+    /// Depth used by the inherited graphics header backing block.
+    /// </summary>
+    private const int GraphicsHeaderBackingDepth = 146;
+
+    /// <summary>
+    /// Depth used by the inherited graphics title text.
+    /// </summary>
+    private const int GraphicsHeaderTitleDepth = 147;
+
+    /// <summary>
+    /// Target Y translation for the graphics header backing block after moving it to the top shell position.
+    /// </summary>
+    private const int GraphicsHeaderBackingTranslateY = -697;
+
+    /// <summary>
+    /// Target Y translation for the graphics title text after moving it to the top shell position.
+    /// </summary>
+    private const int GraphicsHeaderTitleTranslateY = -1353;
 
     /// <summary>
     /// Source row depth cloned to create missing fullscreen graphics rows from the game screen.
@@ -254,7 +284,6 @@ internal static class GraphicsOptionsXmlPatcher
         XmlElement subTags = GetSingleElement(optionsMenuSprite, "subTags");
         List<XmlElement> originalChildren = subTags.ChildNodes.OfType<XmlElement>().ToList();
 
-        RelocateLegacyDepth39Timeline(subTags, originalChildren);
         CloneGameDepthTimelineToDepth39(subTags, originalChildren);
         RenameDepth37ButtonToGraphics(subTags);
         ApplyOptionsMenuButtonTranslateY(subTags);
@@ -375,6 +404,38 @@ internal static class GraphicsOptionsXmlPatcher
     }
 
     /// <summary>
+    /// Lifts the options-menu title timeline above the relocated legacy depth-39 overlay so the <c>$UI.Options</c> header remains visible.
+    /// </summary>
+    /// <param name="subTags">The options-menu timeline node collection.</param>
+    private static void RaiseOptionsMenuTitleAboveRelocatedTimeline(XmlElement subTags)
+    {
+        foreach (XmlElement child in subTags.ChildNodes.OfType<XmlElement>())
+        {
+            if (!IsDepthTag(child, OptionsMenuTitleDepth))
+            {
+                continue;
+            }
+
+            if (!IsTimelineDepthTagType(child))
+            {
+                continue;
+            }
+
+            SetAttribute(child, "depth", OptionsMenuRaisedTitleDepth.ToString());
+        }
+    }
+
+    /// <summary>
+    /// Freezes the relocated vanilla Options header backing and title into their settled visible state so the chooser keeps the retail header bar.
+    /// </summary>
+    /// <param name="subTags">The options-menu timeline node collection.</param>
+    private static void LockOptionsMenuHeaderVisible(XmlElement subTags)
+    {
+        LockHeaderDepthVisible(subTags, LegacyDepth39RelocationDepth);
+        LockHeaderDepthVisible(subTags, OptionsMenuRaisedTitleDepth);
+    }
+
+    /// <summary>
     /// Appends cloned graphics screen structures and the corresponding export and class registration tags.
     /// </summary>
     /// <param name="tags">The frontend root tags node.</param>
@@ -407,6 +468,8 @@ internal static class GraphicsOptionsXmlPatcher
         List<XmlElement> originalChildren = subTags.ChildNodes.OfType<XmlElement>().ToList();
         EnsureGraphicsRowDepthTimeline(originalChildren);
         RemoveLegacyGameRowDepthTimelines(subTags);
+        NormalizeGraphicsHeaderPlacements(subTags);
+        NameGraphicsTitlePlacement(subTags);
         NormalizeGraphicsRowPlacements(subTags);
     }
 
@@ -635,6 +698,28 @@ internal static class GraphicsOptionsXmlPatcher
     }
 
     /// <summary>
+    /// Moves only the inherited header shell and title text to the higher top-of-screen slot without disturbing the rest of the graphics screen.
+    /// </summary>
+    /// <param name="subTags">The graphics screen timeline node collection.</param>
+    private static void NormalizeGraphicsHeaderPlacements(XmlElement subTags)
+    {
+        NormalizeTimelineTranslateYAtDepth(subTags, GraphicsHeaderBackingDepth, GraphicsHeaderBackingTranslateY);
+        NormalizeTimelineTranslateYAtDepth(subTags, GraphicsHeaderTitleDepth, GraphicsHeaderTitleTranslateY);
+    }
+
+    /// <summary>
+    /// Names the cloned title edit-text placement so the injected graphics screen script can bind <c>this.Title</c>.
+    /// Without the instance name, the inherited <c>$UI.OptionsGame</c> default text stays visible.
+    /// </summary>
+    /// <param name="subTags">The graphics screen timeline node collection.</param>
+    private static void NameGraphicsTitlePlacement(XmlElement subTags)
+    {
+        XmlElement titlePlacement = FindInitialPlacementAtDepth(subTags, GraphicsHeaderTitleDepth);
+        SetAttribute(titlePlacement, "name", "Title");
+        SetAttribute(titlePlacement, "placeFlagHasName", "true");
+    }
+
+    /// <summary>
     /// Applies fixed row geometry to every placement matrix on a specific row depth so the full row cluster stays aligned across the timeline.
     /// </summary>
     /// <param name="subTags">The graphics screen timeline node collection.</param>
@@ -671,6 +756,156 @@ internal static class GraphicsOptionsXmlPatcher
                 SetTranslateY(matrix, targetTranslateY);
             }
         }
+    }
+
+    /// <summary>
+    /// Applies a uniform Y offset to every placement matrix on a specific depth so animated header timelines stay visually aligned after repositioning.
+    /// </summary>
+    /// <param name="subTags">The sprite timeline node collection.</param>
+    /// <param name="depth">The target depth whose placements should move together.</param>
+    /// <param name="targetTranslateY">The target Y coordinate for the initial non-zero placement at this depth.</param>
+    private static void NormalizeTimelineTranslateYAtDepth(XmlElement subTags, int depth, int targetTranslateY)
+    {
+        XmlElement placement = FindInitialPlacementAtDepth(subTags, depth);
+        XmlElement matrix = GetSingleElement(placement, "matrix");
+        int sourceTranslateY = ReadRequiredTranslateY(matrix);
+        int translateYDelta = targetTranslateY - sourceTranslateY;
+
+        foreach (XmlElement timelinePlacement in subTags.ChildNodes
+                     .OfType<XmlElement>()
+                     .Where(node =>
+                         GetAttribute(node, "type") == "PlaceObject2Tag" &&
+                         GetAttribute(node, "depth") == depth.ToString()))
+        {
+            XmlElement? timelineMatrix = timelinePlacement.ChildNodes
+                .OfType<XmlElement>()
+                .SingleOrDefault(node => node.Name == "matrix");
+            if (timelineMatrix is null)
+            {
+                continue;
+            }
+
+            int currentTranslateY = ReadRequiredTranslateY(timelineMatrix);
+            SetTranslateY(timelineMatrix, currentTranslateY + translateYDelta);
+        }
+    }
+
+    /// <summary>
+    /// Rewrites a relocated header depth to its final fully visible placement state and removes the remaining fade-out timeline tags.
+    /// </summary>
+    /// <param name="subTags">The options-menu timeline node collection.</param>
+    /// <param name="depth">The relocated header depth to freeze.</param>
+    private static void LockHeaderDepthVisible(XmlElement subTags, int depth)
+    {
+        XmlElement initialPlacement = FindInitialPlacementAtDepth(subTags, depth);
+        XmlElement settledPlacement = FindLastFullyVisiblePlacementAtDepth(subTags, depth);
+        CopyPlacementVisualState(initialPlacement, settledPlacement);
+
+        List<XmlElement> animatedTimelineTags = subTags.ChildNodes
+            .OfType<XmlElement>()
+            .Where(node =>
+                !ReferenceEquals(node, initialPlacement) &&
+                GetAttribute(node, "depth") == depth.ToString() &&
+                IsTimelineDepthTagType(node))
+            .ToList();
+
+        foreach (XmlElement animatedTimelineTag in animatedTimelineTags)
+        {
+            subTags.RemoveChild(animatedTimelineTag);
+        }
+    }
+
+    /// <summary>
+    /// Finds the last fully visible placement state on a depth so the settled retail header pose can be preserved statically.
+    /// </summary>
+    /// <param name="subTags">The timeline node collection.</param>
+    /// <param name="depth">The depth whose visible pose should be captured.</param>
+    /// <returns>The final fully opaque placement at the target depth.</returns>
+    private static XmlElement FindLastFullyVisiblePlacementAtDepth(XmlElement subTags, int depth)
+    {
+        XmlElement? placement = subTags.ChildNodes
+            .OfType<XmlElement>()
+            .Where(node =>
+                GetAttribute(node, "type") == "PlaceObject2Tag" &&
+                GetAttribute(node, "depth") == depth.ToString())
+            .LastOrDefault(node => ReadAlphaMultiplier(node) == 256);
+
+        if (placement is null)
+        {
+            throw new InvalidOperationException($"Expected a fully visible placement at depth {depth}.");
+        }
+
+        return placement;
+    }
+
+    /// <summary>
+    /// Copies matrix and color state from a settled source placement onto the initial visible placement that owns the character id.
+    /// </summary>
+    /// <param name="targetPlacement">The initial non-zero placement that should become the static header.</param>
+    /// <param name="sourcePlacement">The source placement whose visual state should be copied.</param>
+    private static void CopyPlacementVisualState(XmlElement targetPlacement, XmlElement sourcePlacement)
+    {
+        ReplacePlacementChild(targetPlacement, sourcePlacement, "matrix");
+        ReplacePlacementChild(targetPlacement, sourcePlacement, "colorTransform");
+
+        SetAttribute(
+            targetPlacement,
+            "placeFlagHasMatrix",
+            sourcePlacement.ChildNodes.OfType<XmlElement>().Any(node => node.Name == "matrix") ? "true" : "false");
+
+        SetAttribute(
+            targetPlacement,
+            "placeFlagHasColorTransform",
+            sourcePlacement.ChildNodes.OfType<XmlElement>().Any(node => node.Name == "colorTransform") ? "true" : "false");
+    }
+
+    /// <summary>
+    /// Replaces an optional child node on a placement element with the matching child cloned from another placement.
+    /// </summary>
+    /// <param name="targetPlacement">The placement whose child node should be replaced.</param>
+    /// <param name="sourcePlacement">The placement supplying the replacement child node.</param>
+    /// <param name="childName">The optional child element name.</param>
+    private static void ReplacePlacementChild(XmlElement targetPlacement, XmlElement sourcePlacement, string childName)
+    {
+        XmlElement? existingChild = targetPlacement.ChildNodes
+            .OfType<XmlElement>()
+            .SingleOrDefault(node => node.Name == childName);
+
+        if (existingChild is not null)
+        {
+            targetPlacement.RemoveChild(existingChild);
+        }
+
+        XmlElement? sourceChild = sourcePlacement.ChildNodes
+            .OfType<XmlElement>()
+            .SingleOrDefault(node => node.Name == childName);
+
+        if (sourceChild is null)
+        {
+            return;
+        }
+
+        targetPlacement.AppendChild(sourceChild.CloneNode(deep: true));
+    }
+
+    /// <summary>
+    /// Reads the alpha multiplier from an optional color transform, treating missing alpha state as fully visible.
+    /// </summary>
+    /// <param name="placement">The placement whose alpha multiplier should be inspected.</param>
+    /// <returns>The alpha multiplier in SWF fixed-point integer form.</returns>
+    private static int ReadAlphaMultiplier(XmlElement placement)
+    {
+        XmlElement? colorTransform = placement.ChildNodes
+            .OfType<XmlElement>()
+            .SingleOrDefault(node => node.Name == "colorTransform");
+
+        string? alphaMultTerm = colorTransform is null ? null : GetAttribute(colorTransform, "alphaMultTerm");
+        if (string.IsNullOrWhiteSpace(alphaMultTerm))
+        {
+            return 256;
+        }
+
+        return int.Parse(alphaMultTerm);
     }
 
     /// <summary>

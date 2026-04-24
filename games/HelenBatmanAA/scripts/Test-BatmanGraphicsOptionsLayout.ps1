@@ -170,8 +170,8 @@ $ExpectedGraphicsShellPlacements = @(
     @{ Depth = '1'; CharacterId = '141'; TranslateX = '-7126'; TranslateY = '899' },
     @{ Depth = '3'; CharacterId = '307'; TranslateX = '-7879'; TranslateY = '-287' },
     @{ Depth = '26'; CharacterId = '332'; TranslateX = '-1641'; TranslateY = '4609' },
-    @{ Depth = '146'; CharacterId = '118'; TranslateX = '-6582'; TranslateY = '-322' },
-    @{ Depth = '147'; CharacterId = '340'; TranslateX = '-8292'; TranslateY = '-978' }
+    @{ Depth = '146'; CharacterId = '118'; TranslateX = '-6582'; TranslateY = '-697' },
+    @{ Depth = '147'; CharacterId = '340'; TranslateX = '-8292'; TranslateY = '-1353' }
 )
 
 $RequiredFixedRowControllerTokens = @(
@@ -327,7 +327,7 @@ if ($Id601Definitions[0].Attributes['type'].Value -ne 'DefineSpriteTag') {
 }
 
 $ExpectedOptionsButtons = @(
-    @{ Name = 'Game'; Depth = '39' },
+    @{ Name = 'Game'; Depth = '43' },
     @{ Name = 'Graphics'; Depth = '37' },
     @{ Name = 'Audio'; Depth = '35' },
     @{ Name = 'Controls'; Depth = '33' },
@@ -347,10 +347,34 @@ foreach ($ExpectedButton in $ExpectedOptionsButtons) {
 }
 
 $OptionsButtonPlacements = @(
-    $OptionsMenuSubTags.SelectNodes("item[@type='PlaceObject2Tag' and @characterId='117' and (@depth='39' or @depth='37' or @depth='35' or @depth='33' or @depth='31')]")
+    $OptionsMenuSubTags.SelectNodes("item[@type='PlaceObject2Tag' and @characterId='117' and (@depth='43' or @depth='37' or @depth='35' or @depth='33' or @depth='31')]")
 )
 if ($OptionsButtonPlacements.Count -ne 5) {
     throw "ScreenOptionsMenu sprite 333 should contain exactly five button placements for the options stack, but found $($OptionsButtonPlacements.Count)."
+}
+
+$OptionsHeaderBacking = $OptionsMenuSubTags.SelectSingleNode("item[@type='PlaceObject2Tag' and @depth='39' and @characterId='118' and @characterId!='0']")
+if ($null -eq $OptionsHeaderBacking) {
+    throw 'ScreenOptionsMenu sprite 333 should keep the vanilla Options header backing shell on depth 39.'
+}
+
+$OptionsTitlePlacement = $OptionsMenuSubTags.SelectSingleNode("item[@type='PlaceObject2Tag' and @depth='40' and @characterId='326' and @characterId!='0']")
+if ($null -eq $OptionsTitlePlacement) {
+    throw 'ScreenOptionsMenu sprite 333 should keep the vanilla $UI.Options title on depth 40.'
+}
+
+$RelocatedOptionsHeaderTimeline = @(
+    $OptionsMenuSubTags.SelectNodes("item[((@depth='41' or @depth='42')) and (@type='PlaceObject2Tag' or @type='RemoveObject2Tag')]")
+)
+if ($RelocatedOptionsHeaderTimeline.Count -ne 0) {
+    throw 'ScreenOptionsMenu sprite 333 should not relocate the vanilla Options header timeline onto depths 41 or 42.'
+}
+
+$InjectedGameOptionsHeader = @(
+    $OptionsMenuSubTags.SelectNodes("item[@type='PlaceObject2Tag' and ((@depth='146' and @characterId='118') or (@depth='147' and @characterId='340'))]")
+)
+if ($InjectedGameOptionsHeader.Count -ne 0) {
+    throw 'ScreenOptionsMenu sprite 333 should not inject a Game Options submenu header into the main Options chooser.'
 }
 
 $ScreenRegistrationPath = Join-Path $ExportScriptsRoot 'ScreenOptionsGraphics.as'
@@ -744,6 +768,21 @@ foreach ($ExpectedGraphicsShellPlacement in $ExpectedGraphicsShellPlacements) {
     if ($ActualTranslateY -ne $ExpectedTranslateY) {
         throw "Graphics shell depth $ExpectedDepth character $ExpectedCharacterId has translateY $ActualTranslateY, expected $ExpectedTranslateY."
     }
+}
+
+$GraphicsTitlePlacement = $ScreenOptionsGraphics.SelectSingleNode("subTags/item[@type='PlaceObject2Tag' and @depth='147' and @characterId='340' and @characterId!='0']")
+if ($null -eq $GraphicsTitlePlacement) {
+    throw 'Graphics screen title placement at depth 147 for character 340 was not found.'
+}
+
+$GraphicsTitlePlacementName = $GraphicsTitlePlacement.Attributes['name']
+if ($null -eq $GraphicsTitlePlacementName -or $GraphicsTitlePlacementName.Value -ne 'Title') {
+    throw "Graphics screen title placement should be named 'Title', but found '$($GraphicsTitlePlacementName.Value)'."
+}
+
+$GraphicsTitleHasNameFlag = $GraphicsTitlePlacement.Attributes['placeFlagHasName']
+if ($null -eq $GraphicsTitleHasNameFlag -or $GraphicsTitleHasNameFlag.Value -ne 'true') {
+    throw "Graphics screen title placement should set placeFlagHasName='true', but found '$($GraphicsTitleHasNameFlag.Value)'."
 }
 
 foreach ($ForbiddenHelperToken in @(
