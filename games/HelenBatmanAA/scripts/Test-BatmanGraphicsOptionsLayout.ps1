@@ -180,10 +180,10 @@ $ExpectedGraphicsShellPlacements = @(
         Depth = '3'
         CharacterId = '307'
         TranslateX = '-7879'
-        TranslateY = '-1400'
+        TranslateY = '-4600'
         HasScale = 'true'
         ScaleX = '2.0688171'
-        ScaleY = '2.890625'
+        ScaleY = '4.625'
     },
     @{
         Depth = '26'
