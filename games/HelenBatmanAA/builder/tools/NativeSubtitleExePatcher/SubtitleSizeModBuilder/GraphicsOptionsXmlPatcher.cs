@@ -116,12 +116,37 @@ internal static class GraphicsOptionsXmlPatcher
     /// <summary>
     /// Target Y translation for the graphics header backing block after moving it near the top of the graphics screen.
     /// </summary>
-    private const int GraphicsHeaderBackingTranslateY = -4080;
+    private const int GraphicsHeaderBackingTranslateY = -4780;
 
     /// <summary>
     /// Target Y translation for the graphics title text after moving it near the top of the graphics screen.
     /// </summary>
-    private const int GraphicsHeaderTitleTranslateY = -4736;
+    private const int GraphicsHeaderTitleTranslateY = -5436;
+
+    /// <summary>
+    /// Depth used by the retained translucent graphics background panel.
+    /// </summary>
+    private const int GraphicsPanelDepth = 3;
+
+    /// <summary>
+    /// Character id used by the retained translucent graphics background panel.
+    /// </summary>
+    private const int GraphicsPanelCharacterId = 307;
+
+    /// <summary>
+    /// Target Y translation for the retained translucent graphics background panel.
+    /// </summary>
+    private const int GraphicsPanelTranslateY = -1400;
+
+    /// <summary>
+    /// Target X scale for the retained translucent graphics background panel.
+    /// </summary>
+    private const string GraphicsPanelScaleX = "2.0688171";
+
+    /// <summary>
+    /// Target Y scale for the retained translucent graphics background panel after extending it to cover most of the screen height.
+    /// </summary>
+    private const string GraphicsPanelScaleY = "2.890625";
 
     /// <summary>
     /// Source row depth cloned to create missing fullscreen graphics rows from the game screen.
@@ -469,6 +494,7 @@ internal static class GraphicsOptionsXmlPatcher
         EnsureGraphicsRowDepthTimeline(originalChildren);
         RemoveLegacyGameRowDepthTimelines(subTags);
         NormalizeGraphicsHeaderPlacements(subTags);
+        NormalizeGraphicsPanelPlacement(subTags);
         NameGraphicsTitlePlacement(subTags);
         NormalizeGraphicsRowPlacements(subTags);
     }
@@ -705,6 +731,44 @@ internal static class GraphicsOptionsXmlPatcher
     {
         NormalizeTimelineTranslateYAtDepth(subTags, GraphicsHeaderBackingDepth, GraphicsHeaderBackingTranslateY);
         NormalizeTimelineTranslateYAtDepth(subTags, GraphicsHeaderTitleDepth, GraphicsHeaderTitleTranslateY);
+    }
+
+    /// <summary>
+    /// Resizes only the retained translucent graphics background panel so the full graphics row stack fits inside it.
+    /// </summary>
+    /// <param name="subTags">The graphics screen timeline node collection.</param>
+    private static void NormalizeGraphicsPanelPlacement(XmlElement subTags)
+    {
+        XmlElement placement = FindInitialPlacementAtDepth(subTags, GraphicsPanelDepth);
+        if (GetAttribute(placement, "characterId") != GraphicsPanelCharacterId.ToString())
+        {
+            throw new InvalidOperationException(
+                $"Expected retained graphics panel at depth {GraphicsPanelDepth} with character {GraphicsPanelCharacterId}.");
+        }
+
+        XmlElement matrix = GetSingleElement(placement, "matrix");
+        int sourceTranslateY = ReadRequiredTranslateY(matrix);
+        int translateYDelta = GraphicsPanelTranslateY - sourceTranslateY;
+
+        foreach (XmlElement timelinePlacement in subTags.ChildNodes
+                     .OfType<XmlElement>()
+                     .Where(node =>
+                         GetAttribute(node, "type") == "PlaceObject2Tag" &&
+                         GetAttribute(node, "depth") == GraphicsPanelDepth.ToString()))
+        {
+            XmlElement? timelineMatrix = timelinePlacement.ChildNodes
+                .OfType<XmlElement>()
+                .SingleOrDefault(node => node.Name == "matrix");
+            if (timelineMatrix is null)
+            {
+                continue;
+            }
+
+            int currentTranslateY = ReadRequiredTranslateY(timelineMatrix);
+            SetTranslateY(timelineMatrix, currentTranslateY + translateYDelta);
+            SetScaleX(timelineMatrix, GraphicsPanelScaleX);
+            SetScaleY(timelineMatrix, GraphicsPanelScaleY);
+        }
     }
 
     /// <summary>
@@ -1388,5 +1452,27 @@ internal static class GraphicsOptionsXmlPatcher
     private static void SetTranslateX(XmlElement matrix, int translateX)
     {
         matrix.SetAttribute("translateX", translateX.ToString());
+    }
+
+    /// <summary>
+    /// Writes a matrix scaleX value while forcing the matrix to stay scaled.
+    /// </summary>
+    /// <param name="matrix">The matrix element to modify.</param>
+    /// <param name="scaleX">The new X scale.</param>
+    private static void SetScaleX(XmlElement matrix, string scaleX)
+    {
+        matrix.SetAttribute("hasScale", "true");
+        matrix.SetAttribute("scaleX", scaleX);
+    }
+
+    /// <summary>
+    /// Writes a matrix scaleY value while forcing the matrix to stay scaled.
+    /// </summary>
+    /// <param name="matrix">The matrix element to modify.</param>
+    /// <param name="scaleY">The new Y scale.</param>
+    private static void SetScaleY(XmlElement matrix, string scaleY)
+    {
+        matrix.SetAttribute("hasScale", "true");
+        matrix.SetAttribute("scaleY", scaleY);
     }
 }
