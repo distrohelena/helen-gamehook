@@ -197,8 +197,8 @@ $ExpectedGraphicsShellPlacements = @(
     @{
         Depth = '146'
         CharacterId = '118'
-        TranslateX = '-6582'
-        TranslateY = '-4780'
+        TranslateX = '-7482'
+        TranslateY = '-5020'
         HasScale = 'true'
         ScaleX = '0.7967224'
         ScaleY = '0.47787476'
@@ -206,8 +206,8 @@ $ExpectedGraphicsShellPlacements = @(
     @{
         Depth = '147'
         CharacterId = '340'
-        TranslateX = '-8292'
-        TranslateY = '-5436'
+        TranslateX = '-9192'
+        TranslateY = '-5676'
         HasScale = 'false'
         ScaleX = $null
         ScaleY = $null
