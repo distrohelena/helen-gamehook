@@ -99,22 +99,24 @@ $ExpectedGraphicsRowClipPaths = @(
 )
 
 $ExpectedGraphicsRowTranslateYByDepth = @{
-    '141' = '-1380'
-    '133' = '-1020'
-    '125' = '-660'
-    '117' = '-300'
-    '109' = '60'
-    '101' = '420'
-    '93' = '780'
-    '85' = '1140'
-    '77' = '1500'
-    '69' = '1860'
-    '61' = '2220'
-    '53' = '2580'
-    '45' = '2940'
-    '37' = '3300'
-    '29' = '3660'
+    '141' = '-4452'
+    '133' = '-3912'
+    '125' = '-3372'
+    '117' = '-2832'
+    '109' = '-2292'
+    '101' = '-1752'
+    '93' = '-1212'
+    '85' = '-672'
+    '77' = '-132'
+    '69' = '408'
+    '61' = '948'
+    '53' = '1488'
+    '45' = '2028'
+    '37' = '2568'
+    '29' = '3108'
 }
+
+$ExpectedGraphicsRowTranslateX = '-1805'
 
 $ExpectedGraphicsRowInstanceNameByDepth = @{
     '141' = 'GraphicsRow1'
@@ -736,6 +738,11 @@ foreach ($RowDepth in $ExpectedGraphicsRowTranslateYByDepth.Keys) {
         $MatrixNode = $RowPlacement.SelectSingleNode('matrix')
         if ($null -eq $MatrixNode) {
             continue
+        }
+
+        $ActualTranslateX = $MatrixNode.Attributes['translateX'].Value
+        if ($ActualTranslateX -ne $ExpectedGraphicsRowTranslateX) {
+            throw "Graphics row depth $RowDepth contains translateX $ActualTranslateX, expected $ExpectedGraphicsRowTranslateX."
         }
 
         $ActualTranslateY = $MatrixNode.Attributes['translateY'].Value

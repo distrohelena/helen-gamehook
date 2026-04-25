@@ -99,9 +99,9 @@ internal static class GraphicsOptionsXmlPatcher
     private const int AudioSliderTemplateCharacterId = 303;
 
     /// <summary>
-    /// X translation used by full-page graphics rows so the list aligns with the broader Game Options column.
+    /// X translation used by full-page graphics rows so the list sits centered inside the enlarged graphics panel.
     /// </summary>
-    private const int ListTemplateTranslateX = -781;
+    private const int ListTemplateTranslateX = -1805;
 
     /// <summary>
     /// Depth used by the inherited graphics header backing block.
@@ -244,21 +244,21 @@ internal static class GraphicsOptionsXmlPatcher
     /// </summary>
     private static readonly int[] GraphicsRowTranslateY =
     [
-        -1380,
-        -1020,
-        -660,
-        -300,
-        60,
-        420,
-        780,
-        1140,
-        1500,
-        1860,
-        2220,
-        2580,
-        2940,
-        3300,
-        3660
+        -4452,
+        -3912,
+        -3372,
+        -2832,
+        -2292,
+        -1752,
+        -1212,
+        -672,
+        -132,
+        408,
+        948,
+        1488,
+        2028,
+        2568,
+        3108
     ];
 
     /// <summary>

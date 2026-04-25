@@ -24,33 +24,33 @@ stage width  = 20480
 stage height = 15360
 ```
 
-The requested move is:
+The first full requested move was too aggressive in the row stack's local space. The final tuned placement uses a smaller horizontal move, a higher vertical anchor, and wider row spacing:
 
 ```text
-15% left  = 20480 * 0.15 = 3072
-30% up    = 15360 * 0.30 = 4608
+5% left = 20480 * 0.05 = 1024
+20% up  = 15360 * 0.20 = 3072
 ```
 
 The current row X anchor is `-781`, so the target row X anchor is:
 
 ```text
--781 - 3072 = -3853
+-781 - 1024 = -1805
 ```
 
-Each current graphics row Y coordinate moves up by `4608` matrix units.
+The first graphics row moves up by `3072` matrix units. Row spacing increases from `360` to `540` matrix units so the fifteen-row stack uses more of the enlarged panel.
 
 ## Implementation
 
 Update `GraphicsOptionsXmlPatcher.cs` to:
 
-- replace the row anchor constant with a graphics-specific row translate X value of `-3853`
-- subtract `4608` from every entry in `GraphicsRowTranslateY`
+- replace the row anchor constant with a graphics-specific row translate X value of `-1805`
+- set `GraphicsRowTranslateY` to start at `-4452` and advance by `540` matrix units per row
 - keep using the existing `NormalizeGraphicsRowPlacements` path so all timeline placements at each row depth move together
 
 Update `Test-BatmanGraphicsOptionsLayout.ps1` to lock:
 
 - every row depth has the new `translateY`
-- every row depth has `translateX = -3853`
+- every row depth has `translateX = -1805`
 
 ## Verification
 
