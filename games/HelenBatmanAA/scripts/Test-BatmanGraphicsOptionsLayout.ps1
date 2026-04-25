@@ -170,8 +170,8 @@ $ExpectedGraphicsShellPlacements = @(
     @{ Depth = '1'; CharacterId = '141'; TranslateX = '-7126'; TranslateY = '899' },
     @{ Depth = '3'; CharacterId = '307'; TranslateX = '-7879'; TranslateY = '-287' },
     @{ Depth = '26'; CharacterId = '332'; TranslateX = '-1641'; TranslateY = '4609' },
-    @{ Depth = '146'; CharacterId = '118'; TranslateX = '-6582'; TranslateY = '-8200' },
-    @{ Depth = '147'; CharacterId = '340'; TranslateX = '-8292'; TranslateY = '-8856' }
+    @{ Depth = '146'; CharacterId = '118'; TranslateX = '-6582'; TranslateY = '-4080' },
+    @{ Depth = '147'; CharacterId = '340'; TranslateX = '-8292'; TranslateY = '-4736' }
 )
 
 $RequiredFixedRowControllerTokens = @(
@@ -295,6 +295,30 @@ if ($null -eq $ScreenOptionsMenu) {
 $ScreenOptionsGraphics = $Document.SelectSingleNode("//item[@type='DefineSpriteTag' and @spriteId='600']")
 if ($null -eq $ScreenOptionsGraphics) {
     throw 'ScreenOptionsGraphics sprite 600 was not found in generated output.'
+}
+
+$GraphicsHeaderBackingDefinition = $Document.SelectSingleNode("/swf/tags/item[@type='DefineShapeTag' and @shapeId='118']")
+if ($null -eq $GraphicsHeaderBackingDefinition) {
+    throw 'Expected character 118 to remain a direct DefineShapeTag backing asset.'
+}
+
+$GraphicsHeaderBackingSpriteDefinitions = @(
+    $Document.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='118']")
+)
+if ($GraphicsHeaderBackingSpriteDefinitions.Count -ne 0) {
+    throw 'Character 118 unexpectedly became a nested sprite parent; update the graphics-header plan before patching.'
+}
+
+$GraphicsHeaderTitleDefinition = $Document.SelectSingleNode("/swf/tags/item[@type='DefineEditTextTag' and @characterID='340']")
+if ($null -eq $GraphicsHeaderTitleDefinition) {
+    throw 'Expected character 340 to remain the direct DefineEditTextTag title asset.'
+}
+
+$GraphicsHeaderTitleSpriteDefinitions = @(
+    $Document.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='340']")
+)
+if ($GraphicsHeaderTitleSpriteDefinitions.Count -ne 0) {
+    throw 'Character 340 unexpectedly became a nested sprite parent; update the graphics-header plan before patching.'
 }
 
 $GraphicsExitPrompt = $Document.SelectSingleNode("//item[@type='DefineSpriteTag' and @spriteId='601']")
