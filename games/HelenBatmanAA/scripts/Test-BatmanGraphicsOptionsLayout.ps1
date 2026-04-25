@@ -167,11 +167,51 @@ $RemovedGraphicsShellDepths = @(
 )
 
 $ExpectedGraphicsShellPlacements = @(
-    @{ Depth = '1'; CharacterId = '141'; TranslateX = '-7126'; TranslateY = '899' },
-    @{ Depth = '3'; CharacterId = '307'; TranslateX = '-7879'; TranslateY = '-287' },
-    @{ Depth = '26'; CharacterId = '332'; TranslateX = '-1641'; TranslateY = '4609' },
-    @{ Depth = '146'; CharacterId = '118'; TranslateX = '-6582'; TranslateY = '-4080' },
-    @{ Depth = '147'; CharacterId = '340'; TranslateX = '-8292'; TranslateY = '-4736' }
+    @{
+        Depth = '1'
+        CharacterId = '141'
+        TranslateX = '-7126'
+        TranslateY = '899'
+        HasScale = 'false'
+        ScaleX = $null
+        ScaleY = $null
+    },
+    @{
+        Depth = '3'
+        CharacterId = '307'
+        TranslateX = '-7879'
+        TranslateY = '-1400'
+        HasScale = 'true'
+        ScaleX = '2.0688171'
+        ScaleY = '2.890625'
+    },
+    @{
+        Depth = '26'
+        CharacterId = '332'
+        TranslateX = '-1641'
+        TranslateY = '4609'
+        HasScale = 'true'
+        ScaleX = '-0.5350189'
+        ScaleY = '-0.5350189'
+    },
+    @{
+        Depth = '146'
+        CharacterId = '118'
+        TranslateX = '-6582'
+        TranslateY = '-4780'
+        HasScale = 'true'
+        ScaleX = '0.7967224'
+        ScaleY = '0.47787476'
+    },
+    @{
+        Depth = '147'
+        CharacterId = '340'
+        TranslateX = '-8292'
+        TranslateY = '-5436'
+        HasScale = 'false'
+        ScaleX = $null
+        ScaleY = $null
+    }
 )
 
 $RequiredFixedRowControllerTokens = @(
@@ -767,6 +807,36 @@ foreach ($RemovedDepth in $RemovedGraphicsShellDepths) {
     }
 }
 
+$GraphicsPanelOwnerPlacement = $ScreenOptionsGraphics.SelectSingleNode(
+    "subTags/item[@type='PlaceObject2Tag' and @depth='3' and @characterId='307']"
+)
+
+if ($null -eq $GraphicsPanelOwnerPlacement) {
+    throw 'Expected retained graphics panel owner at depth 3 with character 307.'
+}
+
+$GraphicsPanelOwnerMatrix = $GraphicsPanelOwnerPlacement.SelectSingleNode('matrix')
+if ($null -eq $GraphicsPanelOwnerMatrix) {
+    throw 'Expected retained graphics panel owner to contain a matrix node.'
+}
+
+if ($GraphicsPanelOwnerMatrix.Attributes['hasScale'].Value -ne 'true') {
+    throw "Expected retained graphics panel owner at depth 3 to keep hasScale='true'."
+}
+
+$GraphicsHeaderShellPlacement = $ScreenOptionsGraphics.SelectSingleNode(
+    "subTags/item[@type='PlaceObject2Tag' and @depth='1' and @characterId='141']"
+)
+
+if ($null -eq $GraphicsHeaderShellPlacement) {
+    throw 'Expected retained graphics shell placement at depth 1 with character 141.'
+}
+
+$GraphicsHeaderShellMatrix = $GraphicsHeaderShellPlacement.SelectSingleNode('matrix')
+if ($GraphicsHeaderShellMatrix.Attributes['hasScale'].Value -ne 'false') {
+    throw "Expected retained shell depth 1 character 141 to keep hasScale='false'."
+}
+
 foreach ($ExpectedGraphicsShellPlacement in $ExpectedGraphicsShellPlacements) {
     $ExpectedDepth = $ExpectedGraphicsShellPlacement.Depth
     $ExpectedCharacterId = $ExpectedGraphicsShellPlacement.CharacterId
@@ -791,6 +861,26 @@ foreach ($ExpectedGraphicsShellPlacement in $ExpectedGraphicsShellPlacements) {
     $ActualTranslateY = $MatrixNode.Attributes['translateY'].Value
     if ($ActualTranslateY -ne $ExpectedTranslateY) {
         throw "Graphics shell depth $ExpectedDepth character $ExpectedCharacterId has translateY $ActualTranslateY, expected $ExpectedTranslateY."
+    }
+
+    $ExpectedHasScale = $ExpectedGraphicsShellPlacement.HasScale
+    $ActualHasScale = $MatrixNode.Attributes['hasScale'].Value
+    if ($ActualHasScale -ne $ExpectedHasScale) {
+        throw "Graphics shell depth $ExpectedDepth character $ExpectedCharacterId has hasScale $ActualHasScale, expected $ExpectedHasScale."
+    }
+
+    if ($null -ne $ExpectedGraphicsShellPlacement.ScaleX) {
+        $ActualScaleX = $MatrixNode.Attributes['scaleX'].Value
+        if ($ActualScaleX -ne $ExpectedGraphicsShellPlacement.ScaleX) {
+            throw "Graphics shell depth $ExpectedDepth character $ExpectedCharacterId has scaleX $ActualScaleX, expected $($ExpectedGraphicsShellPlacement.ScaleX)."
+        }
+    }
+
+    if ($null -ne $ExpectedGraphicsShellPlacement.ScaleY) {
+        $ActualScaleY = $MatrixNode.Attributes['scaleY'].Value
+        if ($ActualScaleY -ne $ExpectedGraphicsShellPlacement.ScaleY) {
+            throw "Graphics shell depth $ExpectedDepth character $ExpectedCharacterId has scaleY $ActualScaleY, expected $($ExpectedGraphicsShellPlacement.ScaleY)."
+        }
     }
 }
 
