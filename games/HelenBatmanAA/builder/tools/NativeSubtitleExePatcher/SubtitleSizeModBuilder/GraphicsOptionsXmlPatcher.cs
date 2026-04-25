@@ -136,7 +136,7 @@ internal static class GraphicsOptionsXmlPatcher
     /// <summary>
     /// Target Y translation for the retained translucent graphics background panel.
     /// </summary>
-    private const int GraphicsPanelTranslateY = -1400;
+    private const int GraphicsPanelTranslateY = -4600;
 
     /// <summary>
     /// Target X scale for the retained translucent graphics background panel.
@@ -146,7 +146,7 @@ internal static class GraphicsOptionsXmlPatcher
     /// <summary>
     /// Target Y scale for the retained translucent graphics background panel after extending it to cover most of the screen height.
     /// </summary>
-    private const string GraphicsPanelScaleY = "2.890625";
+    private const string GraphicsPanelScaleY = "4.625";
 
     /// <summary>
     /// Source row depth cloned to create missing fullscreen graphics rows from the game screen.
