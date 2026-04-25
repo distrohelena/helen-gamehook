@@ -134,19 +134,24 @@ internal static class GraphicsOptionsXmlPatcher
     private const int GraphicsPanelCharacterId = 307;
 
     /// <summary>
+    /// Target X translation for the retained translucent graphics background panel after shifting it left by 15% of screen width.
+    /// </summary>
+    private const int GraphicsPanelTranslateX = -10951;
+
+    /// <summary>
     /// Target Y translation for the retained translucent graphics background panel.
     /// </summary>
-    private const int GraphicsPanelTranslateY = -4600;
+    private const int GraphicsPanelTranslateY = -5500;
 
     /// <summary>
-    /// Target X scale for the retained translucent graphics background panel.
+    /// Target X scale for the retained translucent graphics background panel after widening it by 25%.
     /// </summary>
-    private const string GraphicsPanelScaleX = "2.0688171";
+    private const string GraphicsPanelScaleX = "2.5860138";
 
     /// <summary>
-    /// Target Y scale for the retained translucent graphics background panel after extending it to cover most of the screen height.
+    /// Target Y scale for the retained translucent graphics background panel after extending it to cover more of the screen height.
     /// </summary>
-    private const string GraphicsPanelScaleY = "4.625";
+    private const string GraphicsPanelScaleY = "5.125";
 
     /// <summary>
     /// Source row depth cloned to create missing fullscreen graphics rows from the game screen.
@@ -734,7 +739,7 @@ internal static class GraphicsOptionsXmlPatcher
     }
 
     /// <summary>
-    /// Resizes only the retained translucent graphics background panel so the full graphics row stack fits inside it.
+    /// Retunes only the retained translucent graphics background panel so it becomes taller, wider, and shifted left without disturbing the row stack.
     /// </summary>
     /// <param name="subTags">The graphics screen timeline node collection.</param>
     private static void NormalizeGraphicsPanelPlacement(XmlElement subTags)
@@ -747,7 +752,9 @@ internal static class GraphicsOptionsXmlPatcher
         }
 
         XmlElement matrix = GetSingleElement(placement, "matrix");
+        int sourceTranslateX = ReadRequiredTranslateX(matrix);
         int sourceTranslateY = ReadRequiredTranslateY(matrix);
+        int translateXDelta = GraphicsPanelTranslateX - sourceTranslateX;
         int translateYDelta = GraphicsPanelTranslateY - sourceTranslateY;
 
         foreach (XmlElement timelinePlacement in subTags.ChildNodes
@@ -764,7 +771,9 @@ internal static class GraphicsOptionsXmlPatcher
                 continue;
             }
 
+            int currentTranslateX = ReadRequiredTranslateX(timelineMatrix);
             int currentTranslateY = ReadRequiredTranslateY(timelineMatrix);
+            SetTranslateX(timelineMatrix, currentTranslateX + translateXDelta);
             SetTranslateY(timelineMatrix, currentTranslateY + translateYDelta);
             SetScaleX(timelineMatrix, GraphicsPanelScaleX);
             SetScaleY(timelineMatrix, GraphicsPanelScaleY);
@@ -1281,6 +1290,22 @@ internal static class GraphicsOptionsXmlPatcher
         }
 
         return int.Parse(translateYText);
+    }
+
+    /// <summary>
+    /// Reads a matrix translateX value.
+    /// </summary>
+    /// <param name="matrix">The matrix element to inspect.</param>
+    /// <returns>The parsed translateX value.</returns>
+    private static int ReadRequiredTranslateX(XmlElement matrix)
+    {
+        string? translateXText = GetAttribute(matrix, "translateX");
+        if (translateXText is null)
+        {
+            throw new InvalidOperationException("Expected matrix translateX attribute.");
+        }
+
+        return int.Parse(translateXText);
     }
 
     /// <summary>
