@@ -114,14 +114,24 @@ internal static class GraphicsOptionsXmlPatcher
     private const int GraphicsHeaderTitleDepth = 147;
 
     /// <summary>
+    /// Target X translation for the graphics header backing block after centering it over the dark options panel.
+    /// </summary>
+    private const int GraphicsHeaderBackingTranslateX = -7482;
+
+    /// <summary>
+    /// Target X translation for the graphics title text after centering it over the dark options panel.
+    /// </summary>
+    private const int GraphicsHeaderTitleTranslateX = -9192;
+
+    /// <summary>
     /// Target Y translation for the graphics header backing block after moving it near the top of the graphics screen.
     /// </summary>
-    private const int GraphicsHeaderBackingTranslateY = -4780;
+    private const int GraphicsHeaderBackingTranslateY = -5020;
 
     /// <summary>
     /// Target Y translation for the graphics title text after moving it near the top of the graphics screen.
     /// </summary>
-    private const int GraphicsHeaderTitleTranslateY = -5436;
+    private const int GraphicsHeaderTitleTranslateY = -5676;
 
     /// <summary>
     /// Depth used by the retained translucent graphics background panel.
@@ -734,6 +744,8 @@ internal static class GraphicsOptionsXmlPatcher
     /// <param name="subTags">The graphics screen timeline node collection.</param>
     private static void NormalizeGraphicsHeaderPlacements(XmlElement subTags)
     {
+        NormalizeTimelineTranslateXAtDepth(subTags, GraphicsHeaderBackingDepth, GraphicsHeaderBackingTranslateX);
+        NormalizeTimelineTranslateXAtDepth(subTags, GraphicsHeaderTitleDepth, GraphicsHeaderTitleTranslateX);
         NormalizeTimelineTranslateYAtDepth(subTags, GraphicsHeaderBackingDepth, GraphicsHeaderBackingTranslateY);
         NormalizeTimelineTranslateYAtDepth(subTags, GraphicsHeaderTitleDepth, GraphicsHeaderTitleTranslateY);
     }
@@ -828,6 +840,38 @@ internal static class GraphicsOptionsXmlPatcher
             {
                 SetTranslateY(matrix, targetTranslateY);
             }
+        }
+    }
+
+    /// <summary>
+    /// Applies a uniform X offset to every placement matrix on a specific depth so animated header timelines stay visually aligned after repositioning.
+    /// </summary>
+    /// <param name="subTags">The sprite timeline node collection.</param>
+    /// <param name="depth">The target depth whose placements should move together.</param>
+    /// <param name="targetTranslateX">The target X coordinate for the initial non-zero placement at this depth.</param>
+    private static void NormalizeTimelineTranslateXAtDepth(XmlElement subTags, int depth, int targetTranslateX)
+    {
+        XmlElement placement = FindInitialPlacementAtDepth(subTags, depth);
+        XmlElement matrix = GetSingleElement(placement, "matrix");
+        int sourceTranslateX = ReadRequiredTranslateX(matrix);
+        int translateXDelta = targetTranslateX - sourceTranslateX;
+
+        foreach (XmlElement timelinePlacement in subTags.ChildNodes
+                     .OfType<XmlElement>()
+                     .Where(node =>
+                         GetAttribute(node, "type") == "PlaceObject2Tag" &&
+                         GetAttribute(node, "depth") == depth.ToString()))
+        {
+            XmlElement? timelineMatrix = timelinePlacement.ChildNodes
+                .OfType<XmlElement>()
+                .SingleOrDefault(node => node.Name == "matrix");
+            if (timelineMatrix is null)
+            {
+                continue;
+            }
+
+            int currentTranslateX = ReadRequiredTranslateX(timelineMatrix);
+            SetTranslateX(timelineMatrix, currentTranslateX + translateXDelta);
         }
     }
 
