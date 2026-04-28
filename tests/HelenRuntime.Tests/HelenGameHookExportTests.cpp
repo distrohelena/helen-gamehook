@@ -119,7 +119,7 @@ void RunHelenGameHookExportTests()
     const std::string definition_text = ReadAllText(definition_path);
 
     Expect(
-        ContainsExportLine(definition_text, "Helen_GetInt=_HelenGetIntA@8"),
+        ContainsExportLine(definition_text, "Helen_GetInt=_HelenGetIntA@4"),
         "HelenGameHook.def does not export Helen_GetInt.");
     Expect(
         ContainsExportLine(definition_text, "Helen_SetInt=_HelenSetIntA@8"),

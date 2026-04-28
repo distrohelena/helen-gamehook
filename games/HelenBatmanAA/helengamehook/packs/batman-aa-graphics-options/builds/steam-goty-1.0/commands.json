@@ -10,6 +10,24 @@
                                    ]
                      },
                      {
+                         "id":  "syncBatmanGraphicsPreset",
+                         "name":  "Sync Batman Graphics Preset",
+                         "steps":  [
+                                       {
+                                           "kind":  "sync-batman-graphics-detail-preset"
+                                       }
+                                   ]
+                     },
+                     {
+                         "id":  "syncBatmanGraphicsDetailLevel",
+                         "name":  "Sync Batman Graphics Detail Level",
+                         "steps":  [
+                                       {
+                                           "kind":  "sync-batman-graphics-detail-level"
+                                       }
+                                   ]
+                     },
+                     {
                          "id":  "applyBatmanGraphicsDraft",
                          "name":  "Apply Batman Graphics Draft",
                          "steps":  [

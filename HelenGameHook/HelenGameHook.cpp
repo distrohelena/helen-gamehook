@@ -624,25 +624,26 @@ extern "C" __declspec(dllexport) BOOL __stdcall HelenDispatchCommandW(const wcha
 /**
  * @brief Reads one registered integer config value through the generic external binding bridge.
  * @param key Config key that should be read through the `Helen_GetInt` external callback contract.
- * @param value Receives the resolved config value when the binding and key resolve successfully.
- * @return True when initialization is complete and the binding resolves successfully; otherwise false.
+ * @return The resolved config value when initialization is complete and the binding resolves successfully; otherwise 0.
  */
-extern "C" __declspec(dllexport) BOOL __stdcall HelenGetIntA(const char* key, int* value)
+extern "C" __declspec(dllexport) int __stdcall HelenGetIntA(const char* key)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (!g_initialized || g_external_bindings == nullptr || key == nullptr || value == nullptr)
+    if (!g_initialized || g_external_bindings == nullptr || key == nullptr)
     {
-        return FALSE;
+        helen::Log(L"[runtime] Helen_GetInt rejected before binding resolution.");
+        return 0;
     }
 
     int resolved_value = 0;
     if (!g_external_bindings->TryHandleGetInt("Helen_GetInt", key, resolved_value))
     {
-        return FALSE;
+        helen::Logf(L"[runtime] Helen_GetInt key=%hs failed", key);
+        return 0;
     }
 
-    *value = resolved_value;
-    return TRUE;
+    helen::Logf(L"[runtime] Helen_GetInt key=%hs value=%d", key, resolved_value);
+    return resolved_value;
 }
 
 /**
@@ -656,10 +657,13 @@ extern "C" __declspec(dllexport) BOOL __stdcall HelenSetIntA(const char* key, in
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_initialized || g_external_bindings == nullptr || key == nullptr)
     {
+        helen::Log(L"[runtime] Helen_SetInt rejected before binding resolution.");
         return FALSE;
     }
 
-    return g_external_bindings->TryHandleSetInt("Helen_SetInt", key, value);
+    const BOOL succeeded = g_external_bindings->TryHandleSetInt("Helen_SetInt", key, value) ? TRUE : FALSE;
+    helen::Logf(L"[runtime] Helen_SetInt key=%hs value=%d result=%d", key, value, static_cast<int>(succeeded));
+    return succeeded;
 }
 
 /**
@@ -689,10 +693,31 @@ extern "C" __declspec(dllexport) BOOL __stdcall HelenRunCommandA(const char* com
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_initialized || g_external_bindings == nullptr || command_id == nullptr)
     {
+        helen::Log(L"[runtime] Helen_RunCommand rejected before binding resolution.");
         return FALSE;
     }
 
-    return g_external_bindings->TryHandleRunCommand("Helen_RunCommand", command_id);
+    const BOOL succeeded = g_external_bindings->TryHandleRunCommand("Helen_RunCommand", command_id) ? TRUE : FALSE;
+    helen::Logf(L"[runtime] Helen_RunCommand command=%hs result=%d", command_id, static_cast<int>(succeeded));
+    return succeeded;
+}
+
+/**
+ * @brief Writes one UI-originated diagnostic message into the runtime log stream.
+ * @param message UTF-8-compatible narrow string supplied by an external UI callback such as `Helen_Log`.
+ * @return True when the message is non-null and was accepted for logging; otherwise false.
+ */
+extern "C" __declspec(dllexport) BOOL __stdcall HelenLogA(const char* message)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (message == nullptr)
+    {
+        helen::Log(L"[runtime] Helen_Log rejected null message.");
+        return FALSE;
+    }
+
+    helen::Logf(L"[ui] %hs", message);
+    return TRUE;
 }
 
 /**

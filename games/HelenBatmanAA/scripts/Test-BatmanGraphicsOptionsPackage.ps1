@@ -42,6 +42,94 @@ function Invoke-ExternalProcess {
     }
 }
 
+function Assert-GraphicsExitPromptScripts {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Context,
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptsRoot
+    )
+
+    $GraphicsScreenDirectories = @(
+        Get-ChildItem -LiteralPath $ScriptsRoot -Directory | Where-Object {
+            $_.Name -like 'DefineSprite_*_ScreenOptionsGraphics'
+        }
+    )
+
+    if ($GraphicsScreenDirectories.Count -ne 1) {
+        throw "$Context should export exactly one ScreenOptionsGraphics directory, found $($GraphicsScreenDirectories.Count)."
+    }
+
+    $GraphicsScreenScriptPath = Join-Path $GraphicsScreenDirectories[0].FullName 'frame_1\DoAction.as'
+
+    if (-not (Test-Path -LiteralPath $GraphicsScreenScriptPath)) {
+        throw "$Context is missing required graphics screen script: $GraphicsScreenScriptPath"
+    }
+
+    $GraphicsScreenScript = Get-Content -LiteralPath $GraphicsScreenScriptPath -Raw
+
+    foreach ($RequiredScreenToken in @(
+        'attachMovie("YesNoPrompt","GraphicsExitPrompt",601)',
+        'flash.external.ExternalInterface.call("Helen_Log"',
+        '_root.ExitYNOpen = true;',
+        '_root.ExitYNOpen = false;',
+        'this.Screen.BlockInput(true);',
+        'this.ExitPrompt.Yes.ButtonName = "Apply";',
+        'this.ExitPrompt.No.ButtonName = "Discard";',
+        'this.ExitPrompt.Response = function(bYes)',
+        'this.Screen.ReturnFromScreen();',
+        'this.Screen.BlockInput(false);',
+        'this.Screen.ReUpdate();'
+    )) {
+        if ($GraphicsScreenScript.IndexOf($RequiredScreenToken, [System.StringComparison]::Ordinal) -lt 0) {
+            throw "$Context graphics screen is missing the stock exit prompt token: $RequiredScreenToken"
+        }
+    }
+
+    $UnblockToken = 'this.Screen.BlockInput(false);'
+    $ReturnToken = 'this.Screen.ReturnFromScreen();'
+    $ExitTransitionResetToken = 'this.ExitTransitionPending = false;'
+    $UnblockIndex = $GraphicsScreenScript.IndexOf($UnblockToken, [System.StringComparison]::Ordinal)
+    $ReturnIndex = $GraphicsScreenScript.IndexOf($ReturnToken, [System.StringComparison]::Ordinal)
+    $ExitTransitionResetIndex = $GraphicsScreenScript.IndexOf($ExitTransitionResetToken, [System.StringComparison]::Ordinal)
+
+    if ($ExitTransitionResetIndex -lt 0) {
+        throw "$Context graphics screen must clear ExitTransitionPending during exit-prompt handoff."
+    }
+
+    if ($UnblockIndex -lt 0 -or $ReturnIndex -lt 0) {
+        throw "$Context graphics screen must contain both unblock and return tokens for exit-prompt handoff."
+    }
+
+    if ($UnblockIndex -gt $ReturnIndex) {
+        throw "$Context graphics screen must unblock input before returning from the graphics screen."
+    }
+
+    foreach ($ForbiddenScreenToken in @(
+        'this.ExitPrompt.onUnload = function()',
+        'OnExitPromptClosed',
+        'attachMovie("GraphicsExitPrompt","GraphicsExitPrompt",601)',
+        'ConfigureUnsavedChanges',
+        'ConfigureRestartRequired',
+        'PendingResponse',
+        'OnExitPromptResponse',
+        'GraphicsController.OnExitPromptResponse'
+    )) {
+        if ($GraphicsScreenScript.IndexOf($ForbiddenScreenToken, [System.StringComparison]::Ordinal) -ge 0) {
+            throw "$Context graphics screen must not keep the custom GraphicsExitPrompt lifecycle token: $ForbiddenScreenToken"
+        }
+    }
+
+    foreach ($RequiredGuardToken in @(
+        'IsExitTransitionPending',
+        'IsExitTransitionPending()'
+    )) {
+        if ($GraphicsScreenScript.IndexOf($RequiredGuardToken, [System.StringComparison]::Ordinal) -lt 0) {
+            throw "$Context graphics screen must guard against reopening the stock prompt while its close transition is still pending: $RequiredGuardToken"
+        }
+    }
+}
+
 $PackVerificationHelpersPath = Join-Path $PSScriptRoot 'BatmanPackVerificationHelpers.ps1'
 . $PackVerificationHelpersPath
 $BuilderWorkspaceHelpersPath = Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1'
@@ -132,22 +220,33 @@ $ExpectedSetIntConfigKeys = @(
     'stereo'
 )
 
-$ExpectedFixedRowClipPaths = @(
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_141\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_133\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_125\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_117\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_109\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_101\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_93\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_85\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_77\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_69\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_61\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_53\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_45\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_37\CLIPACTIONRECORD onClipEvent(load).as',
-    'DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_29\CLIPACTIONRECORD onClipEvent(load).as'
+$ExpectedSetIntFollowUpCommands = @{
+    detailLevel = 'syncBatmanGraphicsPreset'
+    bloom = 'syncBatmanGraphicsDetailLevel'
+    dynamicShadows = 'syncBatmanGraphicsDetailLevel'
+    motionBlur = 'syncBatmanGraphicsDetailLevel'
+    distortion = 'syncBatmanGraphicsDetailLevel'
+    fogVolumes = 'syncBatmanGraphicsDetailLevel'
+    sphericalHarmonicLighting = 'syncBatmanGraphicsDetailLevel'
+    ambientOcclusion = 'syncBatmanGraphicsDetailLevel'
+}
+
+$ExpectedFixedRowClipSuffixes = @(
+    'frame_1\PlaceObject2_290_List_Template_141\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_133\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_125\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_117\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_109\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_101\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_93\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_85\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_77\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_69\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_61\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_53\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_45\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_37\CLIPACTIONRECORD onClipEvent(load).as',
+    'frame_1\PlaceObject2_290_List_Template_29\CLIPACTIONRECORD onClipEvent(load).as'
 )
 
 $RequiredInteractiveScreenTokens = @(
@@ -155,6 +254,9 @@ $RequiredInteractiveScreenTokens = @(
     'flash.external.ExternalInterface.call("Helen_GetInt",key)',
     'flash.external.ExternalInterface.call("Helen_SetInt"',
     'flash.external.ExternalInterface.call("Helen_RunCommand","applyBatmanGraphicsDraft")',
+    'function ApplyDetailPresetToDraft(detailLevel)',
+    'function DeriveDetailLevelFromDraft()',
+    'var _loc3_ = flash.external.ExternalInterface.call("Helen_SetInt",_loc2_,nextState);',
     'HasUnsavedChanges',
     'return new Array("Windowed","Fullscreen");',
     'this.AddItem(GraphicsRow1,14,1,-1,-1);',
@@ -337,6 +439,15 @@ foreach ($ExpectedConfigKey in $ExpectedSetIntConfigKeys) {
     if ($MatchingSetBindings.Count -ne 1) {
         throw "Batman graphics-options bindings are missing expected Helen_SetInt config key '$ExpectedConfigKey'."
     }
+
+    $ExpectedFollowUpCommand = $ExpectedSetIntFollowUpCommands[$ExpectedConfigKey]
+    if ($null -ne $ExpectedFollowUpCommand) {
+        if ($MatchingSetBindings[0].command -ne $ExpectedFollowUpCommand) {
+            throw "Batman graphics-options set binding '$ExpectedConfigKey' should run '$ExpectedFollowUpCommand'."
+        }
+    } elseif ($null -ne $MatchingSetBindings[0].command) {
+        throw "Batman graphics-options set binding '$ExpectedConfigKey' should not run a follow-up command."
+    }
 }
 
 $ApplyDraftBindings = @(
@@ -353,8 +464,8 @@ if ($ApplyDraftBindings.Count -ne 1) {
 
 $CommandsManifest = Get-Content -LiteralPath $CommandsJsonPath -Raw | ConvertFrom-Json
 $Commands = @($CommandsManifest.commands)
-if ($Commands.Count -ne 2) {
-    throw "Batman graphics-options command count drifted. Expected 2 but found $($Commands.Count)."
+if ($Commands.Count -ne 4) {
+    throw "Batman graphics-options command count drifted. Expected 4 but found $($Commands.Count)."
 }
 
 $LoadDraftCommand = @($Commands | Where-Object { $_.id -eq 'loadBatmanGraphicsDraftIntoConfig' })[0]
@@ -368,6 +479,32 @@ if ($LoadDraftCommand.name -ne 'Load Batman Graphics Draft Into Config') {
 
 if (@($LoadDraftCommand.steps).Count -ne 1 -or @($LoadDraftCommand.steps)[0].kind -ne 'load-batman-graphics-draft-into-config') {
     throw 'Batman graphics-options load command steps drifted.'
+}
+
+$SyncPresetCommand = @($Commands | Where-Object { $_.id -eq 'syncBatmanGraphicsPreset' })[0]
+if ($null -eq $SyncPresetCommand) {
+    throw 'Batman graphics-options commands are missing syncBatmanGraphicsPreset.'
+}
+
+if ($SyncPresetCommand.name -ne 'Sync Batman Graphics Preset') {
+    throw 'Batman graphics-options preset-sync command name drifted.'
+}
+
+if (@($SyncPresetCommand.steps).Count -ne 1 -or @($SyncPresetCommand.steps)[0].kind -ne 'sync-batman-graphics-detail-preset') {
+    throw 'Batman graphics-options preset-sync command steps drifted.'
+}
+
+$SyncDetailLevelCommand = @($Commands | Where-Object { $_.id -eq 'syncBatmanGraphicsDetailLevel' })[0]
+if ($null -eq $SyncDetailLevelCommand) {
+    throw 'Batman graphics-options commands are missing syncBatmanGraphicsDetailLevel.'
+}
+
+if ($SyncDetailLevelCommand.name -ne 'Sync Batman Graphics Detail Level') {
+    throw 'Batman graphics-options detail-level sync command name drifted.'
+}
+
+if (@($SyncDetailLevelCommand.steps).Count -ne 1 -or @($SyncDetailLevelCommand.steps)[0].kind -ne 'sync-batman-graphics-detail-level') {
+    throw 'Batman graphics-options detail-level sync command steps drifted.'
 }
 
 $ApplyDraftCommand = @($Commands | Where-Object { $_.id -eq 'applyBatmanGraphicsDraft' })[0]
@@ -392,7 +529,18 @@ if ($VirtualFiles.Count -ne 1) {
     throw "Batman graphics-options package manifest expected exactly 1 virtual file, found $($VirtualFiles.Count)."
 }
 
-$GraphicsScreenScriptPath = Join-Path $PrototypeExportScriptsRoot 'DefineSprite_600_ScreenOptionsGraphics\frame_1\DoAction.as'
+$PrototypeGraphicsScreenDirectories = @(
+    Get-ChildItem -LiteralPath $PrototypeExportScriptsRoot -Directory | Where-Object {
+        $_.Name -like 'DefineSprite_*_ScreenOptionsGraphics'
+    }
+)
+
+if ($PrototypeGraphicsScreenDirectories.Count -ne 1) {
+    throw "Batman graphics-options prototype should export exactly one ScreenOptionsGraphics directory, found $($PrototypeGraphicsScreenDirectories.Count)."
+}
+
+$PrototypeGraphicsScreenRoot = $PrototypeGraphicsScreenDirectories[0].FullName
+$GraphicsScreenScriptPath = Join-Path $PrototypeGraphicsScreenRoot 'frame_1\DoAction.as'
 if (-not (Test-Path -LiteralPath $GraphicsScreenScriptPath)) {
     throw "Batman graphics-options prototype screen script was not found: $GraphicsScreenScriptPath"
 }
@@ -410,8 +558,12 @@ foreach ($ForbiddenScrollWindowToken in $ForbiddenScrollWindowTokens) {
     }
 }
 
-foreach ($ExpectedFixedRowClipPath in $ExpectedFixedRowClipPaths) {
-    $ResolvedFixedRowClipPath = Join-Path $PrototypeExportScriptsRoot $ExpectedFixedRowClipPath
+Assert-GraphicsExitPromptScripts `
+    -Context 'Batman graphics-options prototype' `
+    -ScriptsRoot $PrototypeExportScriptsRoot
+
+foreach ($ExpectedFixedRowClipSuffix in $ExpectedFixedRowClipSuffixes) {
+    $ResolvedFixedRowClipPath = Join-Path $PrototypeGraphicsScreenRoot $ExpectedFixedRowClipSuffix
     if (-not (Test-Path -LiteralPath $ResolvedFixedRowClipPath)) {
         throw "Batman graphics-options prototype is missing required fixed-row clip script: $ResolvedFixedRowClipPath"
     }
@@ -499,5 +651,9 @@ foreach ($ForbiddenPatchedPackageToken in $ForbiddenPatchedPackageTokens) {
         }
     }
 }
+
+Assert-GraphicsExitPromptScripts `
+    -Context 'Batman graphics-options packaged MainV2 export' `
+    -ScriptsRoot $ExportScriptsRoot
 
 Write-Output 'PASS'
