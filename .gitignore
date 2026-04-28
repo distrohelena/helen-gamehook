@@ -6,6 +6,7 @@
 /.dotnetcli/
 /.codex-temp/
 /.worktree/
+/.worktrees/
 /artifacts/*.png
 /artifacts/*.json
 /games/HelenBatmanAA/builder/extracted/
