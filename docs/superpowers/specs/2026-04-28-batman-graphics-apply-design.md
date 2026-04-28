@@ -6,16 +6,28 @@ Make `Apply Changes` on `Graphics Options` save the current draft, keep the user
 
 ## Problem
 
-The current custom graphics menu has two separate responsibilities mixed together:
+The current custom graphics menu has two separate problems:
 
-1. applying the draft to Batman graphics state
-2. navigating away from the screen or showing exit-related prompts
+1. it mixes applying the draft with screen-exit behavior
+2. it depends on a custom `Helen_*` frontend callback route that is not wired through a runtime hook for this pack
 
-That coupling made the earlier `Apply/Discard` work unstable and left the plain `Apply Changes` button behavior unclear. The current result is that apply either does nothing, depends on the exit prompt path, or leaves the menu in the wrong input state.
+The first issue made the earlier `Apply/Discard` work unstable and left the plain `Apply Changes` button behavior unclear.
+
+The second issue is the immediate blocker for row editing and apply:
+
+- the graphics screen reads and writes draft state through `Helen_GetInt`, `Helen_SetInt`, and `Helen_RunCommand`
+- the graphics-options pack explicitly ships without `hooks.json`
+- known-good frontend customization in this repository uses stock `FE_*` callbacks instead of a custom `Helen_*` route
+
+The current result is predictable:
+
+- menu-open defaults can be baked from the INI and therefore appear correct
+- row edits fail because `Helen_SetInt` never reaches a live callback path
+- `Apply Changes` cannot be trusted because it also depends on the dead custom route
 
 ## Scope
 
-This change only covers the in-screen `Apply Changes` button behavior.
+This change covers the runtime path needed to make the in-screen graphics editor functional again.
 
 After a successful apply:
 
@@ -24,37 +36,47 @@ After a successful apply:
 - the draft becomes the new baseline state
 - `Apply Changes` becomes disabled again
 
+During editing before apply:
+
+- row changes update the local draft immediately
+- the screen no longer depends on `Helen_SetInt` for per-row interaction
+
 ## Explicit Non-Goals
 
 - No restart-required prompt in this change
 - No `Apply/Discard` exit banner behavior changes unless required to share the same fixed apply primitive
-- No redesign of the external call bridge
+- No new custom `Helen_*` bridge
 - No resolution mapping changes
 
 ## Candidate Approaches
 
-### Approach 1: Fix `ApplyChanges()` as the single source of truth
+### Approach 1: Keep row edits local and send apply through one proven `FE_*` carrier
 
-Keep `ApplyChanges()` responsible for:
+Keep draft edits local inside the graphics controller.
 
-1. calling the native apply bridge
-2. reloading the draft from live state
-3. capturing that state as the new initial/baseline snapshot
-4. refreshing row visuals and button enabled state
+Use one proven stock `FE_*` callback route only when the user presses `Apply Changes`.
+
+`ApplyChanges()` remains the single apply primitive and becomes responsible for:
+
+1. dispatching the current draft through a stock `FE_*` carrier event that Batman already executes
+2. letting the native side decode that carrier event and write the graphics draft
+3. reloading the draft from live state
+4. capturing that state as the new initial/baseline snapshot
+5. refreshing row visuals and button enabled state
 
 Then make the in-screen button path call only that function and stop mixing it with screen-return behavior.
 
-### Approach 2: Split apply into a native save path plus a separate UI resync path
+### Approach 2: Rebuild every row onto the stock `ListItem` `FE_Get/FE_Set` contract
 
-Create a new explicit post-apply UI resync method and keep `ApplyChanges()` as a thin bridge wrapper.
+Replace the custom graphics row controller with a stock-style row implementation that reads and writes through `FE_Get...` and `FE_Set...` exactly like vanilla frontend rows.
 
-This is cleaner architecturally, but it adds another state handoff in a code path that is already fragile.
+This is a clean long-term direction, but it is more invasive because every row must be reshaped around the stock screen contract.
 
-### Approach 3: Rebuild apply around the stock FE menu contract
+### Approach 3: Rebuild the custom `Helen_*` route with a dedicated runtime hook layer
 
-Replace the custom apply path with the stock frontend apply conventions used by other Batman menus.
+Add a new runtime hook system so `flash.external.ExternalInterface.call("Helen_*", ...)` becomes a real live callback path for this pack.
 
-This is the cleanest long-term direction, but it is too large for the current step and would expand scope beyond the requested fix.
+This is not recommended because it doubles down on the route that already failed and increases runtime complexity for no gain over proven `FE_*` paths.
 
 ## Chosen Approach
 
@@ -62,21 +84,36 @@ Use **Approach 1**.
 
 ## Why
 
-- It is the smallest fix that matches the requested behavior exactly.
-- It isolates apply from exit/navigation state.
-- It gives one place to test: success means native apply ran, draft reloaded, baseline updated, and button state reset.
+- It removes the dead per-row bridge dependency immediately.
+- It keeps the requested user contract exactly the same.
+- It uses a frontend callback family that the game already executes in production.
+- It limits native work to one apply-time carrier instead of many row-level callbacks.
 - It does not depend on restart logic, which is intentionally deferred.
 
 ## Design
 
 ### UI contract
 
+When the screen opens:
+
+1. Graphics values are loaded from the active INI-backed draft source.
+2. Those values populate the local draft state inside the graphics controller.
+3. Row interaction reads and writes only that local draft state.
+
+When the user edits a row:
+
+1. The local draft changes immediately.
+2. The row refreshes immediately.
+3. The `Apply Changes` row enables whenever the draft differs from the baseline.
+4. No native write happens yet.
+
 When the user activates `Apply Changes`:
 
 1. If there are no unsaved changes, nothing happens.
-2. If there are unsaved changes, call the native apply bridge.
-3. If native apply fails, keep the existing failure behavior and do not fake success.
-4. If native apply succeeds:
+2. If there are unsaved changes, send the full draft through one proven `FE_*` carrier event.
+3. The native side decodes that carrier event and applies the Batman graphics draft.
+4. If native apply fails, keep the existing failure behavior and do not fake success.
+5. If native apply succeeds:
    - reload the menu draft from live state
    - overwrite the initial snapshot with the reloaded draft
    - refresh row labels and focused-row visuals
@@ -86,19 +123,41 @@ When the user activates `Apply Changes`:
 ### Code shape
 
 - Keep `ApplyChanges()` as the central apply primitive.
-- Make the row/button activation path for `Apply Changes` call `ApplyChanges()` directly.
+- Change `SetDraftRowState()` so it only mutates local draft state and UI state. It must stop calling `Helen_SetInt` per row.
+- Keep `LoadDraftValues()` for screen-open and post-apply resync only.
+- Introduce one explicit apply-time carrier encoder in ActionScript.
+- Reuse a proven `FE_*` callback name already known to cross the GFx boundary in Batman.
+- Add native decoding for that carrier on the existing proven FE interception route.
 - Remove any dependency on exit-prompt or `ReturnFromScreen()` behavior from the in-screen apply path.
 - Reuse the same `ApplyChanges()` primitive from exit flows only if needed, but do not let exit-state logic define in-screen apply behavior.
 
+### Carrier shape
+
+The carrier must satisfy two constraints:
+
+1. it must execute through a stock `FE_*` callback path that already works in this game
+2. it must encode enough information to apply the full graphics draft deterministically
+
+The recommended carrier is the same family already proven by the subtitle-size work:
+
+- use a stock `FE_*` setter route
+- encode graphics draft state into a sentinel payload that native code can recognize unambiguously
+- ignore ordinary stock traffic unless it matches the graphics sentinel contract exactly
+
+The exact carrier field layout is an implementation detail. The design requirement is that the payload is deterministic, versionable, and rejected on partial or malformed data.
+
 ## Test Strategy
 
-Add a failing regression test first that proves the generated `ScreenOptionsGraphics` script does all of the following for the in-screen apply button:
+Add a failing regression test first that proves the generated `ScreenOptionsGraphics` script does all of the following:
 
-- calls `Helen_ApplyBatmanGraphicsDraft`
-- does not call `ReturnFromScreen()` on successful in-screen apply
-- reloads draft values after apply
-- captures the new baseline after apply
-- refreshes button/row state after apply
+- row editing does not call `Helen_SetInt`
+- `Apply Changes` does not call `ReturnFromScreen()` on successful in-screen apply
+- `Apply Changes` uses the chosen stock `FE_*` carrier instead of `Helen_RunCommand`
+- the script reloads draft values after apply
+- the script captures the new baseline after apply
+- the script refreshes button and row state after apply
+
+Add a native or packaging regression check that proves the chosen carrier hook is present and rejects non-graphics traffic.
 
 Then implement the minimal code change to make that test pass.
 
@@ -113,5 +172,6 @@ Then implement the minimal code change to make that test pass.
 
 ## Risks
 
+- If the chosen `FE_*` carrier shares a stock backend side effect, the sentinel filter must prevent collateral writes.
 - If apply reloads from the wrong INI source, the button may disable while showing unexpected values. That is acceptable for this step because the active source path was already confirmed separately.
 - If the in-screen apply and exit prompt still share hidden state, a narrow follow-up may be needed to keep those paths independent.
