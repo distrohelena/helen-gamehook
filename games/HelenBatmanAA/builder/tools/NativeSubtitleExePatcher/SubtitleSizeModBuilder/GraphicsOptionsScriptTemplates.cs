@@ -62,17 +62,21 @@ internal static class GraphicsOptionsScriptTemplates
     {
        var Screen;
        var ExitPrompt;
+       var ExitPromptOpen;
        var RowOrder;
        var DraftState;
        var InitialState;
        var ExitPromptMode;
+       var ExitTransitionPending;
        function BatmanGraphicsOptionsController(screen)
        {
           this.Screen = screen;
           this.RowOrder = new Array();
           this.DraftState = {};
           this.InitialState = {};
+          this.ExitPromptOpen = false;
           this.ExitPromptMode = "none";
+          this.ExitTransitionPending = false;
        }
        function Init()
        {
@@ -189,7 +193,26 @@ internal static class GraphicsOptionsScriptTemplates
        function RefreshFocusedRow()
        {
           this.RefreshAllRows();
+          this.RestoreScreenFocus();
           this.Screen.ReUpdate();
+       }
+       function RestoreScreenFocus()
+       {
+          var _loc2_ = this.Screen.GetFocusIndex();
+          if(this.Screen.InputArray == undefined)
+          {
+             throw "Graphics options input array was not initialized.";
+          }
+          var _loc3_ = this.Screen.InputArray[_loc2_];
+          if(_loc3_ == undefined)
+          {
+             throw "Graphics options focus entry missing at index " + _loc2_ + ".";
+          }
+          if(_loc3_.object == undefined)
+          {
+             throw "Graphics options focus object missing at index " + _loc2_ + ".";
+          }
+          this.Screen.DoSetFocus(_loc3_.object);
        }
        function GetDraftKey(rowName)
        {
@@ -364,6 +387,73 @@ internal static class GraphicsOptionsScriptTemplates
           }
           return 0;
        }
+       function IsDetailToggleKey(key)
+       {
+          return key == "bloom" || key == "dynamicShadows" || key == "motionBlur" || key == "distortion" || key == "fogVolumes" || key == "sphericalHarmonicLighting" || key == "ambientOcclusion";
+       }
+       function ApplyDetailPresetToDraft(detailLevel)
+       {
+          if(detailLevel == 0)
+          {
+             this.DraftState.bloom = 0;
+             this.DraftState.dynamicShadows = 0;
+             this.DraftState.motionBlur = 0;
+             this.DraftState.distortion = 0;
+             this.DraftState.fogVolumes = 0;
+             this.DraftState.sphericalHarmonicLighting = 0;
+             this.DraftState.ambientOcclusion = 0;
+          }
+          else if(detailLevel == 1)
+          {
+             this.DraftState.bloom = 1;
+             this.DraftState.dynamicShadows = 1;
+             this.DraftState.motionBlur = 0;
+             this.DraftState.distortion = 0;
+             this.DraftState.fogVolumes = 0;
+             this.DraftState.sphericalHarmonicLighting = 0;
+             this.DraftState.ambientOcclusion = 0;
+          }
+          else if(detailLevel == 2)
+          {
+             this.DraftState.bloom = 1;
+             this.DraftState.dynamicShadows = 1;
+             this.DraftState.motionBlur = 1;
+             this.DraftState.distortion = 1;
+             this.DraftState.fogVolumes = 1;
+             this.DraftState.sphericalHarmonicLighting = 1;
+             this.DraftState.ambientOcclusion = 0;
+          }
+          else if(detailLevel == 3)
+          {
+             this.DraftState.bloom = 1;
+             this.DraftState.dynamicShadows = 1;
+             this.DraftState.motionBlur = 1;
+             this.DraftState.distortion = 1;
+             this.DraftState.fogVolumes = 1;
+             this.DraftState.sphericalHarmonicLighting = 1;
+             this.DraftState.ambientOcclusion = 1;
+          }
+       }
+       function DeriveDetailLevelFromDraft()
+       {
+          if(this.DraftState.bloom == 0 && this.DraftState.dynamicShadows == 0 && this.DraftState.motionBlur == 0 && this.DraftState.distortion == 0 && this.DraftState.fogVolumes == 0 && this.DraftState.sphericalHarmonicLighting == 0 && this.DraftState.ambientOcclusion == 0)
+          {
+             return 0;
+          }
+          if(this.DraftState.bloom == 1 && this.DraftState.dynamicShadows == 1 && this.DraftState.motionBlur == 0 && this.DraftState.distortion == 0 && this.DraftState.fogVolumes == 0 && this.DraftState.sphericalHarmonicLighting == 0 && this.DraftState.ambientOcclusion == 0)
+          {
+             return 1;
+          }
+          if(this.DraftState.bloom == 1 && this.DraftState.dynamicShadows == 1 && this.DraftState.motionBlur == 1 && this.DraftState.distortion == 1 && this.DraftState.fogVolumes == 1 && this.DraftState.sphericalHarmonicLighting == 1 && this.DraftState.ambientOcclusion == 0)
+          {
+             return 2;
+          }
+          if(this.DraftState.bloom == 1 && this.DraftState.dynamicShadows == 1 && this.DraftState.motionBlur == 1 && this.DraftState.distortion == 1 && this.DraftState.fogVolumes == 1 && this.DraftState.sphericalHarmonicLighting == 1 && this.DraftState.ambientOcclusion == 1)
+          {
+             return 3;
+          }
+          return 4;
+       }
        function SetDraftRowState(rowName, nextState)
        {
           var _loc2_ = this.GetDraftKey(rowName);
@@ -371,11 +461,20 @@ internal static class GraphicsOptionsScriptTemplates
           {
              return false;
           }
-          if(!flash.external.ExternalInterface.call("Helen_SetInt",_loc2_,nextState))
+          this.DraftState[_loc2_] = nextState;
+          if(rowName == "DetailLevel")
           {
-             return false;
+             this.ApplyDetailPresetToDraft(nextState);
           }
-          this.LoadDraftValues();
+          else if(this.IsDetailToggleKey(_loc2_))
+          {
+             this.DraftState.detailLevel = this.DeriveDetailLevelFromDraft();
+          }
+          var _loc3_ = flash.external.ExternalInterface.call("Helen_SetInt",_loc2_,nextState);
+          if(_loc3_)
+          {
+             this.LoadDraftValues();
+          }
           this.RefreshFocusedRow();
           return true;
        }
@@ -423,6 +522,10 @@ internal static class GraphicsOptionsScriptTemplates
        }
        function HandleRowAction(rowName)
        {
+          if(this.IsExitPromptOpen())
+          {
+             return undefined;
+          }
           if(this.IsApplyRow(rowName))
           {
              this.ApplyChanges();
@@ -438,6 +541,10 @@ internal static class GraphicsOptionsScriptTemplates
        }
        function IncrementRow(rowName)
        {
+          if(this.IsExitPromptOpen())
+          {
+             return undefined;
+          }
           if(this.IsInteractiveRow(rowName))
           {
              if(this.StepDraftRowState(rowName,1))
@@ -448,6 +555,10 @@ internal static class GraphicsOptionsScriptTemplates
        }
        function DecrementRow(rowName)
        {
+          if(this.IsExitPromptOpen())
+          {
+             return undefined;
+          }
           if(this.IsInteractiveRow(rowName))
           {
              if(this.StepDraftRowState(rowName,-1))
@@ -470,19 +581,124 @@ internal static class GraphicsOptionsScriptTemplates
           }
           return false;
        }
+       function LogExitState(message)
+       {
+          flash.external.ExternalInterface.call("Helen_Log","[gfx] " + message);
+       }
+       function IsExitPromptOpen()
+       {
+          return this.ExitPromptOpen == true;
+       }
+       function IsExitTransitionPending()
+       {
+          return this.ExitTransitionPending == true;
+       }
+      function OpenExitPrompt()
+      {
+         this.LogExitState("OpenExitPrompt mode=" + this.ExitPromptMode);
+         _root.ExitYNOpen = true;
+         this.ExitPromptOpen = true;
+         this.ExitTransitionPending = false;
+         this.Screen.BlockInput(true);
+      }
+      function ClearExitPrompt()
+      {
+         _root.ExitYNOpen = false;
+         this.ExitPromptOpen = false;
+         this.ExitPromptMode = "none";
+         this.ExitPrompt = undefined;
+      }
+      function RestoreAfterExitPrompt()
+      {
+         this.LogExitState("RestoreAfterExitPrompt");
+         this.ExitTransitionPending = false;
+         _root.Screens.ActiveScreen = this.Screen;
+         this.Screen.BlockInput(false);
+         this.Screen.ReUpdate();
+       }
        function EnsureExitPrompt()
        {
           if(this.ExitPrompt == undefined)
           {
-             this.ExitPrompt = this.Screen.attachMovie("GraphicsExitPrompt","GraphicsExitPrompt",601);
+             this.ExitPrompt = this.Screen.attachMovie("YesNoPrompt","GraphicsExitPrompt",601);
           }
           return this.ExitPrompt;
+       }
+       function ConfigureExitPrompt(messageText)
+       {
+          if(this.ExitPrompt == undefined)
+          {
+             throw "Graphics exit prompt must exist before configuration.";
+          }
+          this.ExitPrompt.Message.Label.text = messageText;
+          this.ExitPrompt._x = 0;
+          this.ExitPrompt._y = 0;
+          this.ExitPrompt.Yes.ButtonName = "Apply";
+          this.ExitPrompt.Yes.Label.Text.text = this.ExitPrompt.Yes.ButtonName;
+          this.ExitPrompt.No.ButtonName = "Discard";
+          this.ExitPrompt.No.Label.Text.text = this.ExitPrompt.No.ButtonName;
+          this.ExitPrompt.ResponseHandled = false;
+       }
+      function BindExitPromptCallbacks()
+      {
+         if(this.ExitPrompt == undefined)
+         {
+            throw "Graphics exit prompt must exist before callbacks are bound.";
+          }
+          var _loc2_ = this;
+          this.ExitPrompt.Response = function(bYes)
+          {
+             if(this.ResponseHandled == true)
+             {
+                return undefined;
+             }
+             this.ResponseHandled = true;
+             _loc2_.LogExitState("ExitPrompt.Response bYes=" + bYes);
+             _loc2_.HandleExitPromptSelection(bYes);
+             this.gotoAndPlay("out");
+          };
+       }
+       function HandleExitPromptSelection(bYes)
+       {
+          this.LogExitState("HandleExitPromptSelection mode=" + this.ExitPromptMode + " bYes=" + bYes);
+          this.ExitTransitionPending = true;
+          this.ClearExitPrompt();
+          if(this.ExitPromptMode == "restart")
+          {
+             this.LogExitState("HandleExitPromptSelection restart unblock");
+             this.Screen.BlockInput(false);
+             this.LogExitState("HandleExitPromptSelection restart back");
+             this.Screen.ReturnFromScreen();
+             return undefined;
+          }
+          if(bYes)
+          {
+             if(this.ApplyChanges())
+             {
+                this.LogExitState("HandleExitPromptSelection apply unblock");
+                this.Screen.BlockInput(false);
+                this.LogExitState("HandleExitPromptSelection apply back");
+                this.Screen.ReturnFromScreen();
+             }
+             else
+             {
+                this.LogExitState("HandleExitPromptSelection apply restore");
+                this.RestoreAfterExitPrompt();
+             }
+             return undefined;
+          }
+          this.LogExitState("HandleExitPromptSelection discard unblock");
+          this.Screen.BlockInput(false);
+          this.LogExitState("HandleExitPromptSelection discard back");
+          this.Screen.ReturnFromScreen();
        }
        function ShowUnsavedChangesPrompt()
        {
           this.EnsureExitPrompt();
           this.ExitPromptMode = "unsaved";
-          this.ExitPrompt.ConfigureUnsavedChanges(this);
+          this.OpenExitPrompt();
+          this.ConfigureExitPrompt("Unsaved graphics changes detected.");
+          this.BindExitPromptCallbacks();
           this.ExitPrompt.gotoAndPlay("in");
        }
        function RequestUnsavedChangesPrompt()
@@ -493,55 +709,41 @@ internal static class GraphicsOptionsScriptTemplates
        {
           this.EnsureExitPrompt();
           this.ExitPromptMode = "restart";
-          this.ExitPrompt.ConfigureRestartRequired(this);
+          this.OpenExitPrompt();
+          this.ConfigureExitPrompt("Some changes require a restart.");
+          this.BindExitPromptCallbacks();
           this.ExitPrompt.gotoAndPlay("in");
-       }
-       function OnExitPromptResponse(response)
-       {
-          if(this.ExitPromptMode == "restart")
-          {
-             if(response == "apply" || response == "discard")
-             {
-                this.Screen.ReturnFromScreen();
-                return undefined;
-             }
-             if(response == "cancel")
-             {
-                return undefined;
-             }
-          }
-          if(response == "apply")
-          {
-             this.ApplyChanges();
-          }
-          else if(response == "discard")
-          {
-             this.Screen.ReturnFromScreen();
-          }
-          else if(response == "cancel")
-          {
-             return undefined;
-          }
        }
        function ApplyChanges()
        {
+          this.LogExitState("ApplyChanges start");
           if(!flash.external.ExternalInterface.call("Helen_RunCommand","applyBatmanGraphicsDraft"))
           {
-             return undefined;
+             this.LogExitState("ApplyChanges failed");
+             return false;
           }
           this.LoadDraftValues();
           this.CaptureInitialState();
           this.RefreshFocusedRow();
-          this.ShowRestartRequiredPrompt();
+          this.LogExitState("ApplyChanges succeeded");
+          return true;
        }
     }
     function CancelScreen()
     {
+       this.GraphicsController.LogExitState("CancelScreen entry");
+       if(this.GraphicsController.IsExitPromptOpen() || this.GraphicsController.IsExitTransitionPending())
+       {
+          this.GraphicsController.LogExitState("CancelScreen ignored prompt-active");
+          return undefined;
+       }
        if(this.GraphicsController.HasUnsavedChanges())
        {
+          this.GraphicsController.LogExitState("CancelScreen open-unsaved-prompt");
           this.GraphicsController.RequestUnsavedChangesPrompt();
           return undefined;
        }
+       this.GraphicsController.LogExitState("CancelScreen direct-return");
        ReturnFromScreen();
     }
     flash.external.ExternalInterface.call("FE_SetActiveScreenName","Graphics Options");
@@ -821,7 +1023,7 @@ internal static class GraphicsOptionsScriptTemplates
     public static readonly string GraphicsRow15ClipAction = CreateGraphicsRowClipAction("ApplyChanges");
 
     /// <summary>
-    /// Initializes the three-button graphics exit prompt and wires cancel behavior.
+    /// Initializes the two-button graphics exit prompt and wires ESC/B cancel behavior.
     /// </summary>
     public const string GraphicsExitPromptFrame1 = """
     function CancelScreen()
@@ -831,34 +1033,54 @@ internal static class GraphicsOptionsScriptTemplates
     function ConfigureUnsavedChanges(controller)
     {
        this.GraphicsController = controller;
+       this.PendingResponse = undefined;
        this.Message.Label.text = "Unsaved graphics changes detected.";
     }
     function ConfigureRestartRequired(controller)
     {
        this.GraphicsController = controller;
+       this.PendingResponse = undefined;
        this.Message.Label.text = "Some changes require a restart.";
     }
     function Response(option)
     {
-       if(this.GraphicsController != undefined)
+       if(this.PendingResponse != undefined)
        {
-          this.GraphicsController.OnExitPromptResponse(option);
+          return undefined;
        }
-       this.gotoAndPlay("out");
+       this.PendingResponse = option;
+       if(this.GraphicsController == undefined)
+       {
+          throw "Graphics exit prompt controller was not captured before prompt response.";
+       }
+       gotoAndPlay("out");
     }
+    this.PendingResponse = undefined;
     this.BackScreen = "!";
     this.BackScreenIndex = 0;
     this.FocusIndex = 1;
     this.Flags = this.FLAG_NOROLLOVER;
     this.Init();
-    this.AddItem(Yes,2,1,-1,-1);
-    this.AddItem(Apply,0,2,-1,-1);
-    this.AddItem(No,1,0,-1,-1);
+    this.AddItem(Yes,1,1,-1,-1);
+    this.AddItem(No,0,0,-1,-1);
     _rotation = -2.5;
     """;
 
     /// <summary>
-    /// Wires the middle prompt button to discard pending graphics changes.
+    /// Finalizes the graphics exit prompt after the stock outro animation completes.
+    /// </summary>
+    public const string GraphicsExitPromptFrame23 = """
+    stop();
+    if(this.GraphicsController == undefined)
+    {
+       throw "Graphics exit prompt controller was not captured before outro completion.";
+    }
+    this.GraphicsController.OnExitPromptResponse(this.PendingResponse);
+    this.DestroyScreen();
+    """;
+
+    /// <summary>
+    /// Deprecated three-button prompt hook kept unused for older exported fixtures.
     /// </summary>
     public const string GraphicsExitPromptApplyButton = """
     onClipEvent(load){
@@ -872,15 +1094,15 @@ internal static class GraphicsOptionsScriptTemplates
     """;
 
     /// <summary>
-    /// Wires the lower prompt button to cancel prompt dismissal.
+    /// Wires the lower prompt button to discard pending graphics changes.
     /// </summary>
     public const string GraphicsExitPromptNoButton = """
     onClipEvent(load){
        function RunAction()
        {
-          _parent.Response("cancel");
+          _parent.Response("discard");
        }
-       this.ButtonName = "Cancel";
+       this.ButtonName = "Discard";
        Label.Text.text = this.ButtonName;
     }
     """;

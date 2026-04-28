@@ -106,49 +106,57 @@
                          "id":  "graphicsSetDetailLevel",
                          "externalName":  "Helen_SetInt",
                          "mode":  "set-int",
-                         "configKey":  "detailLevel"
+                         "configKey":  "detailLevel",
+                         "command":  "syncBatmanGraphicsPreset"
                      },
                      {
                          "id":  "graphicsSetBloom",
                          "externalName":  "Helen_SetInt",
                          "mode":  "set-int",
-                         "configKey":  "bloom"
+                         "configKey":  "bloom",
+                         "command":  "syncBatmanGraphicsDetailLevel"
                      },
                      {
                          "id":  "graphicsSetDynamicShadows",
                          "externalName":  "Helen_SetInt",
                          "mode":  "set-int",
-                         "configKey":  "dynamicShadows"
+                         "configKey":  "dynamicShadows",
+                         "command":  "syncBatmanGraphicsDetailLevel"
                      },
                      {
                          "id":  "graphicsSetMotionBlur",
                          "externalName":  "Helen_SetInt",
                          "mode":  "set-int",
-                         "configKey":  "motionBlur"
+                         "configKey":  "motionBlur",
+                         "command":  "syncBatmanGraphicsDetailLevel"
                      },
                      {
                          "id":  "graphicsSetDistortion",
                          "externalName":  "Helen_SetInt",
                          "mode":  "set-int",
-                         "configKey":  "distortion"
+                         "configKey":  "distortion",
+                         "command":  "syncBatmanGraphicsDetailLevel"
                      },
                      {
                          "id":  "graphicsSetFogVolumes",
                          "externalName":  "Helen_SetInt",
                          "mode":  "set-int",
-                         "configKey":  "fogVolumes"
+                         "configKey":  "fogVolumes",
+                         "command":  "syncBatmanGraphicsDetailLevel"
                      },
                      {
                          "id":  "graphicsSetSphericalHarmonicLighting",
                          "externalName":  "Helen_SetInt",
                          "mode":  "set-int",
-                         "configKey":  "sphericalHarmonicLighting"
+                         "configKey":  "sphericalHarmonicLighting",
+                         "command":  "syncBatmanGraphicsDetailLevel"
                      },
                      {
                          "id":  "graphicsSetAmbientOcclusion",
                          "externalName":  "Helen_SetInt",
                          "mode":  "set-int",
-                         "configKey":  "ambientOcclusion"
+                         "configKey":  "ambientOcclusion",
+                         "command":  "syncBatmanGraphicsDetailLevel"
                      },
                      {
                          "id":  "graphicsSetPhysx",

@@ -2,9 +2,11 @@ LIBRARY "HelenGameHook"
 
 EXPORTS
     HelenDispatchCommandW=_HelenDispatchCommandW@4
-    HelenGetIntA=_HelenGetIntA@8
-    Helen_GetInt=_HelenGetIntA@8
+    HelenGetIntA=_HelenGetIntA@4
+    Helen_GetInt=_HelenGetIntA@4
     HelenInitialize=_HelenInitialize@0
+    HelenLogA=_HelenLogA@4
+    Helen_Log=_HelenLogA@4
     HelenRunCommandA=_HelenRunCommandA@4
     Helen_RunCommand=_HelenRunCommandA@4
     HelenSetConfigIntA=_HelenSetConfigIntA@8
