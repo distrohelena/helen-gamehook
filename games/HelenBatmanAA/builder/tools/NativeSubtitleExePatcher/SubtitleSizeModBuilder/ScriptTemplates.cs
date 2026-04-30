@@ -99,13 +99,6 @@ internal static class ScriptTemplates
              _loc3_ = _loc3_ + 1;
           }
           var _loc4_;
-          if(this.UsesSubtitleSizeStorage() && this.Names.length > 3)
-          {
-             while(this.Names.length > 3)
-             {
-                this.Names.pop();
-             }
-          }
           if(this.UsesSubtitleSizeStorage())
           {
              _loc4_ = this.ReadSubtitleSizeState();
@@ -330,7 +323,7 @@ internal static class ScriptTemplates
 
     /// <summary>
     /// Reuses the runtime subtitle-size menu behavior for pause assets so all subtitle-size
-    /// builds stay at three states (Small/Normal/Large).
+    /// builds share the dedicated gameplay subtitle row behavior.
     /// </summary>
     public const string PauseListItem = PauseRuntimeScaleListItem;
 
@@ -368,7 +361,7 @@ internal static class ScriptTemplates
     /// </summary>
     public const string PauseAudioSubtitleSizeClipAction = """
     onClipEvent(load){
-       this.Init("SubtitleSize","Small","Normal","Large");
+       this.Init("SubtitleSize","Small","Medium","Large","Very Large","Huge","Massive");
     }
     """;
 

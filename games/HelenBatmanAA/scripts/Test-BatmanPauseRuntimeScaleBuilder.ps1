@@ -65,6 +65,18 @@ if ($ListItemContents.IndexOf('4103', [System.StringComparison]::Ordinal) -lt 0)
     throw "Pause runtime scale builder does not emit the Large raw code 4103."
 }
 
+if ($ListItemContents.IndexOf('4104', [System.StringComparison]::Ordinal) -lt 0) {
+    throw "Pause runtime scale builder does not emit the Very Large raw code 4104."
+}
+
+if ($ListItemContents.IndexOf('4105', [System.StringComparison]::Ordinal) -lt 0) {
+    throw "Pause runtime scale builder does not emit the Huge raw code 4105."
+}
+
+if ($ListItemContents.IndexOf('4106', [System.StringComparison]::Ordinal) -lt 0) {
+    throw "Pause runtime scale builder does not emit the Massive raw code 4106."
+}
+
 if ($ListItemContents.IndexOf('function ApplySubtitleSizeRuntime()', [System.StringComparison]::Ordinal) -lt 0) {
     throw "Pause runtime scale builder does not emit ApplySubtitleSizeRuntime for live subtitle refresh."
 }
@@ -77,9 +89,9 @@ if ($ListItemContents.IndexOf('flash.external.ExternalInterface.call("FE_SetSubt
     throw "Pause runtime scale builder does not emit FE_SetSubtitles live refresh pulses."
 }
 
-$ExpectedClipAction = 'this.Init("SubtitleSize","Small","Normal","Large");'
+$ExpectedClipAction = 'this.Init("SubtitleSize","Small","Medium","Large","Very Large","Huge","Massive");'
 if ($ClipActionContents.IndexOf($ExpectedClipAction, [System.StringComparison]::Ordinal) -lt 0) {
-    throw "Pause runtime scale builder does not emit the three-choice SubtitleSize initializer."
+    throw "Pause runtime scale builder does not emit the six-choice SubtitleSize initializer."
 }
 
 Write-Output 'PASS'
