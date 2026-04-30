@@ -182,8 +182,11 @@ $packManifest = [ordered]@{
             defaultValue = 1
             options = @(
                 'Small',
-                'Normal',
-                'Large'
+                'Medium',
+                'Large',
+                'Very Large',
+                'Huge',
+                'Massive'
             )
         }
     )
@@ -222,6 +225,18 @@ $packManifest = [ordered]@{
                 @{
                     match = 2
                     encodedValue = 7
+                },
+                @{
+                    match = 3
+                    encodedValue = 8
+                },
+                @{
+                    match = 4
+                    encodedValue = 9
+                },
+                @{
+                    match = 5
+                    encodedValue = 10
                 }
             )
         }

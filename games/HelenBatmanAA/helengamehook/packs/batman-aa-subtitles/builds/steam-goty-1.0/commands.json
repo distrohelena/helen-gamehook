@@ -38,6 +38,18 @@
                 {
                   "match": 2,
                   "value": 2.0
+                },
+                {
+                  "match": 3,
+                  "value": 4.0
+                },
+                {
+                  "match": 4,
+                  "value": 6.0
+                },
+                {
+                  "match": 5,
+                  "value": 8.0
                 }
               ]
             },

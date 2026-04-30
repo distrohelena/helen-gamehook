@@ -50,10 +50,18 @@ class rs.ui.ListItem extends MovieClip
       {
          case 4101:
             return 0;
+         case 4102:
+            return 1;
          case 4103:
             return 2;
+         case 4104:
+            return 3;
+         case 4105:
+            return 4;
+         case 4106:
+            return 5;
          default:
-            return 1;
+            return this.GetSubtitleDefaultState();
       }
    }
 
@@ -63,8 +71,16 @@ class rs.ui.ListItem extends MovieClip
       {
          case 0:
             return 4101;
+         case 1:
+            return 4102;
          case 2:
             return 4103;
+         case 3:
+            return 4104;
+         case 4:
+            return 4105;
+         case 5:
+            return 4106;
          default:
             return 4102;
       }
@@ -97,15 +113,7 @@ class rs.ui.ListItem extends MovieClip
 
    function GetSubtitleSizeBurstCount()
    {
-      switch(this.State)
-      {
-         case 0:
-            return 2;
-         case 2:
-            return 6;
-         default:
-            return 4;
-      }
+      return (this.State + 1) * 2;
    }
 
    function ApplySubtitleSizeRuntime()
