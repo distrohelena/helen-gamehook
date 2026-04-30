@@ -22,8 +22,11 @@ internal static class Program
     private const int GlobalTextScaleResumeJumpOpcodeOffset = 57;
     private const int GlobalTextScaleResumeRel32Offset = 58;
     private const int SubtitleSizeSmallCode = 4101;
-    private const int SubtitleSizeNormalCode = 4102;
+    private const int SubtitleSizeMediumCode = 4102;
     private const int SubtitleSizeLargeCode = 4103;
+    private const int SubtitleSizeVeryLargeCode = 4104;
+    private const int SubtitleSizeHugeCode = 4105;
+    private const int SubtitleSizeMassiveCode = 4106;
     private const int StateCurrentScaleOffset = 0x00;
     private const int StatePathReadyOffset = 0x04;
     private const int StateBurstCountOffset = StatePathReadyOffset;
@@ -32,9 +35,12 @@ internal static class Program
     private const int StateBytesReadOffset = 0x10;
     private const int StateFileHandleOffset = 0x14;
     private const int StateSmallScaleOffset = 0x18;
-    private const int StateNormalScaleOffset = 0x1C;
+    private const int StateMediumScaleOffset = 0x1C;
     private const int StateLargeScaleOffset = 0x20;
-    private const int StatePathBufferOffset = 0x24;
+    private const int StateVeryLargeScaleOffset = 0x24;
+    private const int StateHugeScaleOffset = 0x28;
+    private const int StateMassiveScaleOffset = 0x2C;
+    private const int StatePathBufferOffset = 0x30;
     private const int StatePathBufferLength = 520;
     private const int StateDebugMagicOffset = StatePathBufferOffset + StatePathBufferLength;
     private const int StateDebugVersionOffset = StateDebugMagicOffset + 0x04;
@@ -53,8 +59,10 @@ internal static class Program
     private const uint SubtitleDebugVersion = 0x00000001;
     private const uint BinkTextScaleReturnLowVa = 0x006B9C88;
     private const uint BinkTextScaleReturnHighVa = 0x006B9D7A;
-    private const uint SubtitleUiStateScanStartVa = 0x2B00_0000;
-    private const uint SubtitleUiStateScanEndVa = 0x2C00_0000;
+    private const uint SubtitleUiStateScanStartVa = 0x1000_0000;
+    private const uint SubtitleUiStateScanEndVa = 0x1200_0000;
+    private const int SubtitleUiStateRescanIntervalMs = 50;
+    private const int SubtitleUiStateMaxRegionsPerPass = 32;
     private const uint SubtitleUiStateScannerHookRva = 0xFFFF_FFFD;
     private const int MemoryBasicInformationLength = 28;
     private const int MbiBaseAddressOffset = 0x00;
@@ -192,9 +200,12 @@ internal static class Program
         bool invokeTrace = options.GetFlag("--invoke-trace");
         bool writeBackup = options.GetFlag("--backup");
         string? backupPath = options.GetValue("--backup-path");
-        float smallScale = ParseFloat(options.GetValue("--small-scale") ?? "1.3");
-        float normalScale = ParseFloat(options.GetValue("--normal-scale") ?? "1.5");
-        float largeScale = ParseFloat(options.GetValue("--large-scale") ?? "1.8");
+        float smallScale = ParseFloat(options.GetValue("--small-scale") ?? "1.0");
+        float mediumScale = ParseFloat(options.GetValue("--medium-scale") ?? "1.5");
+        float largeScale = ParseFloat(options.GetValue("--large-scale") ?? "2.0");
+        float veryLargeScale = ParseFloat(options.GetValue("--very-large-scale") ?? "4.0");
+        float hugeScale = ParseFloat(options.GetValue("--huge-scale") ?? "6.0");
+        float massiveScale = ParseFloat(options.GetValue("--massive-scale") ?? "8.0");
         int pollMs = ParseInt(options.GetValue("--poll-ms") ?? "250");
         options.ThrowIfAnyUnknown();
 
@@ -342,8 +353,11 @@ internal static class Program
         {
             stateBlockBytes = BuildDynamicScaleStateBlock(
                 smallScale,
-                normalScale,
-                largeScale);
+                mediumScale,
+                largeScale,
+                veryLargeScale,
+                hugeScale,
+                massiveScale);
             stateBlock = ReserveWritableStateBlock(bytes, sections, stateBlockBytes.Length);
             dynamicScaleVa = ImageBase + stateBlock.Value.Rva + StateCurrentScaleOffset;
             if (callTextHelperWorker)
@@ -370,8 +384,11 @@ internal static class Program
                 stateBlock!.Value,
                 new LiveIniSignalOptions(
                     SmallScale: smallScale,
-                    NormalScale: normalScale,
+                    MediumScale: mediumScale,
                     LargeScale: largeScale,
+                    VeryLargeScale: veryLargeScale,
+                    HugeScale: hugeScale,
+                    MassiveScale: massiveScale,
                     PollMs: pollMs));
         }
         else if (subtitleSizeSignal)
@@ -381,8 +398,11 @@ internal static class Program
                 subtitleSignalWrappers,
                 new SubtitleSignalOptions(
                     SmallScale: smallScale,
-                    NormalScale: normalScale,
-                    LargeScale: largeScale));
+                    MediumScale: mediumScale,
+                    LargeScale: largeScale,
+                    VeryLargeScale: veryLargeScale,
+                    HugeScale: hugeScale,
+                    MassiveScale: massiveScale));
             workerCavePatch = subtitleSignalPatch.Value.WorkerBytes;
         }
         else if (subtitleTailDebugSignal)
@@ -392,8 +412,11 @@ internal static class Program
                 subtitleTailSignalHooks,
                 new SubtitleSignalOptions(
                     SmallScale: smallScale,
-                    NormalScale: normalScale,
-                    LargeScale: largeScale));
+                    MediumScale: mediumScale,
+                    LargeScale: largeScale,
+                    VeryLargeScale: veryLargeScale,
+                    HugeScale: hugeScale,
+                    MassiveScale: massiveScale));
             workerCavePatch = tailSignalPatch.WorkerBytes;
             for (int index = 0; index < subtitleTailSignalHooks.Length; index++)
             {
@@ -412,8 +435,11 @@ internal static class Program
                 render3DTailSignalHooks,
                 new SubtitleSignalOptions(
                     SmallScale: smallScale,
-                    NormalScale: normalScale,
-                    LargeScale: largeScale));
+                    MediumScale: mediumScale,
+                    LargeScale: largeScale,
+                    VeryLargeScale: veryLargeScale,
+                    HugeScale: hugeScale,
+                    MassiveScale: massiveScale));
             workerCavePatch = tailSignalPatch.WorkerBytes;
             for (int index = 0; index < render3DTailSignalHooks.Length; index++)
             {
@@ -778,7 +804,7 @@ internal static class Program
         var options = new ArgumentReader(args);
         string processName = options.GetValue("--process-name") ?? "ShippingPC-BmGame";
         string outputPath = Path.GetFullPath(options.RequireValue("--output"));
-        string valuesText = options.GetValue("--values") ?? "4101,4102,4103";
+        string valuesText = options.GetValue("--values") ?? "4101,4102,4103,4104,4105,4106";
         options.ThrowIfAnyUnknown();
 
         int[] values = ParseIntList(valuesText);
@@ -1034,8 +1060,11 @@ internal static class Program
         uint fileHandleVa = ImageBase + stateBlock.Rva + StateFileHandleOffset;
         uint pathBufferVa = ImageBase + stateBlock.Rva + StatePathBufferOffset;
         uint smallScaleVa = ImageBase + stateBlock.Rva + StateSmallScaleOffset;
-        uint normalScaleVa = ImageBase + stateBlock.Rva + StateNormalScaleOffset;
+        uint mediumScaleVa = ImageBase + stateBlock.Rva + StateMediumScaleOffset;
         uint largeScaleVa = ImageBase + stateBlock.Rva + StateLargeScaleOffset;
+        uint veryLargeScaleVa = ImageBase + stateBlock.Rva + StateVeryLargeScaleOffset;
+        uint hugeScaleVa = ImageBase + stateBlock.Rva + StateHugeScaleOffset;
+        uint massiveScaleVa = ImageBase + stateBlock.Rva + StateMassiveScaleOffset;
 
         var code = new X86Builder(ImageBase, WorkerCaveRva);
 
@@ -1107,7 +1136,7 @@ internal static class Program
         code.EmitJccNear(0x84, "ret"); // je
 
         code.Emit(0xA1);
-        code.EmitUInt32(normalScaleVa);
+        code.EmitUInt32(mediumScaleVa);
         code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
 
         code.Emit(0x8B, 0x35);
@@ -1256,12 +1285,14 @@ internal static class Program
         IReadOnlyList<PeSection> sections,
         WritableStateBlock stateBlock)
     {
+        uint getTickCountIatVa = ResolveImportIatVa(bytes, sections, "KERNEL32.dll", "GetTickCount");
         uint virtualQueryIatVa = ResolveImportIatVa(bytes, sections, "KERNEL32.dll", "VirtualQuery");
         uint currentScaleVa = ImageBase + stateBlock.Rva + StateCurrentScaleOffset;
         uint scanCursorVa = ImageBase + stateBlock.Rva + StateLastPollTickOffset;
         uint cachedPtrVa = ImageBase + stateBlock.Rva + StateFileBufferPtrOffset;
+        uint lastScanTickVa = ImageBase + stateBlock.Rva + StateBytesReadOffset;
         uint smallScaleVa = ImageBase + stateBlock.Rva + StateSmallScaleOffset;
-        uint normalScaleVa = ImageBase + stateBlock.Rva + StateNormalScaleOffset;
+        uint mediumScaleVa = ImageBase + stateBlock.Rva + StateMediumScaleOffset;
         uint largeScaleVa = ImageBase + stateBlock.Rva + StateLargeScaleOffset;
         uint mbiBufferVa = ImageBase + stateBlock.Rva + StatePathBufferOffset;
         uint mbiBaseVa = mbiBufferVa + MbiBaseAddressOffset;
@@ -1312,6 +1343,17 @@ internal static class Program
         code.EmitUInt32(cachedPtrVa);
         code.EmitUInt32(0); // cached_ptr = 0
 
+        code.EmitCallImport(getTickCountIatVa);
+        code.Emit(0x89, 0xC2); // mov edx,eax
+        code.Emit(0x8B, 0x0D);
+        code.EmitUInt32(lastScanTickVa); // mov ecx,[last_scan_tick]
+        code.Emit(0x2B, 0xD1); // sub edx,ecx
+        code.Emit(0x81, 0xFA);
+        code.EmitInt32(SubtitleUiStateRescanIntervalMs); // cmp edx,rescanIntervalMs
+        code.EmitJccNear(0x82, "ret"); // jb
+        code.Emit(0xA3);
+        code.EmitUInt32(lastScanTickVa); // mov [last_scan_tick],eax
+
         code.Label("start_scan");
         code.Emit(0x8B, 0x35);
         code.EmitUInt32(scanCursorVa); // mov esi,[scan_cursor]
@@ -1324,9 +1366,13 @@ internal static class Program
         code.Label("cursor_clamped");
         code.Emit(0x81, 0xFE);
         code.EmitUInt32(SubtitleUiStateScanEndVa); // cmp esi,end
-        code.EmitJccNear(0x82, "query_region"); // jb
+        code.EmitJccNear(0x82, "scan_budget_ready"); // jb
         code.Emit(0xBE);
         code.EmitUInt32(SubtitleUiStateScanStartVa); // mov esi,start
+
+        code.Label("scan_budget_ready");
+        code.Emit(0xBD);
+        code.EmitUInt32(SubtitleUiStateMaxRegionsPerPass); // mov ebp,maxRegionsPerPass
 
         code.Label("query_region");
         code.EmitPushImm32((uint)MemoryBasicInformationLength);
@@ -1361,7 +1407,7 @@ internal static class Program
         code.Label("store_next_cursor");
         code.Emit(0x89, 0x15);
         code.EmitUInt32(scanCursorVa); // mov [scan_cursor],edx
-        EmitReadableCommittedRegionCheck(code, mbiStateVa, mbiProtectVa, "region_readable", "ret");
+        EmitReadableCommittedRegionCheck(code, mbiStateVa, mbiProtectVa, "region_readable", "next_region");
 
         code.Label("region_readable");
         code.Emit(0x8B, 0x3D);
@@ -1387,7 +1433,7 @@ internal static class Program
         code.Label("scan_end_clamped");
         code.Emit(0x83, 0xEB, 0x20); // sub ebx,20h
         code.Emit(0x3B, 0xFB); // cmp edi,ebx
-        code.EmitJccNear(0x87, "ret"); // ja
+        code.EmitJccNear(0x87, "next_region"); // ja
 
         code.Label("scan_loop");
         code.EmitCallLabel("validate_candidate");
@@ -1396,6 +1442,11 @@ internal static class Program
         code.Emit(0x83, 0xC7, 0x04); // add edi,4
         code.Emit(0x3B, 0xFB); // cmp edi,ebx
         code.EmitJccNear(0x86, "scan_loop"); // jbe
+        code.EmitJmpLabel("next_region");
+
+        code.Label("next_region");
+        code.Emit(0x4D); // dec ebp
+        code.EmitJccNear(0x85, "query_region"); // jne
         code.EmitJmpLabel("ret");
 
         code.Label("found_candidate");
@@ -1430,8 +1481,8 @@ internal static class Program
         code.EmitUInt32(SubtitleSizeSmallCode); // cmp eax,small
         code.EmitJccNear(0x84, "apply_small"); // je
         code.Emit(0x3D);
-        code.EmitUInt32(SubtitleSizeNormalCode); // cmp eax,normal
-        code.EmitJccNear(0x84, "apply_normal"); // je
+        code.EmitUInt32(SubtitleSizeMediumCode); // cmp eax,normal
+        code.EmitJccNear(0x84, "apply_medium"); // je
 
         code.Label("apply_large");
         code.Emit(0xA1);
@@ -1447,9 +1498,9 @@ internal static class Program
         code.EmitUInt32(currentScaleVa); // mov [current_scale],eax
         code.EmitJmpLabel("ret");
 
-        code.Label("apply_normal");
+        code.Label("apply_medium");
         code.Emit(0xA1);
-        code.EmitUInt32(normalScaleVa); // mov eax,[normal_scale]
+        code.EmitUInt32(mediumScaleVa); // mov eax,[normal_scale]
         code.Emit(0xA3);
         code.EmitUInt32(currentScaleVa); // mov [current_scale],eax
         code.EmitJmpLabel("ret");
@@ -1459,23 +1510,22 @@ internal static class Program
         EmitCompareDwordPtrEdiDisp32(code, unchecked((sbyte)0xF4), 100, "invalid_candidate");
         EmitCompareDwordPtrEdiDisp32(code, unchecked((sbyte)0xF8), 100, "invalid_candidate");
         EmitCompareDwordPtrEdiDisp32(code, unchecked((sbyte)0xFC), 100, "invalid_candidate");
-        code.Emit(0x8B, 0x07); // mov eax,[edi]
+        EmitCompareDwordPtrEdiDisp32(code, 0x00, SubtitleSizeMediumCode, "invalid_candidate");
+        EmitCompareDwordPtrEdiDisp32(code, 0x04, 1, "invalid_candidate");
+        EmitCompareDwordPtrEdiDisp32(code, 0x08, 0, "invalid_candidate");
+        code.Emit(0x8B, 0x47, 0x0C); // mov eax,[edi+0Ch]
         code.Emit(0x3D);
         code.EmitUInt32(SubtitleSizeSmallCode); // cmp eax,small
         code.EmitJccNear(0x84, "candidate_tail"); // je
         code.Emit(0x3D);
-        code.EmitUInt32(SubtitleSizeNormalCode); // cmp eax,normal
+        code.EmitUInt32(SubtitleSizeMediumCode); // cmp eax,normal
         code.EmitJccNear(0x84, "candidate_tail"); // je
         code.Emit(0x3D);
         code.EmitUInt32(SubtitleSizeLargeCode); // cmp eax,large
         code.EmitJccNear(0x85, "invalid_candidate"); // jne
 
         code.Label("candidate_tail");
-        EmitCompareDwordPtrEdiDisp32(code, 0x04, 1, "invalid_candidate");
-        EmitCompareDwordPtrEdiDisp32(code, 0x08, 0, "invalid_candidate");
-        EmitCompareDwordPtrEdiDisp32(code, 0x0C, 1, "invalid_candidate");
-        code.Emit(0x39, 0x47, 0x10); // cmp [edi+10h],eax
-        code.EmitJccNear(0x85, "invalid_candidate"); // jne
+        EmitCompareDwordPtrEdiDisp32(code, 0x10, SubtitleSizeMediumCode, "invalid_candidate");
         EmitCompareDwordPtrEdiDisp32(code, 0x14, 2, "invalid_candidate");
         EmitCompareDwordPtrEdiDisp32(code, 0x1C, 3, "invalid_candidate");
         EmitCompareDwordPtrEdiDisp32(code, 0x20, 3, "invalid_candidate");
@@ -1510,8 +1560,11 @@ internal static class Program
 
         uint currentScaleVa = ImageBase + stateBlock.Rva + StateCurrentScaleOffset;
         uint smallScaleVa = ImageBase + stateBlock.Rva + StateSmallScaleOffset;
-        uint normalScaleVa = ImageBase + stateBlock.Rva + StateNormalScaleOffset;
+        uint mediumScaleVa = ImageBase + stateBlock.Rva + StateMediumScaleOffset;
         uint largeScaleVa = ImageBase + stateBlock.Rva + StateLargeScaleOffset;
+        uint veryLargeScaleVa = ImageBase + stateBlock.Rva + StateVeryLargeScaleOffset;
+        uint hugeScaleVa = ImageBase + stateBlock.Rva + StateHugeScaleOffset;
+        uint massiveScaleVa = ImageBase + stateBlock.Rva + StateMassiveScaleOffset;
         uint lastSeenSignalCodeVa = ImageBase + stateBlock.Rva + StateLastSeenSignalCodeOffset;
         uint lastSeenSignalArg2Va = ImageBase + stateBlock.Rva + StateLastSeenSignalArg2Offset;
         uint lastSeenHookRvaVa = ImageBase + stateBlock.Rva + StateLastSeenHookRvaOffset;
@@ -1546,12 +1599,21 @@ internal static class Program
         code.Emit(0x81, 0xFE); // cmp esi,smallCode
         code.EmitInt32(SubtitleSizeSmallCode);
         code.EmitJccNear(0x84, "apply_small"); // je
-        code.Emit(0x81, 0xFE); // cmp esi,normalCode
-        code.EmitInt32(SubtitleSizeNormalCode);
-        code.EmitJccNear(0x84, "apply_normal"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,mediumCode
+        code.EmitInt32(SubtitleSizeMediumCode);
+        code.EmitJccNear(0x84, "apply_medium"); // je
         code.Emit(0x81, 0xFE); // cmp esi,largeCode
         code.EmitInt32(SubtitleSizeLargeCode);
         code.EmitJccNear(0x84, "apply_large"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,veryLargeCode
+        code.EmitInt32(SubtitleSizeVeryLargeCode);
+        code.EmitJccNear(0x84, "apply_very_large"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,hugeCode
+        code.EmitInt32(SubtitleSizeHugeCode);
+        code.EmitJccNear(0x84, "apply_huge"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,massiveCode
+        code.EmitInt32(SubtitleSizeMassiveCode);
+        code.EmitJccNear(0x84, "apply_massive"); // je
         code.EmitJmpLabel("ret");
 
         code.Label("apply_small");
@@ -1568,12 +1630,12 @@ internal static class Program
         code.Label("ret");
         code.Emit(0xC3); // ret
 
-        code.Label("apply_normal");
+        code.Label("apply_medium");
         code.Emit(0xA1);
-        code.EmitUInt32(normalScaleVa);
+        code.EmitUInt32(mediumScaleVa);
         code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
         code.Emit(0xB8);
-        code.EmitUInt32(SubtitleSizeNormalCode);
+        code.EmitUInt32(SubtitleSizeMediumCode);
         code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
         code.Emit(0xFF, 0x05);
         code.EmitUInt32(applyCountVa);
@@ -1585,6 +1647,39 @@ internal static class Program
         code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
         code.Emit(0xB8);
         code.EmitUInt32(SubtitleSizeLargeCode);
+        code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
+        code.Emit(0xFF, 0x05);
+        code.EmitUInt32(applyCountVa);
+        code.EmitJmpLabel("ret");
+
+        code.Label("apply_very_large");
+        code.Emit(0xA1);
+        code.EmitUInt32(veryLargeScaleVa);
+        code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
+        code.Emit(0xB8);
+        code.EmitUInt32(SubtitleSizeVeryLargeCode);
+        code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
+        code.Emit(0xFF, 0x05);
+        code.EmitUInt32(applyCountVa);
+        code.EmitJmpLabel("ret");
+
+        code.Label("apply_huge");
+        code.Emit(0xA1);
+        code.EmitUInt32(hugeScaleVa);
+        code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
+        code.Emit(0xB8);
+        code.EmitUInt32(SubtitleSizeHugeCode);
+        code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
+        code.Emit(0xFF, 0x05);
+        code.EmitUInt32(applyCountVa);
+        code.EmitJmpLabel("ret");
+
+        code.Label("apply_massive");
+        code.Emit(0xA1);
+        code.EmitUInt32(massiveScaleVa);
+        code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
+        code.Emit(0xB8);
+        code.EmitUInt32(SubtitleSizeMassiveCode);
         code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
         code.Emit(0xFF, 0x05);
         code.EmitUInt32(applyCountVa);
@@ -1609,8 +1704,11 @@ internal static class Program
 
         uint currentScaleVa = ImageBase + stateBlock.Rva + StateCurrentScaleOffset;
         uint smallScaleVa = ImageBase + stateBlock.Rva + StateSmallScaleOffset;
-        uint normalScaleVa = ImageBase + stateBlock.Rva + StateNormalScaleOffset;
+        uint mediumScaleVa = ImageBase + stateBlock.Rva + StateMediumScaleOffset;
         uint largeScaleVa = ImageBase + stateBlock.Rva + StateLargeScaleOffset;
+        uint veryLargeScaleVa = ImageBase + stateBlock.Rva + StateVeryLargeScaleOffset;
+        uint hugeScaleVa = ImageBase + stateBlock.Rva + StateHugeScaleOffset;
+        uint massiveScaleVa = ImageBase + stateBlock.Rva + StateMassiveScaleOffset;
         uint lastSeenSignalCodeVa = ImageBase + stateBlock.Rva + StateLastSeenSignalCodeOffset;
         uint lastSeenSignalArg2Va = ImageBase + stateBlock.Rva + StateLastSeenSignalArg2Offset;
         uint lastSeenHookRvaVa = ImageBase + stateBlock.Rva + StateLastSeenHookRvaOffset;
@@ -1625,12 +1723,21 @@ internal static class Program
         code.Emit(0x81, 0xFE); // cmp esi,smallCode
         code.EmitInt32(SubtitleSizeSmallCode);
         code.EmitJccNear(0x84, "apply_small"); // je
-        code.Emit(0x81, 0xFE); // cmp esi,normalCode
-        code.EmitInt32(SubtitleSizeNormalCode);
-        code.EmitJccNear(0x84, "apply_normal"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,mediumCode
+        code.EmitInt32(SubtitleSizeMediumCode);
+        code.EmitJccNear(0x84, "apply_medium"); // je
         code.Emit(0x81, 0xFE); // cmp esi,largeCode
         code.EmitInt32(SubtitleSizeLargeCode);
         code.EmitJccNear(0x84, "apply_large"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,veryLargeCode
+        code.EmitInt32(SubtitleSizeVeryLargeCode);
+        code.EmitJccNear(0x84, "apply_very_large"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,hugeCode
+        code.EmitInt32(SubtitleSizeHugeCode);
+        code.EmitJccNear(0x84, "apply_huge"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,massiveCode
+        code.EmitInt32(SubtitleSizeMassiveCode);
+        code.EmitJccNear(0x84, "apply_massive"); // je
         code.EmitJmpLabel("apply_ret");
 
         code.Label("apply_small");
@@ -1644,12 +1751,12 @@ internal static class Program
         code.EmitUInt32(applyCountVa);
         code.EmitJmpLabel("apply_ret");
 
-        code.Label("apply_normal");
+        code.Label("apply_medium");
         code.Emit(0xA1);
-        code.EmitUInt32(normalScaleVa);
+        code.EmitUInt32(mediumScaleVa);
         code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
         code.Emit(0xB8);
-        code.EmitUInt32(SubtitleSizeNormalCode);
+        code.EmitUInt32(SubtitleSizeMediumCode);
         code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
         code.Emit(0xFF, 0x05);
         code.EmitUInt32(applyCountVa);
@@ -1661,6 +1768,39 @@ internal static class Program
         code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
         code.Emit(0xB8);
         code.EmitUInt32(SubtitleSizeLargeCode);
+        code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
+        code.Emit(0xFF, 0x05);
+        code.EmitUInt32(applyCountVa);
+        code.EmitJmpLabel("apply_ret");
+
+        code.Label("apply_very_large");
+        code.Emit(0xA1);
+        code.EmitUInt32(veryLargeScaleVa);
+        code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
+        code.Emit(0xB8);
+        code.EmitUInt32(SubtitleSizeVeryLargeCode);
+        code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
+        code.Emit(0xFF, 0x05);
+        code.EmitUInt32(applyCountVa);
+        code.EmitJmpLabel("apply_ret");
+
+        code.Label("apply_huge");
+        code.Emit(0xA1);
+        code.EmitUInt32(hugeScaleVa);
+        code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
+        code.Emit(0xB8);
+        code.EmitUInt32(SubtitleSizeHugeCode);
+        code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
+        code.Emit(0xFF, 0x05);
+        code.EmitUInt32(applyCountVa);
+        code.EmitJmpLabel("apply_ret");
+
+        code.Label("apply_massive");
+        code.Emit(0xA1);
+        code.EmitUInt32(massiveScaleVa);
+        code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
+        code.Emit(0xB8);
+        code.EmitUInt32(SubtitleSizeMassiveCode);
         code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
         code.Emit(0xFF, 0x05);
         code.EmitUInt32(applyCountVa);
@@ -1716,8 +1856,11 @@ internal static class Program
 
         uint currentScaleVa = ImageBase + stateBlock.Rva + StateCurrentScaleOffset;
         uint smallScaleVa = ImageBase + stateBlock.Rva + StateSmallScaleOffset;
-        uint normalScaleVa = ImageBase + stateBlock.Rva + StateNormalScaleOffset;
+        uint mediumScaleVa = ImageBase + stateBlock.Rva + StateMediumScaleOffset;
         uint largeScaleVa = ImageBase + stateBlock.Rva + StateLargeScaleOffset;
+        uint veryLargeScaleVa = ImageBase + stateBlock.Rva + StateVeryLargeScaleOffset;
+        uint hugeScaleVa = ImageBase + stateBlock.Rva + StateHugeScaleOffset;
+        uint massiveScaleVa = ImageBase + stateBlock.Rva + StateMassiveScaleOffset;
         uint lastSeenSignalCodeVa = ImageBase + stateBlock.Rva + StateLastSeenSignalCodeOffset;
         uint lastSeenSignalArg2Va = ImageBase + stateBlock.Rva + StateLastSeenSignalArg2Offset;
         uint lastSeenHookRvaVa = ImageBase + stateBlock.Rva + StateLastSeenHookRvaOffset;
@@ -1732,12 +1875,21 @@ internal static class Program
         code.Emit(0x81, 0xFE); // cmp esi,smallCode
         code.EmitInt32(SubtitleSizeSmallCode);
         code.EmitJccNear(0x84, "apply_small"); // je
-        code.Emit(0x81, 0xFE); // cmp esi,normalCode
-        code.EmitInt32(SubtitleSizeNormalCode);
-        code.EmitJccNear(0x84, "apply_normal"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,mediumCode
+        code.EmitInt32(SubtitleSizeMediumCode);
+        code.EmitJccNear(0x84, "apply_medium"); // je
         code.Emit(0x81, 0xFE); // cmp esi,largeCode
         code.EmitInt32(SubtitleSizeLargeCode);
         code.EmitJccNear(0x84, "apply_large"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,veryLargeCode
+        code.EmitInt32(SubtitleSizeVeryLargeCode);
+        code.EmitJccNear(0x84, "apply_very_large"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,hugeCode
+        code.EmitInt32(SubtitleSizeHugeCode);
+        code.EmitJccNear(0x84, "apply_huge"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,massiveCode
+        code.EmitInt32(SubtitleSizeMassiveCode);
+        code.EmitJccNear(0x84, "apply_massive"); // je
         code.EmitJmpLabel("apply_ret");
 
         code.Label("apply_small");
@@ -1751,12 +1903,12 @@ internal static class Program
         code.EmitUInt32(applyCountVa);
         code.EmitJmpLabel("apply_ret");
 
-        code.Label("apply_normal");
+        code.Label("apply_medium");
         code.Emit(0xA1);
-        code.EmitUInt32(normalScaleVa);
+        code.EmitUInt32(mediumScaleVa);
         code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
         code.Emit(0xB8);
-        code.EmitUInt32(SubtitleSizeNormalCode);
+        code.EmitUInt32(SubtitleSizeMediumCode);
         code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
         code.Emit(0xFF, 0x05);
         code.EmitUInt32(applyCountVa);
@@ -1768,6 +1920,39 @@ internal static class Program
         code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
         code.Emit(0xB8);
         code.EmitUInt32(SubtitleSizeLargeCode);
+        code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
+        code.Emit(0xFF, 0x05);
+        code.EmitUInt32(applyCountVa);
+        code.EmitJmpLabel("apply_ret");
+
+        code.Label("apply_very_large");
+        code.Emit(0xA1);
+        code.EmitUInt32(veryLargeScaleVa);
+        code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
+        code.Emit(0xB8);
+        code.EmitUInt32(SubtitleSizeVeryLargeCode);
+        code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
+        code.Emit(0xFF, 0x05);
+        code.EmitUInt32(applyCountVa);
+        code.EmitJmpLabel("apply_ret");
+
+        code.Label("apply_huge");
+        code.Emit(0xA1);
+        code.EmitUInt32(hugeScaleVa);
+        code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
+        code.Emit(0xB8);
+        code.EmitUInt32(SubtitleSizeHugeCode);
+        code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
+        code.Emit(0xFF, 0x05);
+        code.EmitUInt32(applyCountVa);
+        code.EmitJmpLabel("apply_ret");
+
+        code.Label("apply_massive");
+        code.Emit(0xA1);
+        code.EmitUInt32(massiveScaleVa);
+        code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
+        code.Emit(0xB8);
+        code.EmitUInt32(SubtitleSizeMassiveCode);
         code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
         code.Emit(0xFF, 0x05);
         code.EmitUInt32(applyCountVa);
@@ -1820,8 +2005,11 @@ internal static class Program
 
         uint currentScaleVa = ImageBase + stateBlock.Rva + StateCurrentScaleOffset;
         uint smallScaleVa = ImageBase + stateBlock.Rva + StateSmallScaleOffset;
-        uint normalScaleVa = ImageBase + stateBlock.Rva + StateNormalScaleOffset;
+        uint mediumScaleVa = ImageBase + stateBlock.Rva + StateMediumScaleOffset;
         uint largeScaleVa = ImageBase + stateBlock.Rva + StateLargeScaleOffset;
+        uint veryLargeScaleVa = ImageBase + stateBlock.Rva + StateVeryLargeScaleOffset;
+        uint hugeScaleVa = ImageBase + stateBlock.Rva + StateHugeScaleOffset;
+        uint massiveScaleVa = ImageBase + stateBlock.Rva + StateMassiveScaleOffset;
         uint lastSeenSignalCodeVa = ImageBase + stateBlock.Rva + StateLastSeenSignalCodeOffset;
         uint lastSeenSignalArg2Va = ImageBase + stateBlock.Rva + StateLastSeenSignalArg2Offset;
         uint lastSeenHookRvaVa = ImageBase + stateBlock.Rva + StateLastSeenHookRvaOffset;
@@ -1830,8 +2018,11 @@ internal static class Program
         uint applyCountVa = ImageBase + stateBlock.Rva + StateApplyCountOffset;
 
         int smallBits = BitConverter.SingleToInt32Bits(SubtitleSizeSmallCode);
-        int normalBits = BitConverter.SingleToInt32Bits(SubtitleSizeNormalCode);
+        int mediumBits = BitConverter.SingleToInt32Bits(SubtitleSizeMediumCode);
         int largeBits = BitConverter.SingleToInt32Bits(SubtitleSizeLargeCode);
+        int veryLargeBits = BitConverter.SingleToInt32Bits(SubtitleSizeVeryLargeCode);
+        int hugeBits = BitConverter.SingleToInt32Bits(SubtitleSizeHugeCode);
+        int massiveBits = BitConverter.SingleToInt32Bits(SubtitleSizeMassiveCode);
 
         var code = new X86Builder(ImageBase, WorkerCaveRva);
         var entryRvas = new List<uint>(hooks.Count);
@@ -1840,12 +2031,21 @@ internal static class Program
         code.Emit(0x81, 0xFE); // cmp esi,smallBits
         code.EmitInt32(smallBits);
         code.EmitJccNear(0x84, "apply_small"); // je
-        code.Emit(0x81, 0xFE); // cmp esi,normalBits
-        code.EmitInt32(normalBits);
-        code.EmitJccNear(0x84, "apply_normal"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,mediumBits
+        code.EmitInt32(mediumBits);
+        code.EmitJccNear(0x84, "apply_medium"); // je
         code.Emit(0x81, 0xFE); // cmp esi,largeBits
         code.EmitInt32(largeBits);
         code.EmitJccNear(0x84, "apply_large"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,veryLargeBits
+        code.EmitInt32(veryLargeBits);
+        code.EmitJccNear(0x84, "apply_very_large"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,hugeBits
+        code.EmitInt32(hugeBits);
+        code.EmitJccNear(0x84, "apply_huge"); // je
+        code.Emit(0x81, 0xFE); // cmp esi,massiveBits
+        code.EmitInt32(massiveBits);
+        code.EmitJccNear(0x84, "apply_massive"); // je
         code.EmitJmpLabel("apply_ret");
 
         code.Label("apply_small");
@@ -1859,12 +2059,12 @@ internal static class Program
         code.EmitUInt32(applyCountVa);
         code.EmitJmpLabel("apply_ret");
 
-        code.Label("apply_normal");
+        code.Label("apply_medium");
         code.Emit(0xA1);
-        code.EmitUInt32(normalScaleVa);
+        code.EmitUInt32(mediumScaleVa);
         code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
         code.Emit(0xB8);
-        code.EmitUInt32(SubtitleSizeNormalCode);
+        code.EmitUInt32(SubtitleSizeMediumCode);
         code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
         code.Emit(0xFF, 0x05);
         code.EmitUInt32(applyCountVa);
@@ -1876,6 +2076,39 @@ internal static class Program
         code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
         code.Emit(0xB8);
         code.EmitUInt32(SubtitleSizeLargeCode);
+        code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
+        code.Emit(0xFF, 0x05);
+        code.EmitUInt32(applyCountVa);
+        code.EmitJmpLabel("apply_ret");
+
+        code.Label("apply_very_large");
+        code.Emit(0xA1);
+        code.EmitUInt32(veryLargeScaleVa);
+        code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
+        code.Emit(0xB8);
+        code.EmitUInt32(SubtitleSizeVeryLargeCode);
+        code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
+        code.Emit(0xFF, 0x05);
+        code.EmitUInt32(applyCountVa);
+        code.EmitJmpLabel("apply_ret");
+
+        code.Label("apply_huge");
+        code.Emit(0xA1);
+        code.EmitUInt32(hugeScaleVa);
+        code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
+        code.Emit(0xB8);
+        code.EmitUInt32(SubtitleSizeHugeCode);
+        code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
+        code.Emit(0xFF, 0x05);
+        code.EmitUInt32(applyCountVa);
+        code.EmitJmpLabel("apply_ret");
+
+        code.Label("apply_massive");
+        code.Emit(0xA1);
+        code.EmitUInt32(massiveScaleVa);
+        code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
+        code.Emit(0xB8);
+        code.EmitUInt32(SubtitleSizeMassiveCode);
         code.EmitMovAbsLabelEaxAbsolute(lastAppliedCodeVa);
         code.Emit(0xFF, 0x05);
         code.EmitUInt32(applyCountVa);
@@ -2018,7 +2251,7 @@ internal static class Program
         uint burstCountVa = ImageBase + stateBlock.Rva + StateBurstCountOffset;
         uint lastTickVa = ImageBase + stateBlock.Rva + StateLastPollTickOffset;
         uint smallScaleVa = ImageBase + stateBlock.Rva + StateSmallScaleOffset;
-        uint normalScaleVa = ImageBase + stateBlock.Rva + StateNormalScaleOffset;
+        uint mediumScaleVa = ImageBase + stateBlock.Rva + StateMediumScaleOffset;
         uint largeScaleVa = ImageBase + stateBlock.Rva + StateLargeScaleOffset;
 
         var code = new X86Builder(ImageBase, WorkerCaveRva);
@@ -2067,7 +2300,7 @@ internal static class Program
         code.EmitJccNear(0x84, "apply_small"); // je
         code.Emit(0x83, 0xF8, 0x04); // cmp eax,4
         code.EmitJccNear(0x82, "ret"); // jb
-        code.EmitJccNear(0x84, "apply_normal"); // je
+        code.EmitJccNear(0x84, "apply_medium"); // je
         code.Emit(0x83, 0xF8, 0x06); // cmp eax,6
         code.EmitJccNear(0x82, "ret"); // jb
 
@@ -2083,9 +2316,9 @@ internal static class Program
         code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
         code.EmitJmpLabel("ret");
 
-        code.Label("apply_normal");
+        code.Label("apply_medium");
         code.Emit(0xA1);
-        code.EmitUInt32(normalScaleVa);
+        code.EmitUInt32(mediumScaleVa);
         code.EmitMovAbsLabelEaxAbsolute(currentScaleVa);
 
         code.Label("ret");
@@ -2221,13 +2454,22 @@ internal static class Program
         return Encoding.ASCII.GetString(bytes, offset, end - offset);
     }
 
-    private static byte[] BuildDynamicScaleStateBlock(float smallScale, float normalScale, float largeScale)
+    private static byte[] BuildDynamicScaleStateBlock(
+        float smallScale,
+        float mediumScale,
+        float largeScale,
+        float veryLargeScale,
+        float hugeScale,
+        float massiveScale)
     {
         byte[] state = new byte[StateBlockLength];
-        WriteUInt32(state, StateCurrentScaleOffset, BitConverter.ToUInt32(BitConverter.GetBytes(normalScale), 0));
+        WriteUInt32(state, StateCurrentScaleOffset, BitConverter.ToUInt32(BitConverter.GetBytes(mediumScale), 0));
         WriteUInt32(state, StateSmallScaleOffset, BitConverter.ToUInt32(BitConverter.GetBytes(smallScale), 0));
-        WriteUInt32(state, StateNormalScaleOffset, BitConverter.ToUInt32(BitConverter.GetBytes(normalScale), 0));
+        WriteUInt32(state, StateMediumScaleOffset, BitConverter.ToUInt32(BitConverter.GetBytes(mediumScale), 0));
         WriteUInt32(state, StateLargeScaleOffset, BitConverter.ToUInt32(BitConverter.GetBytes(largeScale), 0));
+        WriteUInt32(state, StateVeryLargeScaleOffset, BitConverter.ToUInt32(BitConverter.GetBytes(veryLargeScale), 0));
+        WriteUInt32(state, StateHugeScaleOffset, BitConverter.ToUInt32(BitConverter.GetBytes(hugeScale), 0));
+        WriteUInt32(state, StateMassiveScaleOffset, BitConverter.ToUInt32(BitConverter.GetBytes(massiveScale), 0));
         WriteUInt32(state, StateDebugMagicOffset, SubtitleDebugMagic);
         WriteUInt32(state, StateDebugVersionOffset, SubtitleDebugVersion);
         return state;
@@ -2640,8 +2882,11 @@ internal static class Program
                 StateBlockVa: stateBlockVa,
                 CurrentScale: ReadFloat(state, StateCurrentScaleOffset),
                 SmallScale: ReadFloat(state, StateSmallScaleOffset),
-                NormalScale: ReadFloat(state, StateNormalScaleOffset),
+                MediumScale: ReadFloat(state, StateMediumScaleOffset),
                 LargeScale: ReadFloat(state, StateLargeScaleOffset),
+                VeryLargeScale: ReadFloat(state, StateVeryLargeScaleOffset),
+                HugeScale: ReadFloat(state, StateHugeScaleOffset),
+                MassiveScale: ReadFloat(state, StateMassiveScaleOffset),
                 ScanCursor: ReadUInt32(state, StateLastPollTickOffset),
                 CachedPtr: ReadUInt32(state, StateFileBufferPtrOffset),
                 LastSeenSignalCode: ReadUInt32(state, StateLastSeenSignalCodeOffset),
@@ -2692,8 +2937,11 @@ internal static class Program
         Console.WriteLine(
             $"{prefix}pid={snapshot.ProcessId} scale={snapshot.CurrentScale.ToString("0.###", CultureInfo.InvariantCulture)} " +
             $"small={snapshot.SmallScale.ToString("0.###", CultureInfo.InvariantCulture)} " +
-            $"normal={snapshot.NormalScale.ToString("0.###", CultureInfo.InvariantCulture)} " +
+            $"medium={snapshot.MediumScale.ToString("0.###", CultureInfo.InvariantCulture)} " +
             $"large={snapshot.LargeScale.ToString("0.###", CultureInfo.InvariantCulture)} " +
+            $"veryLarge={snapshot.VeryLargeScale.ToString("0.###", CultureInfo.InvariantCulture)} " +
+            $"huge={snapshot.HugeScale.ToString("0.###", CultureInfo.InvariantCulture)} " +
+            $"massive={snapshot.MassiveScale.ToString("0.###", CultureInfo.InvariantCulture)} " +
             $"scanCursor=0x{snapshot.ScanCursor:X8} cachedPtr=0x{snapshot.CachedPtr:X8} " +
             $"hits={snapshot.SignalHitCount} lastArg1={snapshot.LastSeenSignalCode} lastArg1f={arg1Float.ToString("0.###", CultureInfo.InvariantCulture)} " +
             $"lastArg2={snapshot.LastSeenSignalArg2} lastArg2f={arg2Float.ToString("0.###", CultureInfo.InvariantCulture)} " +
@@ -2714,8 +2962,11 @@ internal static class Program
                previous.LastMethodPtr != current.LastMethodPtr ||
                !string.Equals(previous.LastMethodText, current.LastMethodText, StringComparison.Ordinal) ||
                previous.SmallScale != current.SmallScale ||
-               previous.NormalScale != current.NormalScale ||
-               previous.LargeScale != current.LargeScale;
+               previous.MediumScale != current.MediumScale ||
+               previous.LargeScale != current.LargeScale ||
+               previous.VeryLargeScale != current.VeryLargeScale ||
+               previous.HugeScale != current.HugeScale ||
+               previous.MassiveScale != current.MassiveScale;
     }
 
     private static CandidateSnapshot SnapshotLiveInt32Candidates(Process process, IReadOnlyCollection<int> values)
@@ -2923,16 +3174,22 @@ internal static class Program
 
     private static float MapConsoleFontSizeToScale(int consoleFontSize) => consoleFontSize switch
     {
-        <= 5 => 1.25f,
+        <= 5 => 1.0f,
         6 => 1.5f,
-        _ => 1.8f
+        7 => 2.0f,
+        8 => 4.0f,
+        9 => 6.0f,
+        _ => 8.0f
     };
 
     private static float MapSubtitleStateToScale(int state) => state switch
     {
-        <= 0 => 1.3f,
+        <= 0 => 1.0f,
         1 => 1.5f,
-        _ => 1.8f
+        2 => 2.0f,
+        3 => 4.0f,
+        4 => 6.0f,
+        _ => 8.0f
     };
 
     private static bool ParseIniBool(string value)
@@ -3022,13 +3279,13 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("Commands:");
         Console.WriteLine("  patch-bink-subtitles --exe <ShippingPC-BmGame.exe> [--scale-multiplier <float>] [--backup] [--backup-path <path>]");
-        Console.WriteLine("  patch-bink-text-scale --exe <ShippingPC-BmGame.exe> [--scale-multiplier <float>] [--global] [--ui-state-live] [--subtitle-size-signal] [--subtitle-tail-debug-signal] [--render3d-tail-debug-signal] [--invoke-trace] [--internal-ini-live] [--small-scale <float>] [--normal-scale <float>] [--large-scale <float>] [--poll-ms <int>] [--backup] [--backup-path <path>]");
+        Console.WriteLine("  patch-bink-text-scale --exe <ShippingPC-BmGame.exe> [--scale-multiplier <float>] [--global] [--ui-state-live] [--subtitle-size-signal] [--subtitle-tail-debug-signal] [--render3d-tail-debug-signal] [--invoke-trace] [--internal-ini-live] [--small-scale <float>] [--medium-scale <float>] [--large-scale <float>] [--very-large-scale <float>] [--huge-scale <float>] [--massive-scale <float>] [--poll-ms <int>] [--backup] [--backup-path <path>]");
         Console.WriteLine("  export-global-text-scale-blob --output <path> [--scale-multiplier <float>]");
         Console.WriteLine("  set-live-text-scale --scale-multiplier <float> [--process-name <ShippingPC-BmGame>]");
         Console.WriteLine("  watch-live-text-scale --ini <BmGame.ini> [--process-name <ShippingPC-BmGame>] [--poll-ms <500>]");
         Console.WriteLine("  watch-live-subtitle-debug [--process-name <ShippingPC-BmGame>] [--interval-ms <250>]");
         Console.WriteLine("  dump-live-subtitle-debug [--process-name <ShippingPC-BmGame>]");
-        Console.WriteLine("  snapshot-live-subtitle-candidates --output <snapshot.json> [--process-name <ShippingPC-BmGame>] [--values <4101,4102,4103>]");
+        Console.WriteLine("  snapshot-live-subtitle-candidates --output <snapshot.json> [--process-name <ShippingPC-BmGame>] [--values <4101,4102,4103,4104,4105,4106>]");
         Console.WriteLine("  diff-live-subtitle-candidates --before <snapshot.json> --after <snapshot.json>");
         Console.WriteLine("  verify-bink-subtitles --exe <ShippingPC-BmGame.exe>");
         Console.WriteLine("  verify-bink-text-scale --exe <ShippingPC-BmGame.exe>");
@@ -3238,9 +3495,9 @@ internal static class Program
         }
     }
 
-    private readonly record struct LiveIniSignalOptions(float SmallScale, float NormalScale, float LargeScale, int PollMs);
-    private readonly record struct SubtitleSignalOptions(float SmallScale, float NormalScale, float LargeScale);
-    private readonly record struct BurstScaleOptions(float SmallScale, float NormalScale, float LargeScale, int BurstResetMs);
+    private readonly record struct LiveIniSignalOptions(float SmallScale, float MediumScale, float LargeScale, float VeryLargeScale, float HugeScale, float MassiveScale, int PollMs);
+    private readonly record struct SubtitleSignalOptions(float SmallScale, float MediumScale, float LargeScale, float VeryLargeScale, float HugeScale, float MassiveScale);
+    private readonly record struct BurstScaleOptions(float SmallScale, float MediumScale, float LargeScale, float VeryLargeScale, float HugeScale, float MassiveScale, int BurstResetMs);
 
     private sealed record PeSection(uint VirtualAddress, uint PointerToRawData, uint SizeOfRawData, uint Characteristics)
     {
@@ -3375,8 +3632,11 @@ internal static class Program
         uint StateBlockVa,
         float CurrentScale,
         float SmallScale,
-        float NormalScale,
+        float MediumScale,
         float LargeScale,
+        float VeryLargeScale,
+        float HugeScale,
+        float MassiveScale,
         uint ScanCursor,
         uint CachedPtr,
         uint LastSeenSignalCode,
@@ -3388,3 +3648,4 @@ internal static class Program
         uint LastMethodPtr,
         string LastMethodText);
 }
+

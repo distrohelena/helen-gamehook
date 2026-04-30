@@ -12,12 +12,36 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
 
 $PackRoot = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles'
 $PackJsonPath = Join-Path $PackRoot 'pack.json'
+$RebuildScriptPath = Join-Path $BatmanRoot 'scripts\Rebuild-BatmanPack.ps1'
+$DeployScriptPath = Join-Path $BatmanRoot 'scripts\Deploy-Batman.ps1'
+$ProgramSourcePath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\Program.cs'
+$AssetBuilderSourcePath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\SubtitleSizeAssetBuilder.cs'
 
 if (-not (Test-Path -LiteralPath $PackJsonPath)) {
     throw "Batman subtitle pack manifest not found: $PackJsonPath"
 }
 
+if (-not (Test-Path -LiteralPath $RebuildScriptPath)) {
+    throw "Batman subtitle pack rebuild script not found: $RebuildScriptPath"
+}
+
+if (-not (Test-Path -LiteralPath $DeployScriptPath)) {
+    throw "Batman subtitle pack deploy script not found: $DeployScriptPath"
+}
+
+if (-not (Test-Path -LiteralPath $ProgramSourcePath)) {
+    throw "Batman subtitle pack builder program source not found: $ProgramSourcePath"
+}
+
+if (-not (Test-Path -LiteralPath $AssetBuilderSourcePath)) {
+    throw "Batman subtitle pack asset builder source not found: $AssetBuilderSourcePath"
+}
+
 $PackJson = Get-Content -LiteralPath $PackJsonPath -Raw | ConvertFrom-Json
+$RebuildScriptText = Get-Content -LiteralPath $RebuildScriptPath -Raw
+$DeployScriptText = Get-Content -LiteralPath $DeployScriptPath -Raw
+$ProgramSourceText = Get-Content -LiteralPath $ProgramSourcePath -Raw
+$AssetBuilderSourceText = Get-Content -LiteralPath $AssetBuilderSourcePath -Raw
 
 $ExpectedIniFiles = @(
     @{
@@ -146,5 +170,33 @@ if ($ActualIniKeys.Count -ne $ExpectedIniKeys.Count) {
 Assert-ExpectedIniFile -ActualEntry $ActualIniFiles[0] -ExpectedEntry $ExpectedIniFiles[0]
 Assert-ExpectedIniStore -ActualEntry $ActualIniStores[0] -ExpectedEntry $ExpectedIniStores[0]
 Assert-ExpectedIniKey -ActualEntry $ActualIniKeys[0] -ExpectedEntry $ExpectedIniKeys[0]
+
+if ($RebuildScriptText.Contains('$FrontendPackBuildVersion')) {
+    throw 'Batman subtitle pack rebuild still defines a frontend build version label.'
+}
+
+if ($RebuildScriptText.Contains('--build-version $FrontendPackBuildVersion')) {
+    throw 'Batman subtitle pack rebuild still forwards a frontend build version label into build-main-menu-audio.'
+}
+
+if ($RebuildScriptText.Contains('build-main-menu-audio')) {
+    throw 'Batman subtitle pack rebuild still invokes the frontend main-menu audio build.'
+}
+
+if ($RebuildScriptText.Contains("id = 'frontendMapPackage'") -or $RebuildScriptText.Contains('BmGame/CookedPC/Maps/Frontend/Frontend.umap') -or $RebuildScriptText.Contains('generated\main-menu-audio\Frontend-main-menu-subtitle-size.umap')) {
+    throw 'Batman subtitle pack rebuild still includes frontend package patching.'
+}
+
+if ($DeployScriptText.Contains("Id = 'frontendMapPackage'") -or $DeployScriptText.Contains('SourceFrontendDeltaPath') -or $DeployScriptText.Contains('BmGame/CookedPC/Maps/Frontend/Frontend.umap')) {
+    throw 'Batman subtitle pack deploy script still expects a frontend subtitle payload.'
+}
+
+if (-not $ProgramSourceText.Contains('string buildVersion = options.GetValue("--build-version")?.Trim() ?? string.Empty;')) {
+    throw 'Batman subtitle pack audio build does not treat the frontend build version as an explicit opt-in value.'
+}
+
+if (-not $AssetBuilderSourceText.Contains('if (!string.IsNullOrWhiteSpace(buildVersion))')) {
+    throw 'Batman subtitle pack asset builder does not guard the frontend version-label patch behind an explicit build-version check.'
+}
 
 Write-Output 'PASS'

@@ -17,6 +17,9 @@ public static class BatmanWindowNative {
     public static extern bool IsWindowVisible(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -30,6 +33,9 @@ public static class BatmanWindowNative {
 
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
 }
 "@
 }
@@ -93,7 +99,9 @@ function Get-VisibleWindowSnapshot {
     param(
         [string[]]$ProcessNames,
         [string]$TitleRegex,
-        [string]$ChildTextRegex
+        [string]$ChildTextRegex,
+        [switch]$IncludeHidden,
+        [switch]$IncludeMinimized
     )
 
     $Rows = New-Object System.Collections.Generic.List[object]
@@ -110,7 +118,14 @@ function Get-VisibleWindowSnapshot {
     [BatmanWindowNative]::EnumWindows({
         param($WindowHandle, $LParam)
 
-        if (-not [BatmanWindowNative]::IsWindowVisible($WindowHandle)) {
+        $IsVisible = [BatmanWindowNative]::IsWindowVisible($WindowHandle)
+        $IsMinimized = [BatmanWindowNative]::IsIconic($WindowHandle)
+
+        if (-not $IncludeHidden -and -not $IsVisible) {
+            return $true
+        }
+
+        if (-not $IncludeMinimized -and $IsMinimized) {
             return $true
         }
 
@@ -148,6 +163,8 @@ function Get-VisibleWindowSnapshot {
             ChildTexts = $ChildTexts
             ChildWindows = $ChildWindows
             AllText = $AllText
+            IsVisible = $IsVisible
+            IsMinimized = $IsMinimized
         }) | Out-Null
 
         return $true
@@ -156,9 +173,57 @@ function Get-VisibleWindowSnapshot {
     return $Rows
 }
 
-function Get-BatmanMainWindowSnapshot {
+function Get-BatmanVisibleMainWindowSnapshot {
     $Windows = @(Get-VisibleWindowSnapshot -ProcessNames @('ShippingPC-BmGame'))
     return @($Windows | Where-Object { $_.ClassName -ne '#32770' }) | Select-Object -First 1
+}
+
+function Get-BatmanWindowCandidateSnapshot {
+    $Windows = @(
+        Get-VisibleWindowSnapshot `
+            -ProcessNames @('ShippingPC-BmGame') `
+            -IncludeHidden `
+            -IncludeMinimized
+    )
+
+    return @(
+        $Windows |
+            Where-Object { $_.ClassName -ne '#32770' } |
+            Sort-Object `
+                @{ Expression = { $_.IsVisible }; Descending = $true }, `
+                @{ Expression = { -not $_.IsMinimized }; Descending = $true }
+    ) | Select-Object -First 1
+}
+
+function Restore-BatmanWindowCandidate {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Window
+    )
+
+    if ($Window.IsMinimized) {
+        [BatmanWindowNative]::ShowWindowAsync($Window.HandleValue, 9) | Out-Null
+    } elseif (-not $Window.IsVisible) {
+        [BatmanWindowNative]::ShowWindowAsync($Window.HandleValue, 5) | Out-Null
+    }
+
+    [BatmanWindowNative]::SetForegroundWindow($Window.HandleValue) | Out-Null
+    Start-Sleep -Milliseconds 500
+}
+
+function Get-BatmanMainWindowSnapshot {
+    $VisibleWindow = Get-BatmanVisibleMainWindowSnapshot
+    if ($null -ne $VisibleWindow) {
+        return $VisibleWindow
+    }
+
+    $Candidate = Get-BatmanWindowCandidateSnapshot
+    if ($null -eq $Candidate) {
+        return $null
+    }
+
+    Restore-BatmanWindowCandidate -Window $Candidate
+    return Get-BatmanVisibleMainWindowSnapshot
 }
 
 function Get-BatmanDialogSnapshot {

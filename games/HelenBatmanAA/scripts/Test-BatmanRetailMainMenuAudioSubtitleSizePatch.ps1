@@ -14,7 +14,7 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
 
 if ([string]::IsNullOrWhiteSpace($RetailFrontendPackagePath)) {
     $BuilderRoot = Join-Path $BatmanRoot 'builder'
-    $RetailFrontendPackagePath = Join-Path $BuilderRoot 'extracted\frontend\frontend-umap-unpacked\Frontend.umap'
+    $RetailFrontendPackagePath = Join-Path $BuilderRoot 'extracted\frontend-retail\Frontend.umap'
 } else {
     $RetailFrontendPackagePath = (Resolve-Path $RetailFrontendPackagePath).Path
 }

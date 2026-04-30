@@ -5,35 +5,17 @@
                              "source":  {
                                             "path":  "assets/deltas/BmGame-subtitle-signal.hgdelta",
                                             "base":  {
-                                                         "sha256":  "621a5c8d99c9f7c7283531d05a4a6d56bdf15ad93ede0d5bf2f5d3e45117ff36",
-                                                         "size":  100365345
+                                                         "sha256":  "4306148e7627ec2c0de4144fd6ab45521b3b7e090d1028a0b685cadafafb89e6",
+                                                         "size":  59857525
                                                      },
                                             "chunkSize":  65536,
                                             "target":  {
-                                                           "sha256":  "d1e97fbd81e5eec121538873b5fc95c4a47dca98dbae51898cf3e80210639d39",
-                                                           "size":  101115741
+                                                           "sha256":  "3e83e7001b9bc806c20fdff77865f0af1aedad6079032d7b43952a93db8db7bd",
+                                                           "size":  106217949
                                                        },
                                             "kind":  "delta-file"
                                         },
                              "id":  "bmgameGameplayPackage",
-                             "mode":  "delta-on-read"
-                         },
-                         {
-                             "path":  "BmGame/CookedPC/Maps/Frontend/Frontend.umap",
-                             "source":  {
-                                            "path":  "assets/deltas/Frontend-main-menu-subtitle-size.hgdelta",
-                                            "base":  {
-                                                         "sha256":  "05fa5608eeda5c12f964b1fafca121d3db60eef60094fa9bb567d9be5a620a50",
-                                                         "size":  11739909
-                                                     },
-                                            "chunkSize":  65536,
-                                            "target":  {
-                                                           "sha256":  "7b49ddc634eb18c1dcd61885770030154c9465562b7d2a8be5520c78671d45fb",
-                                                           "size":  12555168
-                                                       },
-                                            "kind":  "delta-file"
-                                        },
-                             "id":  "frontendMapPackage",
                              "mode":  "delta-on-read"
                          }
                      ]

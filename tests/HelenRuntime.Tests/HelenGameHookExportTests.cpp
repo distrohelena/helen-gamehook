@@ -128,6 +128,9 @@ void RunHelenGameHookExportTests()
         ContainsExportLine(definition_text, "Helen_RunCommand=_HelenRunCommandA@4"),
         "HelenGameHook.def does not export Helen_RunCommand.");
     Expect(
+        ContainsExportLine(definition_text, "Helen_ApplyBatmanGraphicsDraft=_HelenApplyBatmanGraphicsDraftA@0"),
+        "HelenGameHook.def does not export Helen_ApplyBatmanGraphicsDraft.");
+    Expect(
         ContainsExportLine(definition_text, "HelenSetConfigIntA=_HelenSetConfigIntA@8"),
         "HelenGameHook.def does not export HelenSetConfigIntA.");
 
@@ -140,11 +143,16 @@ void RunHelenGameHookExportTests()
     const FARPROC set_config_int_a_export = GetRequiredExport(module, "HelenSetConfigIntA");
     const FARPROC run_command_export = GetRequiredExport(module, "Helen_RunCommand");
     const FARPROC run_command_a_export = GetRequiredExport(module, "HelenRunCommandA");
+    const FARPROC apply_batman_graphics_draft_export = GetRequiredExport(module, "Helen_ApplyBatmanGraphicsDraft");
+    const FARPROC apply_batman_graphics_draft_a_export = GetRequiredExport(module, "HelenApplyBatmanGraphicsDraftA");
 
     Expect(get_int_export == get_int_a_export, "Helen_GetInt does not alias HelenGetIntA in the built DLL.");
     Expect(set_int_export == set_int_a_export, "Helen_SetInt does not alias HelenSetIntA in the built DLL.");
     Expect(set_config_int_a_export != nullptr, "HelenSetConfigIntA is missing from the built DLL.");
     Expect(run_command_export == run_command_a_export, "Helen_RunCommand does not alias HelenRunCommandA in the built DLL.");
+    Expect(
+        apply_batman_graphics_draft_export == apply_batman_graphics_draft_a_export,
+        "Helen_ApplyBatmanGraphicsDraft does not alias HelenApplyBatmanGraphicsDraftA in the built DLL.");
 
     FreeLibrary(module);
 }

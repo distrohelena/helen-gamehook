@@ -536,7 +536,7 @@ void RunPackRepositoryTests()
             GetBatmanPackRoot(),
             "ShippingPC-BmGame.exe",
             38758728,
-            "4dac1f5e2ac6710b7378fdce74601f616f4753e3756cb5fda63c7519cc2eb028");
+            "9e23f9d4e0e5d81a6b8dfa7937a6e6e7fb6953effa607105c8b0e5ded4c72c19");
         Expect(loaded_batman_pack.has_value(), "Expected the checked-in Batman pack to load for the matching executable fingerprint.");
         Expect(loaded_batman_pack->Pack.Id == "batman-aa-graphics-options", "Checked-in Batman default pack selection mismatch.");
         Expect(loaded_batman_pack->Build.VirtualFiles.size() == 1, "Checked-in Batman graphics pack virtual file count mismatch.");
@@ -545,16 +545,26 @@ void RunPackRepositoryTests()
         Expect(loaded_batman_pack->Build.RuntimeSlots.empty(), "Checked-in Batman graphics pack unexpectedly declared runtime slots.");
         Expect(loaded_batman_pack->Build.StateObservers.empty(), "Checked-in Batman graphics pack unexpectedly declared state observers.");
         Expect(loaded_batman_pack->Build.Hooks.empty(), "Checked-in Batman graphics pack unexpectedly declared hooks.");
-        Expect(loaded_batman_pack->Build.Commands.size() == 2, "Checked-in Batman graphics pack command count mismatch.");
-        Expect(loaded_batman_pack->Build.ExternalBindings.size() == 28, "Checked-in Batman graphics pack external binding count mismatch.");
+        Expect(loaded_batman_pack->Build.Commands.size() == 4, "Checked-in Batman graphics pack command count mismatch.");
+        Expect(loaded_batman_pack->Build.ExternalBindings.size() == 27, "Checked-in Batman graphics pack external binding count mismatch.");
 
         const helen::CommandDefinition* checked_in_load_draft_command = nullptr;
+        const helen::CommandDefinition* checked_in_sync_preset_command = nullptr;
+        const helen::CommandDefinition* checked_in_sync_detail_level_command = nullptr;
         const helen::CommandDefinition* checked_in_apply_draft_command = nullptr;
         for (const helen::CommandDefinition& command : loaded_batman_pack->Build.Commands)
         {
             if (command.Id == "loadBatmanGraphicsDraftIntoConfig")
             {
                 checked_in_load_draft_command = &command;
+            }
+            else if (command.Id == "syncBatmanGraphicsPreset")
+            {
+                checked_in_sync_preset_command = &command;
+            }
+            else if (command.Id == "syncBatmanGraphicsDetailLevel")
+            {
+                checked_in_sync_detail_level_command = &command;
             }
             else if (command.Id == "applyBatmanGraphicsDraft")
             {
@@ -565,6 +575,12 @@ void RunPackRepositoryTests()
         Expect(checked_in_load_draft_command != nullptr, "Checked-in Batman graphics pack did not declare loadBatmanGraphicsDraftIntoConfig.");
         Expect(checked_in_load_draft_command->Steps.size() == 1, "Checked-in Batman graphics load command step count mismatch.");
         Expect(checked_in_load_draft_command->Steps[0].Kind == "load-batman-graphics-draft-into-config", "Checked-in Batman graphics load command step mismatch.");
+        Expect(checked_in_sync_preset_command != nullptr, "Checked-in Batman graphics pack did not declare syncBatmanGraphicsPreset.");
+        Expect(checked_in_sync_preset_command->Steps.size() == 1, "Checked-in Batman graphics preset-sync command step count mismatch.");
+        Expect(checked_in_sync_preset_command->Steps[0].Kind == "sync-batman-graphics-detail-preset", "Checked-in Batman graphics preset-sync command step mismatch.");
+        Expect(checked_in_sync_detail_level_command != nullptr, "Checked-in Batman graphics pack did not declare syncBatmanGraphicsDetailLevel.");
+        Expect(checked_in_sync_detail_level_command->Steps.size() == 1, "Checked-in Batman graphics detail-level sync command step count mismatch.");
+        Expect(checked_in_sync_detail_level_command->Steps[0].Kind == "sync-batman-graphics-detail-level", "Checked-in Batman graphics detail-level sync command step mismatch.");
         Expect(checked_in_apply_draft_command != nullptr, "Checked-in Batman graphics pack did not declare applyBatmanGraphicsDraft.");
         Expect(checked_in_apply_draft_command->Steps.size() == 2, "Checked-in Batman graphics apply command step count mismatch.");
         Expect(checked_in_apply_draft_command->Steps[0].Kind == "apply-batman-graphics-config", "Checked-in Batman graphics apply command first step mismatch.");
@@ -572,7 +588,8 @@ void RunPackRepositoryTests()
 
         bool found_get_fullscreen_binding = false;
         bool found_set_vsync_binding = false;
-        bool found_apply_binding = false;
+        bool found_set_detail_level_binding = false;
+        bool found_set_bloom_binding = false;
         for (const helen::ExternalBindingDefinition& binding : loaded_batman_pack->Build.ExternalBindings)
         {
             if (binding.ExternalName == "Helen_GetInt" &&
@@ -589,17 +606,27 @@ void RunPackRepositoryTests()
                 found_set_vsync_binding = true;
             }
 
-            if (binding.ExternalName == "Helen_RunCommand" &&
-                binding.Mode == "run-command" &&
-                binding.CommandId == "applyBatmanGraphicsDraft")
+            if (binding.ExternalName == "Helen_SetInt" &&
+                binding.Mode == "set-int" &&
+                binding.ConfigKey == "detailLevel" &&
+                binding.CommandId == "syncBatmanGraphicsPreset")
             {
-                found_apply_binding = true;
+                found_set_detail_level_binding = true;
+            }
+
+            if (binding.ExternalName == "Helen_SetInt" &&
+                binding.Mode == "set-int" &&
+                binding.ConfigKey == "bloom" &&
+                binding.CommandId == "syncBatmanGraphicsDetailLevel")
+            {
+                found_set_bloom_binding = true;
             }
         }
 
         Expect(found_get_fullscreen_binding, "Checked-in Batman graphics pack is missing the fullscreen Helen_GetInt binding.");
         Expect(found_set_vsync_binding, "Checked-in Batman graphics pack is missing the vsync Helen_SetInt binding.");
-        Expect(found_apply_binding, "Checked-in Batman graphics pack is missing the applyBatmanGraphicsDraft Helen_RunCommand binding.");
+        Expect(found_set_detail_level_binding, "Checked-in Batman graphics pack is missing the detail-level preset-sync set binding.");
+        Expect(found_set_bloom_binding, "Checked-in Batman graphics pack is missing the bloom detail-level-sync set binding.");
 
         const helen::VirtualFileDefinition* checked_in_graphics_frontend_file = nullptr;
         for (const helen::VirtualFileDefinition& virtual_file : loaded_batman_pack->Build.VirtualFiles)
@@ -617,8 +644,8 @@ void RunPackRepositoryTests()
         Expect(checked_in_graphics_frontend_file->Source.Path == std::filesystem::path("assets/deltas/Frontend-graphics-options.hgdelta"), "Checked-in Batman graphics frontend delta path mismatch.");
         Expect(checked_in_graphics_frontend_file->Source.Base.FileSize == 2988548, "Checked-in Batman graphics frontend package base size mismatch.");
         Expect(checked_in_graphics_frontend_file->Source.Base.Sha256 == "271916b888f83374122af0fccc5c685804f4c8286a92a772cd71e4f48a00f2cc", "Checked-in Batman graphics frontend package base hash mismatch.");
-        Expect(checked_in_graphics_frontend_file->Source.Target.FileSize == 4275706, "Checked-in Batman graphics frontend package target size mismatch.");
-        Expect(checked_in_graphics_frontend_file->Source.Target.Sha256 == "cafcd4c4608bc19cff28e891f89ed5b2003777cdf8b5b395b5740c7e47849c9e", "Checked-in Batman graphics frontend package target hash mismatch.");
+        Expect(checked_in_graphics_frontend_file->Source.Target.FileSize == 4277050, "Checked-in Batman graphics frontend package target size mismatch.");
+        Expect(checked_in_graphics_frontend_file->Source.Target.Sha256 == "7307b098fd176c2b63ac4038c9ae567b11dcff61a52c34a28e5468ad55c04642", "Checked-in Batman graphics frontend package target hash mismatch.");
         Expect(checked_in_graphics_frontend_file->Source.ChunkSize == 65536, "Checked-in Batman graphics frontend chunk size mismatch.");
     }
     catch (...)

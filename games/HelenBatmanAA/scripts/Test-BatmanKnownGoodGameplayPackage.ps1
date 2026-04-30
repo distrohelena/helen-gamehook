@@ -74,11 +74,6 @@ $PackBuildRoot = Join-Path $PackRoot 'builds\steam-goty-1.0'
 $PackJsonPath = Join-Path $PackRoot 'pack.json'
 $FilesJsonPath = Join-Path $PackBuildRoot 'files.json'
 $GameplayDeltaPath = Join-Path $PackBuildRoot 'assets\deltas\BmGame-subtitle-signal.hgdelta'
-$FrontendDeltaPath = Join-Path $PackBuildRoot 'assets\deltas\Frontend-main-menu-subtitle-size.hgdelta'
-$TrustedGameplayBasePath = Join-Path $BuilderRoot 'extracted\bmgame-unpacked\BmGame.u'
-$GeneratedGameplayPackagePath = Join-Path $BuilderRoot 'generated\pause-runtime-scale\BmGame-subtitle-signal.u'
-$TrustedFrontendBasePath = Join-Path $BuilderRoot 'extracted\frontend\frontend-umap-unpacked\Frontend.umap'
-$GeneratedFrontendPackagePath = Join-Path $BuilderRoot 'generated\main-menu-audio\Frontend-main-menu-subtitle-size.umap'
 $ExpectedVirtualFiles = @(
     @{
         Id = 'bmgameGameplayPackage'
@@ -86,21 +81,12 @@ $ExpectedVirtualFiles = @(
         Mode = 'delta-on-read'
         Kind = 'delta-file'
         DeltaPath = 'assets/deltas/BmGame-subtitle-signal.hgdelta'
-        BasePath = $TrustedGameplayBasePath
-        TargetPath = $GeneratedGameplayPackagePath
         DeltaFilePath = $GameplayDeltaPath
-        ChunkSize = 65536
-        ChunkTableOffset = 116
-    },
-    @{
-        Id = 'frontendMapPackage'
-        Path = 'BmGame/CookedPC/Maps/Frontend/Frontend.umap'
-        Mode = 'delta-on-read'
-        Kind = 'delta-file'
-        DeltaPath = 'assets/deltas/Frontend-main-menu-subtitle-size.hgdelta'
-        BasePath = $TrustedFrontendBasePath
-        TargetPath = $GeneratedFrontendPackagePath
-        DeltaFilePath = $FrontendDeltaPath
+        DeltaFileHash = '74b4d535883f4b0dccfd93c87df476f2e11516b708dd5130f74bf59c595c2107'
+        BaseSize = 59857525
+        BaseSha256 = '4306148e7627ec2c0de4144fd6ab45521b3b7e090d1028a0b685cadafafb89e6'
+        TargetSize = 106217949
+        TargetSha256 = '3e83e7001b9bc806c20fdff77865f0af1aedad6079032d7b43952a93db8db7bd'
         ChunkSize = 65536
         ChunkTableOffset = 116
     }
@@ -115,7 +101,7 @@ if (-not (Test-Path -LiteralPath $PackJsonPath)) {
 }
 
 foreach ($ExpectedVirtualFile in $ExpectedVirtualFiles) {
-    foreach ($RequiredPath in @($ExpectedVirtualFile.BasePath, $ExpectedVirtualFile.TargetPath, $ExpectedVirtualFile.DeltaFilePath)) {
+    foreach ($RequiredPath in @($ExpectedVirtualFile.DeltaFilePath)) {
         if (-not (Test-Path -LiteralPath $RequiredPath)) {
             throw "Batman pack verification input not found: $RequiredPath"
         }
@@ -151,10 +137,10 @@ foreach ($ExpectedVirtualFile in $ExpectedVirtualFiles) {
         throw "Batman gameplay package delta path mismatch for $($ExpectedVirtualFile.Id). Expected $($ExpectedVirtualFile.DeltaPath) but found $($VirtualFile.source.path)."
     }
 
-    $ExpectedBaseSize = (Get-Item -LiteralPath $ExpectedVirtualFile.BasePath).Length
-    $ExpectedBaseSha256 = (Get-FileHash -LiteralPath $ExpectedVirtualFile.BasePath -Algorithm SHA256).Hash.ToLowerInvariant()
-    $ExpectedTargetSize = (Get-Item -LiteralPath $ExpectedVirtualFile.TargetPath).Length
-    $ExpectedTargetSha256 = (Get-FileHash -LiteralPath $ExpectedVirtualFile.TargetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $ExpectedBaseSize = $ExpectedVirtualFile.BaseSize
+    $ExpectedBaseSha256 = $ExpectedVirtualFile.BaseSha256
+    $ExpectedTargetSize = $ExpectedVirtualFile.TargetSize
+    $ExpectedTargetSha256 = $ExpectedVirtualFile.TargetSha256
     $ExpectedChunkCount = [uint32][Math]::Ceiling($ExpectedTargetSize / [double]$ExpectedVirtualFile.ChunkSize)
     $ExpectedPayloadOffset = [uint64]($ExpectedVirtualFile.ChunkTableOffset + ($ExpectedChunkCount * 20))
 
@@ -176,6 +162,11 @@ foreach ($ExpectedVirtualFile in $ExpectedVirtualFiles) {
 
     if ([int64]$VirtualFile.source.chunkSize -ne $ExpectedVirtualFile.ChunkSize) {
         throw "Batman gameplay package chunk size mismatch for $($ExpectedVirtualFile.Id). Expected $($ExpectedVirtualFile.ChunkSize) but found $($VirtualFile.source.chunkSize)."
+    }
+
+    $ActualDeltaHash = (Get-FileHash -LiteralPath $ExpectedVirtualFile.DeltaFilePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if (-not [string]::Equals($ActualDeltaHash, $ExpectedVirtualFile.DeltaFileHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Batman gameplay package delta file hash mismatch for $($ExpectedVirtualFile.Id). Expected $($ExpectedVirtualFile.DeltaFileHash) but found $ActualDeltaHash."
     }
 
     $DeltaHeader = Read-HgdeltaHeader -Path $ExpectedVirtualFile.DeltaFilePath
@@ -277,6 +268,35 @@ $ExpectedIniKeys = @(
     }
 )
 
+$CommandsJsonPath = Join-Path $PackBuildRoot 'commands.json'
+$BindingsJsonPath = Join-Path $PackBuildRoot 'bindings.json'
+$HooksJsonPath = Join-Path $PackBuildRoot 'hooks.json'
+$ExpectedSubtitleScaleMappings = @(
+    @{ match = 0; value = 1.0 },
+    @{ match = 1; value = 1.5 },
+    @{ match = 2; value = 2.0 }
+)
+$ExpectedBindings = @(
+    @{
+        ExternalName = 'Helen_GetInt'
+        Mode = 'get-int'
+        ConfigKey = 'ui.subtitleSize'
+        Command = $null
+    },
+    @{
+        ExternalName = 'Helen_SetInt'
+        Mode = 'set-int'
+        ConfigKey = 'ui.subtitleSize'
+        Command = $null
+    },
+    @{
+        ExternalName = 'Helen_RunCommand'
+        Mode = 'run-command'
+        ConfigKey = $null
+        Command = 'applySubtitleSize'
+    }
+)
+
 if (@($PackManifest.iniFiles).Count -ne $ExpectedIniFiles.Count) {
     throw "Batman subtitle pack expected exactly $($ExpectedIniFiles.Count) iniFiles entry, found $(@($PackManifest.iniFiles).Count)."
 }
@@ -324,6 +344,91 @@ for ($Index = 0; $Index -lt $ExpectedIniKeys[0].valueMap.Count; $Index++) {
         $ActualIniValueMap[$Index].encodedValue -ne $ExpectedIniKeys[0].valueMap[$Index].encodedValue) {
         throw "Batman subtitle pack iniKeys value map mismatch at index $Index."
     }
+}
+
+if (-not (Test-Path -LiteralPath $CommandsJsonPath)) {
+    throw "Batman gameplay command manifest not found: $CommandsJsonPath"
+}
+
+if (-not (Test-Path -LiteralPath $BindingsJsonPath)) {
+    throw "Batman gameplay bindings manifest not found: $BindingsJsonPath"
+}
+
+if (-not (Test-Path -LiteralPath $HooksJsonPath)) {
+    throw "Batman gameplay hooks manifest not found: $HooksJsonPath"
+}
+
+$CommandsManifest = Get-Content -LiteralPath $CommandsJsonPath -Raw | ConvertFrom-Json
+$BindingsManifest = Get-Content -LiteralPath $BindingsJsonPath -Raw | ConvertFrom-Json
+$HooksManifest = Get-Content -LiteralPath $HooksJsonPath -Raw | ConvertFrom-Json
+$ApplySubtitleCommand = @($CommandsManifest.commands | Where-Object { $_.id -eq 'applySubtitleSize' })[0]
+if ($null -eq $ApplySubtitleCommand) {
+    throw "Batman gameplay command manifest did not declare applySubtitleSize."
+}
+
+$MapIntToDoubleStep = @($ApplySubtitleCommand.steps | Where-Object { $_.kind -eq 'map-int-to-double' })[0]
+if ($null -eq $MapIntToDoubleStep) {
+    throw "Batman gameplay applySubtitleSize command did not declare a map-int-to-double step."
+}
+
+$ActualMappings = @($MapIntToDoubleStep.mappings)
+if ($ActualMappings.Count -ne $ExpectedSubtitleScaleMappings.Count) {
+    throw "Batman gameplay subtitle scale mapping count mismatch. Expected $($ExpectedSubtitleScaleMappings.Count) but found $($ActualMappings.Count)."
+}
+
+for ($Index = 0; $Index -lt $ExpectedSubtitleScaleMappings.Count; $Index++) {
+    if ($ActualMappings[$Index].match -ne $ExpectedSubtitleScaleMappings[$Index].match) {
+        throw "Batman gameplay subtitle scale mapping match mismatch at index $Index."
+    }
+
+    if ([double]$ActualMappings[$Index].value -ne [double]$ExpectedSubtitleScaleMappings[$Index].value) {
+        throw "Batman gameplay subtitle scale mapping value mismatch at index $Index."
+    }
+}
+
+$ActualBindings = @($BindingsManifest.bindings)
+if ($ActualBindings.Count -ne $ExpectedBindings.Count) {
+    throw "Batman gameplay bindings count mismatch. Expected $($ExpectedBindings.Count) but found $($ActualBindings.Count)."
+}
+
+foreach ($ExpectedBinding in $ExpectedBindings) {
+    $MatchingBinding = @(
+        $ActualBindings |
+        Where-Object {
+            $_.externalName -eq $ExpectedBinding.ExternalName -and
+            $_.mode -eq $ExpectedBinding.Mode -and
+            (
+                $ExpectedBinding.ConfigKey -eq $null -or
+                $_.configKey -eq $ExpectedBinding.ConfigKey
+            ) -and
+            (
+                $ExpectedBinding.Command -eq $null -or
+                $_.command -eq $ExpectedBinding.Command
+            )
+        }
+    )
+
+    if ($MatchingBinding.Count -ne 1) {
+        throw "Batman gameplay bindings manifest is missing the expected $($ExpectedBinding.ExternalName) / $($ExpectedBinding.Mode) subtitle binding."
+    }
+}
+
+$SubtitleObserver = @($HooksManifest.stateObservers | Where-Object { $_.id -eq 'subtitleUiStateObserver' })[0]
+if ($null -ne $SubtitleObserver) {
+    throw 'Batman gameplay hooks manifest must not depend on subtitleUiStateObserver for live subtitle changes.'
+}
+
+if (@($HooksManifest.stateObservers).Count -ne 0) {
+    throw 'Batman gameplay subtitle pack should not ship stateObservers after the direct signal-hook migration.'
+}
+
+$SubtitleScaleHook = @($HooksManifest.hooks | Where-Object { $_.id -eq 'subtitleTextScaleHook' })[0]
+if ($null -ne $SubtitleScaleHook) {
+    throw 'Batman gameplay hooks manifest must not ship subtitleTextScaleHook after the direct signal-hook migration.'
+}
+
+if (@($HooksManifest.hooks).Count -ne 0) {
+    throw 'Batman gameplay subtitle pack should not ship runtime inline hooks after the direct signal-hook migration.'
 }
 
 Write-Output 'PASS'

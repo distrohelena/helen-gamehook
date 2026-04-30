@@ -70,6 +70,7 @@ function Assert-GraphicsExitPromptScripts {
 
     foreach ($RequiredScreenToken in @(
         'attachMovie("YesNoPrompt","GraphicsExitPrompt",601)',
+        'flash.external.ExternalInterface.call("Helen_RunCommand","loadBatmanGraphicsDraftIntoConfig");',
         'flash.external.ExternalInterface.call("Helen_Log"',
         '_root.ExitYNOpen = true;',
         '_root.ExitYNOpen = false;',
@@ -79,7 +80,11 @@ function Assert-GraphicsExitPromptScripts {
         'this.ExitPrompt.Response = function(bYes)',
         'this.Screen.ReturnFromScreen();',
         'this.Screen.BlockInput(false);',
-        'this.Screen.ReUpdate();'
+        'this.Screen.ReUpdate();',
+        'this.LogExitState("HandleRowAction row=" + rowName + " promptOpen=" + this.IsExitPromptOpen() + " pending=" + this.IsExitTransitionPending());',
+        'this.LogExitState("HandleRowAction apply row");',
+        'this.LogDraftSnapshot("ApplyChanges before-native");',
+        'this.LogDraftSnapshot("ApplyChanges after-reload");'
     )) {
         if ($GraphicsScreenScript.IndexOf($RequiredScreenToken, [System.StringComparison]::Ordinal) -lt 0) {
             throw "$Context graphics screen is missing the stock exit prompt token: $RequiredScreenToken"
@@ -105,6 +110,19 @@ function Assert-GraphicsExitPromptScripts {
         throw "$Context graphics screen must unblock input before returning from the graphics screen."
     }
 
+    $LoadDraftCommandToken = 'flash.external.ExternalInterface.call("Helen_RunCommand","loadBatmanGraphicsDraftIntoConfig");'
+    $FirstReadDraftIntTokenPrefix = 'this.DraftState.fullscreen = this.ReadDraftInt("fullscreen",'
+    $LoadDraftCommandIndex = $GraphicsScreenScript.IndexOf($LoadDraftCommandToken, [System.StringComparison]::Ordinal)
+    $FirstReadDraftIntIndex = $GraphicsScreenScript.IndexOf($FirstReadDraftIntTokenPrefix, [System.StringComparison]::Ordinal)
+
+    if ($LoadDraftCommandIndex -lt 0 -or $FirstReadDraftIntIndex -lt 0) {
+        throw "$Context graphics screen must contain both the INI reload command and the first draft read token."
+    }
+
+    if ($LoadDraftCommandIndex -gt $FirstReadDraftIntIndex) {
+        throw "$Context graphics screen must reload `BmEngine.ini` before reading draft values into the menu."
+    }
+
     foreach ($ForbiddenScreenToken in @(
         'this.ExitPrompt.onUnload = function()',
         'OnExitPromptClosed',
@@ -126,6 +144,70 @@ function Assert-GraphicsExitPromptScripts {
     )) {
         if ($GraphicsScreenScript.IndexOf($RequiredGuardToken, [System.StringComparison]::Ordinal) -lt 0) {
             throw "$Context graphics screen must guard against reopening the stock prompt while its close transition is still pending: $RequiredGuardToken"
+        }
+    }
+}
+
+function Get-ActionScriptFunctionText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptText,
+        [Parameter(Mandatory = $true)]
+        [string]$FunctionName
+    )
+
+    $FunctionToken = "function $FunctionName("
+    $FunctionIndex = $ScriptText.IndexOf($FunctionToken, [System.StringComparison]::Ordinal)
+    if ($FunctionIndex -lt 0) {
+        throw "ActionScript function '$FunctionName' was not found."
+    }
+
+    $BraceStartIndex = $ScriptText.IndexOf('{', $FunctionIndex)
+    if ($BraceStartIndex -lt 0) {
+        throw "ActionScript function '$FunctionName' is missing an opening brace."
+    }
+
+    $Depth = 1
+    $Cursor = $BraceStartIndex + 1
+    while ($Cursor -lt $ScriptText.Length -and $Depth -gt 0) {
+        $CurrentCharacter = $ScriptText[$Cursor]
+        if ($CurrentCharacter -eq '{') {
+            $Depth++
+        } elseif ($CurrentCharacter -eq '}') {
+            $Depth--
+        }
+
+        $Cursor++
+    }
+
+    if ($Depth -ne 0) {
+        throw "ActionScript function '$FunctionName' is missing a closing brace."
+    }
+
+    return $ScriptText.Substring($FunctionIndex, $Cursor - $FunctionIndex)
+}
+
+function Assert-GraphicsIniBootstrapScript {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Context,
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptPath,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$ExpectedFallbackValues
+    )
+
+    if (-not (Test-Path -LiteralPath $ScriptPath)) {
+        throw "$Context bootstrap script was not found: $ScriptPath"
+    }
+
+    $GraphicsScreenScript = Get-Content -LiteralPath $ScriptPath -Raw
+
+    foreach ($ExpectedKey in $ExpectedFallbackValues.Keys) {
+        $ExpectedValue = $ExpectedFallbackValues[$ExpectedKey]
+        $ExpectedToken = "this.DraftState.$ExpectedKey = this.ReadDraftInt(""$ExpectedKey"",$ExpectedValue);"
+        if ($GraphicsScreenScript.IndexOf($ExpectedToken, [System.StringComparison]::Ordinal) -lt 0) {
+            throw "$Context bootstrap script must inject '$ExpectedKey=$ExpectedValue' as the runtime fallback token: $ExpectedToken"
         }
     }
 }
@@ -165,6 +247,7 @@ $DecompressedGeneratedFrontendPackagePath = Join-Path $GraphicsVerificationRoot 
 $ExtractedGfxPath = Join-Path $GraphicsVerificationRoot 'MainV2-graphics-options.gfx'
 $ExportRoot = Join-Path $GraphicsVerificationRoot 'MainV2-export'
 $ExportScriptsRoot = Join-Path $ExportRoot 'scripts'
+$SubtitleSizeModBuilderProjectPath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj'
 $ToolProjectPath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\BmGameGfxPatcher\BmGameGfxPatcher.csproj'
 $FfdecPath = Join-Path $BuilderRoot 'extracted\ffdec\ffdec-cli.exe'
 $BuildMatchScriptPath = Join-Path $PSScriptRoot 'Get-BatmanSteamBuildMatch.ps1'
@@ -220,17 +303,6 @@ $ExpectedSetIntConfigKeys = @(
     'stereo'
 )
 
-$ExpectedSetIntFollowUpCommands = @{
-    detailLevel = 'syncBatmanGraphicsPreset'
-    bloom = 'syncBatmanGraphicsDetailLevel'
-    dynamicShadows = 'syncBatmanGraphicsDetailLevel'
-    motionBlur = 'syncBatmanGraphicsDetailLevel'
-    distortion = 'syncBatmanGraphicsDetailLevel'
-    fogVolumes = 'syncBatmanGraphicsDetailLevel'
-    sphericalHarmonicLighting = 'syncBatmanGraphicsDetailLevel'
-    ambientOcclusion = 'syncBatmanGraphicsDetailLevel'
-}
-
 $ExpectedFixedRowClipSuffixes = @(
     'frame_1\PlaceObject2_290_List_Template_141\CLIPACTIONRECORD onClipEvent(load).as',
     'frame_1\PlaceObject2_290_List_Template_133\CLIPACTIONRECORD onClipEvent(load).as',
@@ -252,17 +324,21 @@ $ExpectedFixedRowClipSuffixes = @(
 $RequiredInteractiveScreenTokens = @(
     'this.RowOrder = new Array("Fullscreen","Resolution","VSync","MSAA","DetailLevel","Bloom","DynamicShadows","MotionBlur","Distortion","FogVolumes","SphericalHarmonicLighting","AmbientOcclusion","PhysX","Stereo3D","ApplyChanges");',
     'flash.external.ExternalInterface.call("Helen_GetInt",key)',
-    'flash.external.ExternalInterface.call("Helen_SetInt"',
-    'flash.external.ExternalInterface.call("Helen_RunCommand","applyBatmanGraphicsDraft")',
+    'this.LogDraftSnapshot("ApplyChanges before-native");',
+    'this.LogDraftSnapshot("ApplyChanges after-reload");',
     'function ApplyDetailPresetToDraft(detailLevel)',
     'function DeriveDetailLevelFromDraft()',
-    'var _loc3_ = flash.external.ExternalInterface.call("Helen_SetInt",_loc2_,nextState);',
     'HasUnsavedChanges',
     'return new Array("Windowed","Fullscreen");',
     'this.AddItem(GraphicsRow1,14,1,-1,-1);',
     'this.AddItem(GraphicsRow15,13,0,-1,-1);',
     '_root.TriggerEvent("Options");',
     'this.Title.text = "Graphics Options";'
+)
+
+$ForbiddenInteractiveScreenTokens = @(
+    'flash.external.ExternalInterface.call("Helen_SetInt"',
+    'flash.external.ExternalInterface.call("Helen_ApplyBatmanGraphicsDraft")'
 )
 
 $ForbiddenScrollWindowTokens = @(
@@ -285,6 +361,8 @@ $ForbiddenScrollWindowTokens = @(
 )
 
 $RequiredRowClipTokens = @(
+    '_parent.GraphicsController.LogExitState("Row.RunAction row=" + this.RowName + " mouse=" + bMouse + " enabled=" + this.IsEnabled() + " interactive=" + this.IsInteractiveRow() + " apply=" + this.IsApplyRow());',
+    '_parent.GraphicsController.LogExitState("Row.RunAction dispatch-apply row=" + this.RowName);',
     '_parent.GraphicsController.HandleRowAction(this.RowName);',
     '_parent.GraphicsController.IncrementRow(this.RowName);',
     '_parent.GraphicsController.DecrementRow(this.RowName);',
@@ -345,11 +423,76 @@ if (-not (Test-Path -LiteralPath $PrototypeExportScriptsRoot)) {
     throw "Batman graphics-options prototype script export root not found: $PrototypeExportScriptsRoot"
 }
 
-foreach ($RequiredPath in @($ToolProjectPath, $FfdecPath)) {
+foreach ($RequiredPath in @($SubtitleSizeModBuilderProjectPath, $ToolProjectPath, $FfdecPath)) {
     if (-not (Test-Path -LiteralPath $RequiredPath)) {
         throw "Batman graphics-options verification dependency not found: $RequiredPath"
     }
 }
+
+$FixtureVerificationRoot = Join-Path $GraphicsVerificationRoot 'ini-bootstrap-fixture'
+$FixtureBuilderOutputRoot = Join-Path $FixtureVerificationRoot 'builder-output'
+$FixtureBuilderScriptsRoot = Join-Path $FixtureBuilderOutputRoot '_build\frontend-scripts'
+$FixtureGraphicsScreenScriptPath = Join-Path $FixtureBuilderScriptsRoot 'DefineSprite_600_ScreenOptionsGraphics\frame_1\DoAction.as'
+$FixtureIniPath = Join-Path $FixtureVerificationRoot 'BmEngine.ini'
+$FixtureIniContents = @'
+[SystemSettings]
+Fullscreen=True
+ResX=1280
+ResY=720
+UseVsync=True
+MaxMultisamples=4
+Bloom=True
+DynamicShadows=False
+MotionBlur=True
+Distortion=False
+FogVolumes=True
+DisableSphericalHarmonicLights=False
+AmbientOcclusion=True
+Stereo=False
+
+[Engine.Engine]
+PhysXLevel=2
+'@
+
+$ExpectedBootstrapFallbackValues = @{
+    fullscreen = 1
+    resolutionWidth = 1280
+    resolutionHeight = 720
+    vsync = 1
+    msaa = 2
+    detailLevel = 4
+    bloom = 1
+    dynamicShadows = 0
+    motionBlur = 1
+    distortion = 0
+    fogVolumes = 1
+    sphericalHarmonicLighting = 1
+    ambientOcclusion = 1
+    physx = 2
+    stereo = 0
+}
+
+if (Test-Path -LiteralPath $FixtureVerificationRoot) {
+    Remove-Item -LiteralPath $FixtureVerificationRoot -Recurse -Force
+}
+
+New-Item -ItemType Directory -Force -Path $FixtureVerificationRoot | Out-Null
+[System.IO.File]::WriteAllText($FixtureIniPath, $FixtureIniContents, (New-Object System.Text.UTF8Encoding($false)))
+
+& dotnet run --project $SubtitleSizeModBuilderProjectPath -c Debug -- `
+    build-main-menu-graphics `
+    --root $BuilderRoot `
+    --output-dir $FixtureBuilderOutputRoot `
+    --ffdec $FfdecPath `
+    --ini $FixtureIniPath
+if ($LASTEXITCODE -ne 0) {
+    throw 'build-main-menu-graphics failed for the fixture INI bootstrap contract test.'
+}
+
+Assert-GraphicsIniBootstrapScript `
+    -Context 'Batman graphics-options fixture INI bootstrap' `
+    -ScriptPath $FixtureGraphicsScreenScriptPath `
+    -ExpectedFallbackValues $ExpectedBootstrapFallbackValues
 
 $PackManifest = Get-Content -LiteralPath $PackJsonPath -Raw | ConvertFrom-Json
 if ($PackManifest.id -ne 'batman-aa-graphics-options') {
@@ -407,8 +550,14 @@ if ($null -ne $BindingsManifest.bindings) {
     $ExternalBindings = @($BindingsManifest.externalBindings)
 }
 
-if ($ExternalBindings.Count -ne ($ExpectedGetIntConfigKeys.Count + $ExpectedSetIntConfigKeys.Count + 1)) {
-    throw "Batman graphics-options binding count drifted. Expected $(($ExpectedGetIntConfigKeys.Count + $ExpectedSetIntConfigKeys.Count + 1)) but found $($ExternalBindings.Count)."
+$ExpectedRunCommandBindings = @(
+    [ordered]@{ id = 'graphicsRunLoadDraft'; externalName = 'Helen_RunCommand'; mode = 'run-command'; command = 'loadBatmanGraphicsDraftIntoConfig' },
+    [ordered]@{ id = 'graphicsRunApplyDraft'; externalName = 'Helen_RunCommand'; mode = 'run-command'; command = 'applyBatmanGraphicsDraft' },
+    [ordered]@{ id = 'graphicsFeRunCommand'; externalName = 'FE_RunCommand'; mode = 'run-command'; command = 'graphicsApplyCarrier' }
+)
+
+if ($ExternalBindings.Count -ne ($ExpectedGetIntConfigKeys.Count + $ExpectedRunCommandBindings.Count)) {
+    throw "Batman graphics-options binding count drifted. Expected $(($ExpectedGetIntConfigKeys.Count + $ExpectedRunCommandBindings.Count)) but found $($ExternalBindings.Count)."
 }
 
 foreach ($ExpectedConfigKey in $ExpectedGetIntConfigKeys) {
@@ -429,43 +578,35 @@ foreach ($ExpectedConfigKey in $ExpectedGetIntConfigKeys) {
 foreach ($ExpectedConfigKey in $ExpectedSetIntConfigKeys) {
     $MatchingSetBindings = @(
         $ExternalBindings | Where-Object {
-            $_.id -eq "graphicsSet$($ExpectedConfigKey.Substring(0,1).ToUpperInvariant())$($ExpectedConfigKey.Substring(1))" -and
             $_.externalName -eq 'Helen_SetInt' -and
-            $_.mode -eq 'set-int' -and
             $_.configKey -eq $ExpectedConfigKey
         }
     )
 
-    if ($MatchingSetBindings.Count -ne 1) {
-        throw "Batman graphics-options bindings are missing expected Helen_SetInt config key '$ExpectedConfigKey'."
-    }
-
-    $ExpectedFollowUpCommand = $ExpectedSetIntFollowUpCommands[$ExpectedConfigKey]
-    if ($null -ne $ExpectedFollowUpCommand) {
-        if ($MatchingSetBindings[0].command -ne $ExpectedFollowUpCommand) {
-            throw "Batman graphics-options set binding '$ExpectedConfigKey' should run '$ExpectedFollowUpCommand'."
-        }
-    } elseif ($null -ne $MatchingSetBindings[0].command) {
-        throw "Batman graphics-options set binding '$ExpectedConfigKey' should not run a follow-up command."
+    if ($MatchingSetBindings.Count -ne 0) {
+        throw "Batman graphics-options bindings must not expose Helen_SetInt for config key '$ExpectedConfigKey'."
     }
 }
 
-$ApplyDraftBindings = @(
-    $ExternalBindings | Where-Object {
-        $_.id -eq 'graphicsApplyDraft' -and
-        $_.externalName -eq 'Helen_RunCommand' -and
-        $_.mode -eq 'run-command' -and
-        $_.command -eq 'applyBatmanGraphicsDraft'
+foreach ($ExpectedRunCommandBinding in $ExpectedRunCommandBindings) {
+    $MatchingRunCommandBindings = @(
+        $ExternalBindings | Where-Object {
+            $_.id -eq $ExpectedRunCommandBinding.id -and
+            $_.externalName -eq $ExpectedRunCommandBinding.externalName -and
+            $_.mode -eq $ExpectedRunCommandBinding.mode -and
+            $_.command -eq $ExpectedRunCommandBinding.command
+        }
+    )
+
+    if ($MatchingRunCommandBindings.Count -ne 1) {
+        throw "Batman graphics-options bindings are missing expected Helen_RunCommand command '$($ExpectedRunCommandBinding.command)'."
     }
-)
-if ($ApplyDraftBindings.Count -ne 1) {
-    throw 'Batman graphics-options bindings are missing the applyBatmanGraphicsDraft Helen_RunCommand binding.'
 }
 
 $CommandsManifest = Get-Content -LiteralPath $CommandsJsonPath -Raw | ConvertFrom-Json
 $Commands = @($CommandsManifest.commands)
-if ($Commands.Count -ne 4) {
-    throw "Batman graphics-options command count drifted. Expected 4 but found $($Commands.Count)."
+if ($Commands.Count -ne 2) {
+    throw "Batman graphics-options command count drifted. Expected 2 but found $($Commands.Count)."
 }
 
 $LoadDraftCommand = @($Commands | Where-Object { $_.id -eq 'loadBatmanGraphicsDraftIntoConfig' })[0]
@@ -481,30 +622,15 @@ if (@($LoadDraftCommand.steps).Count -ne 1 -or @($LoadDraftCommand.steps)[0].kin
     throw 'Batman graphics-options load command steps drifted.'
 }
 
-$SyncPresetCommand = @($Commands | Where-Object { $_.id -eq 'syncBatmanGraphicsPreset' })[0]
-if ($null -eq $SyncPresetCommand) {
-    throw 'Batman graphics-options commands are missing syncBatmanGraphicsPreset.'
-}
-
-if ($SyncPresetCommand.name -ne 'Sync Batman Graphics Preset') {
-    throw 'Batman graphics-options preset-sync command name drifted.'
-}
-
-if (@($SyncPresetCommand.steps).Count -ne 1 -or @($SyncPresetCommand.steps)[0].kind -ne 'sync-batman-graphics-detail-preset') {
-    throw 'Batman graphics-options preset-sync command steps drifted.'
-}
-
-$SyncDetailLevelCommand = @($Commands | Where-Object { $_.id -eq 'syncBatmanGraphicsDetailLevel' })[0]
-if ($null -eq $SyncDetailLevelCommand) {
-    throw 'Batman graphics-options commands are missing syncBatmanGraphicsDetailLevel.'
-}
-
-if ($SyncDetailLevelCommand.name -ne 'Sync Batman Graphics Detail Level') {
-    throw 'Batman graphics-options detail-level sync command name drifted.'
-}
-
-if (@($SyncDetailLevelCommand.steps).Count -ne 1 -or @($SyncDetailLevelCommand.steps)[0].kind -ne 'sync-batman-graphics-detail-level') {
-    throw 'Batman graphics-options detail-level sync command steps drifted.'
+foreach ($ForbiddenCommandId in @(
+    'syncBatmanGraphicsPreset',
+    'syncBatmanGraphicsDetailLevel',
+    'graphicsApplyCarrier'
+)) {
+    $MatchingForbiddenCommands = @($Commands | Where-Object { $_.id -eq $ForbiddenCommandId })
+    if ($MatchingForbiddenCommands.Count -ne 0) {
+        throw "Batman graphics-options commands must not include deprecated or synthetic command '$ForbiddenCommandId'."
+    }
 }
 
 $ApplyDraftCommand = @($Commands | Where-Object { $_.id -eq 'applyBatmanGraphicsDraft' })[0]
@@ -549,6 +675,45 @@ $GraphicsScreenScript = Get-Content -LiteralPath $GraphicsScreenScriptPath -Raw
 foreach ($RequiredInteractiveScreenToken in $RequiredInteractiveScreenTokens) {
     if ($GraphicsScreenScript.IndexOf($RequiredInteractiveScreenToken, [System.StringComparison]::Ordinal) -lt 0) {
         throw "Batman graphics-options prototype screen script is missing required interactive token: $RequiredInteractiveScreenToken"
+    }
+}
+
+foreach ($ForbiddenInteractiveScreenToken in $ForbiddenInteractiveScreenTokens) {
+    if ($GraphicsScreenScript.IndexOf($ForbiddenInteractiveScreenToken, [System.StringComparison]::Ordinal) -ge 0) {
+        throw "Batman graphics-options prototype screen script still contains forbidden interactive token: $ForbiddenInteractiveScreenToken"
+    }
+}
+
+$SetDraftRowStateFunction = Get-ActionScriptFunctionText -ScriptText $GraphicsScreenScript -FunctionName 'SetDraftRowState'
+if ($SetDraftRowStateFunction.IndexOf('Helen_SetInt', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Batman graphics-options prototype SetDraftRowState must not call Helen_SetInt.'
+}
+
+if ($SetDraftRowStateFunction.IndexOf('this.LoadDraftValues();', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Batman graphics-options prototype SetDraftRowState must not reload draft values from disk.'
+}
+
+$ApplyChangesFunction = Get-ActionScriptFunctionText -ScriptText $GraphicsScreenScript -FunctionName 'ApplyChanges'
+foreach ($RequiredApplyChangesToken in @(
+    'flash.external.ExternalInterface.call("FE_RunCommand",',
+    'gfx_apply:',
+    'this.LoadDraftValues();',
+    'this.LogDraftSnapshot("ApplyChanges after-reload");',
+    'this.CaptureInitialState();',
+    'this.LogDraftSnapshot("ApplyChanges after-capture");',
+    'this.RefreshFocusedRow();'
+)) {
+    if ($ApplyChangesFunction.IndexOf($RequiredApplyChangesToken, [System.StringComparison]::Ordinal) -lt 0) {
+        throw "Batman graphics-options prototype ApplyChanges is missing required FE-carrier token: $RequiredApplyChangesToken"
+    }
+}
+
+foreach ($ForbiddenApplyChangesToken in @(
+    'Helen_ApplyBatmanGraphicsDraft',
+    'ReturnFromScreen()'
+)) {
+    if ($ApplyChangesFunction.IndexOf($ForbiddenApplyChangesToken, [System.StringComparison]::Ordinal) -ge 0) {
+        throw "Batman graphics-options prototype ApplyChanges still contains forbidden token: $ForbiddenApplyChangesToken"
     }
 }
 

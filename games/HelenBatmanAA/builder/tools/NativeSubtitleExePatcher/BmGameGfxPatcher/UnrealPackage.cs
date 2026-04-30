@@ -2,6 +2,12 @@ using System.Text;
 
 namespace BmGameGfxPatcher;
 
+/// <summary>
+/// Loads one Unreal package into its physical and logical byte images, then exposes resolved
+/// name, import, export, and serialized object views for package inspection commands.
+/// The logical image may be reconstructed from retail chunk compression, so every exported
+/// object slice must be validated against the logical buffer before it is exposed.
+/// </summary>
 internal sealed class UnrealPackage
 {
     private const uint PackageSignature = 0x9E2A83C1;
@@ -9,14 +15,16 @@ internal sealed class UnrealPackage
 
     private UnrealPackage(
         string fullPath,
-        byte[] bytes,
+        byte[] physicalBytes,
+        LogicalPackageImage logicalImage,
         PackageHeader header,
         IReadOnlyList<string> names,
         IReadOnlyList<ImportEntry> imports,
         IReadOnlyList<ExportEntry> exports)
     {
         FullPath = fullPath;
-        Bytes = bytes;
+        PhysicalBytes = physicalBytes;
+        LogicalImage = logicalImage;
         Header = header;
         Names = names;
         Imports = imports;
@@ -25,7 +33,9 @@ internal sealed class UnrealPackage
 
     public string FullPath { get; }
 
-    public byte[] Bytes { get; }
+    public byte[] PhysicalBytes { get; }
+
+    public LogicalPackageImage LogicalImage { get; }
 
     public PackageHeader Header { get; }
 
@@ -38,11 +48,11 @@ internal sealed class UnrealPackage
     public static UnrealPackage Load(string packagePath)
     {
         string fullPath = Path.GetFullPath(packagePath);
-        byte[] bytes = File.ReadAllBytes(fullPath);
-        using var stream = new MemoryStream(bytes, writable: false);
-        using var reader = new BinaryReader(stream, Encoding.ASCII, leaveOpen: false);
+        byte[] physicalBytes = File.ReadAllBytes(fullPath);
+        using var physicalStream = new MemoryStream(physicalBytes, writable: false);
+        using var physicalReader = new BinaryReader(physicalStream, Encoding.ASCII, leaveOpen: false);
 
-        PackageHeader header = ReadHeader(reader);
+        PackageHeader header = ReadHeader(physicalReader);
 
         if (header.Signature == EncryptedSignature)
         {
@@ -54,11 +64,14 @@ internal sealed class UnrealPackage
             throw new InvalidOperationException("File is not a valid Unreal package.");
         }
 
-        List<string> names = ReadNames(reader, header);
-        List<ImportEntry> imports = ReadImports(reader, header, names);
-        List<ExportEntry> exports = ReadExports(reader, header, names);
+        LogicalPackageImage logicalImage = CompressedPackageReader.BuildLogicalImage(physicalBytes, header);
+        using var logicalStream = new MemoryStream(logicalImage.Bytes, writable: false);
+        using var logicalReader = new BinaryReader(logicalStream, Encoding.ASCII, leaveOpen: false);
+        List<string> names = ReadNames(logicalReader, header);
+        List<ImportEntry> imports = ReadImports(logicalReader, header, names);
+        List<ExportEntry> exports = ReadExports(logicalReader, header, names);
 
-        var package = new UnrealPackage(fullPath, bytes, header, names, imports, exports);
+        var package = new UnrealPackage(fullPath, physicalBytes, logicalImage, header, names, imports, exports);
 
         foreach (ImportEntry importEntry in package.Imports)
         {
@@ -73,10 +86,17 @@ internal sealed class UnrealPackage
         return package;
     }
 
+    /// <summary>
+    /// Returns the exact serialized byte range for one export object from the logical package image.
+    /// The requested slice must fit completely within the logical package buffer even when malformed
+    /// package values try to overflow a 32-bit offset-plus-length calculation.
+    /// </summary>
+    /// <param name="exportEntry">Export metadata that describes the serialized object location.</param>
+    /// <returns>Read-only memory over the validated serialized object bytes.</returns>
     public ReadOnlyMemory<byte> ReadObjectBytes(ExportEntry exportEntry)
     {
         ValidateSlice(exportEntry.SerialDataOffset, exportEntry.SerialDataSize);
-        return Bytes.AsMemory(exportEntry.SerialDataOffset, exportEntry.SerialDataSize);
+        return LogicalImage.Bytes.AsMemory(exportEntry.SerialDataOffset, exportEntry.SerialDataSize);
     }
 
     public string? ResolveObjectName(int reference)
@@ -188,17 +208,14 @@ internal sealed class UnrealPackage
         int dependsOffset = reader.ReadInt32();
         reader.BaseStream.Seek(16, SeekOrigin.Current);
         int generationCount = reader.ReadInt32();
-        reader.BaseStream.Seek(generationCount * 8L, SeekOrigin.Current);
-        reader.BaseStream.Seek(8, SeekOrigin.Current);
+        reader.BaseStream.Seek(generationCount * 12L, SeekOrigin.Current);
+        _ = reader.ReadInt32();
+        _ = reader.ReadInt32();
+        int compressionFlagsFieldOffset = checked((int)reader.BaseStream.Position);
         uint compressionFlags = reader.ReadUInt32();
         int compressionChunkCount = reader.ReadInt32();
-
-        if (compressionChunkCount > 0)
-        {
-            reader.BaseStream.Seek(compressionChunkCount * 16L, SeekOrigin.Current);
-        }
-
-        reader.BaseStream.Seek(8, SeekOrigin.Current);
+        int compressionChunkTableOffset = checked((int)reader.BaseStream.Position);
+        int headerSize = packageSize;
 
         return new PackageHeader(
             signature,
@@ -213,7 +230,11 @@ internal sealed class UnrealPackage
             importCount,
             importOffset,
             dependsOffset,
-            compressionFlags);
+            compressionFlags,
+            compressionFlagsFieldOffset,
+            compressionChunkCount,
+            compressionChunkTableOffset,
+            headerSize);
     }
 
     private static List<string> ReadNames(BinaryReader reader, PackageHeader header)
@@ -328,11 +349,21 @@ internal sealed class UnrealPackage
         return Encoding.ASCII.GetString(ascii, 0, Math.Max(0, size - 1));
     }
 
+    /// <summary>
+    /// Validates that one logical package slice stays fully inside the reconstructed package image.
+    /// The end offset is computed in 64-bit space so malformed package values cannot wrap around
+    /// and bypass the bounds check through 32-bit integer overflow.
+    /// </summary>
+    /// <param name="offset">Logical slice start offset.</param>
+    /// <param name="length">Logical slice byte length.</param>
     private void ValidateSlice(int offset, int length)
     {
-        if (offset < 0 || length < 0 || offset + length > Bytes.Length)
+        long endOffset = (long)offset + length;
+
+        if (offset < 0 || length < 0 || endOffset > LogicalImage.Bytes.Length)
         {
-            throw new InvalidOperationException($"Export object points outside the package. offset={offset} length={length}");
+            throw new InvalidOperationException(
+                $"Export object points outside the package. offset={offset} length={length} bufferLength={LogicalImage.Bytes.Length}");
         }
     }
 }
@@ -350,7 +381,11 @@ internal sealed record PackageHeader(
     int ImportTableCount,
     int ImportTableOffset,
     int DependsTableOffset,
-    uint CompressionFlags);
+    uint CompressionFlags,
+    int CompressionFlagsFieldOffset,
+    int CompressionChunkCount,
+    int CompressionChunkTableOffset,
+    int HeaderSize);
 
 internal sealed record NameReference(int Index, int Numeric, string Value);
 

@@ -16,6 +16,7 @@
 #include <HelenHook/VirtualFileService.h>
 
 #include <exception>
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -60,6 +61,25 @@ namespace
     std::unique_ptr<helen::FileApiHookSet> g_file_hooks;
     /** @brief Generic blob-backed native hook installer for the active build. */
     std::unique_ptr<helen::BuildHookInstaller> g_build_hooks;
+
+    /** @brief Batman graphics config keys logged before and after each native apply command. */
+    constexpr std::array<std::string_view, 15> BatmanGraphicsDraftKeys = {
+        "fullscreen",
+        "resolutionWidth",
+        "resolutionHeight",
+        "vsync",
+        "msaa",
+        "detailLevel",
+        "bloom",
+        "dynamicShadows",
+        "motionBlur",
+        "distortion",
+        "fogVolumes",
+        "sphericalHarmonicLighting",
+        "ambientOcclusion",
+        "physx",
+        "stereo"
+    };
 
     /**
      * @brief Resolves the full filesystem path for a loaded module handle.
@@ -138,6 +158,55 @@ namespace
     std::wstring ToWideString(std::string_view text)
     {
         return std::wstring(text.begin(), text.end());
+    }
+
+    /**
+     * @brief Builds one readable Batman graphics draft snapshot from the active config dispatcher.
+     * @param dispatcher Dispatcher that stores the normalized graphics draft values.
+     * @return One comma-delimited snapshot string that includes every Batman graphics draft key.
+     */
+    std::wstring BuildBatmanGraphicsDraftSnapshot(const helen::CommandDispatcher& dispatcher)
+    {
+        std::wstring snapshot;
+        for (std::size_t index = 0; index < BatmanGraphicsDraftKeys.size(); ++index)
+        {
+            const std::string_view key = BatmanGraphicsDraftKeys[index];
+            if (index > 0)
+            {
+                snapshot += L",";
+            }
+
+            snapshot += std::wstring(key.begin(), key.end());
+            snapshot += L"=";
+            const std::optional<int> value = dispatcher.TryGetInt(std::string(key));
+            if (value.has_value())
+            {
+                snapshot += std::to_wstring(*value);
+            }
+            else
+            {
+                snapshot += L"<missing>";
+            }
+        }
+
+        return snapshot;
+    }
+
+    /**
+     * @brief Writes one Batman graphics draft snapshot into the runtime log when the dispatcher is available.
+     * @param stage Stable label describing where in the native apply flow the snapshot was captured.
+     */
+    void LogBatmanGraphicsDraftSnapshot(std::wstring_view stage)
+    {
+        const std::wstring stage_text(stage);
+        if (g_command_dispatcher == nullptr)
+        {
+            helen::Logf(L"[runtime] %ls dispatcher=<missing>", stage_text.c_str());
+            return;
+        }
+
+        const std::wstring snapshot = BuildBatmanGraphicsDraftSnapshot(*g_command_dispatcher);
+        helen::Logf(L"[runtime] %ls %ls", stage_text.c_str(), snapshot.c_str());
     }
 
     /**
@@ -699,6 +768,39 @@ extern "C" __declspec(dllexport) BOOL __stdcall HelenRunCommandA(const char* com
 
     const BOOL succeeded = g_external_bindings->TryHandleRunCommand("Helen_RunCommand", command_id) ? TRUE : FALSE;
     helen::Logf(L"[runtime] Helen_RunCommand command=%hs result=%d", command_id, static_cast<int>(succeeded));
+    return succeeded;
+}
+
+/**
+ * @brief Applies the Batman graphics draft through the native command executor and logs the full draft before and after execution.
+ * @return True when the runtime is initialized and `applyBatmanGraphicsDraft` completes successfully; otherwise false.
+ */
+extern "C" __declspec(dllexport) BOOL __stdcall HelenApplyBatmanGraphicsDraftA()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    helen::Log(L"[runtime] Helen_ApplyBatmanGraphicsDraft enter.");
+    if (!g_initialized)
+    {
+        helen::Log(L"[runtime] Helen_ApplyBatmanGraphicsDraft rejected: runtime not initialized.");
+        return FALSE;
+    }
+
+    if (g_command_executor == nullptr)
+    {
+        helen::Log(L"[runtime] Helen_ApplyBatmanGraphicsDraft rejected: command executor missing.");
+        return FALSE;
+    }
+
+    if (g_command_dispatcher == nullptr)
+    {
+        helen::Log(L"[runtime] Helen_ApplyBatmanGraphicsDraft rejected: command dispatcher missing.");
+        return FALSE;
+    }
+
+    LogBatmanGraphicsDraftSnapshot(L"Helen_ApplyBatmanGraphicsDraft before");
+    const BOOL succeeded = g_command_executor->RunCommand("applyBatmanGraphicsDraft") ? TRUE : FALSE;
+    helen::Logf(L"[runtime] Helen_ApplyBatmanGraphicsDraft result=%d", static_cast<int>(succeeded));
+    LogBatmanGraphicsDraftSnapshot(L"Helen_ApplyBatmanGraphicsDraft after");
     return succeeded;
 }
 

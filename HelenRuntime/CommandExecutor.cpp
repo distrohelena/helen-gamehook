@@ -273,9 +273,19 @@ namespace helen
             return graphics_config_service_.LoadIntoDispatcher(dispatcher_);
         }
 
+        if (step.Kind == "load-batman-subtitle-size-into-config")
+        {
+            return graphics_config_service_.LoadSubtitleSizeIntoDispatcher(dispatcher_);
+        }
+
         if (step.Kind == "apply-batman-graphics-config")
         {
             return graphics_config_service_.ApplyFromDispatcher(dispatcher_);
+        }
+
+        if (step.Kind == "apply-batman-subtitle-size-config")
+        {
+            return graphics_config_service_.ApplySubtitleSizeFromDispatcher(dispatcher_);
         }
 
         if (step.Kind == "sync-batman-graphics-detail-level")

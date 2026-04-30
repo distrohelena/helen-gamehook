@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace SubtitleSizeModBuilder;
 
 /// <summary>
@@ -57,7 +59,7 @@ internal static class GraphicsOptionsScriptTemplates
     /// <summary>
     /// Initializes the graphics options screen with draft-backed interaction while deferring row binding until the cloned timeline settles.
     /// </summary>
-    public const string GraphicsOptionsFrame1 = """
+    private const string GraphicsOptionsFrame1Template = """
     class rs.ui.BatmanGraphicsOptionsController
     {
        var Screen;
@@ -83,6 +85,7 @@ internal static class GraphicsOptionsScriptTemplates
           this.RowOrder = new Array("Fullscreen","Resolution","VSync","MSAA","DetailLevel","Bloom","DynamicShadows","MotionBlur","Distortion","FogVolumes","SphericalHarmonicLighting","AmbientOcclusion","PhysX","Stereo3D","ApplyChanges");
           this.LoadDraftValues();
           this.CaptureInitialState();
+          this.LogDraftSnapshot("Init after-load");
        }
        function BindFixedRows()
        {
@@ -160,24 +163,31 @@ internal static class GraphicsOptionsScriptTemplates
        {
           return this.NormalizeInt(flash.external.ExternalInterface.call("Helen_GetInt",key),fallback);
        }
+       function ReloadDraftFromIni()
+       {
+          var _loc2_ = flash.external.ExternalInterface.call("Helen_RunCommand","loadBatmanGraphicsDraftIntoConfig");
+          this.LogExitState("ReloadDraftFromIni result=" + _loc2_);
+          return _loc2_;
+       }
        function LoadDraftValues()
        {
           this.DraftState = {};
-          this.DraftState.fullscreen = this.ReadDraftInt("fullscreen",0);
-          this.DraftState.resolutionWidth = this.ReadDraftInt("resolutionWidth",0);
-          this.DraftState.resolutionHeight = this.ReadDraftInt("resolutionHeight",0);
-          this.DraftState.vsync = this.ReadDraftInt("vsync",0);
-          this.DraftState.msaa = this.ReadDraftInt("msaa",0);
-          this.DraftState.detailLevel = this.ReadDraftInt("detailLevel",1);
-          this.DraftState.bloom = this.ReadDraftInt("bloom",0);
-          this.DraftState.dynamicShadows = this.ReadDraftInt("dynamicShadows",0);
-          this.DraftState.motionBlur = this.ReadDraftInt("motionBlur",0);
-          this.DraftState.distortion = this.ReadDraftInt("distortion",0);
-          this.DraftState.fogVolumes = this.ReadDraftInt("fogVolumes",0);
-          this.DraftState.sphericalHarmonicLighting = this.ReadDraftInt("sphericalHarmonicLighting",0);
-          this.DraftState.ambientOcclusion = this.ReadDraftInt("ambientOcclusion",0);
-          this.DraftState.physx = this.ReadDraftInt("physx",0);
-          this.DraftState.stereo = this.ReadDraftInt("stereo",0);
+          this.ReloadDraftFromIni();
+          this.DraftState.fullscreen = this.ReadDraftInt("fullscreen",__BOOTSTRAP_FULLSCREEN__);
+          this.DraftState.resolutionWidth = this.ReadDraftInt("resolutionWidth",__BOOTSTRAP_RESOLUTION_WIDTH__);
+          this.DraftState.resolutionHeight = this.ReadDraftInt("resolutionHeight",__BOOTSTRAP_RESOLUTION_HEIGHT__);
+          this.DraftState.vsync = this.ReadDraftInt("vsync",__BOOTSTRAP_VSYNC__);
+          this.DraftState.msaa = this.ReadDraftInt("msaa",__BOOTSTRAP_MSAA__);
+          this.DraftState.detailLevel = this.ReadDraftInt("detailLevel",__BOOTSTRAP_DETAIL_LEVEL__);
+          this.DraftState.bloom = this.ReadDraftInt("bloom",__BOOTSTRAP_BLOOM__);
+          this.DraftState.dynamicShadows = this.ReadDraftInt("dynamicShadows",__BOOTSTRAP_DYNAMIC_SHADOWS__);
+          this.DraftState.motionBlur = this.ReadDraftInt("motionBlur",__BOOTSTRAP_MOTION_BLUR__);
+          this.DraftState.distortion = this.ReadDraftInt("distortion",__BOOTSTRAP_DISTORTION__);
+          this.DraftState.fogVolumes = this.ReadDraftInt("fogVolumes",__BOOTSTRAP_FOG_VOLUMES__);
+          this.DraftState.sphericalHarmonicLighting = this.ReadDraftInt("sphericalHarmonicLighting",__BOOTSTRAP_SPHERICAL_HARMONIC_LIGHTING__);
+          this.DraftState.ambientOcclusion = this.ReadDraftInt("ambientOcclusion",__BOOTSTRAP_AMBIENT_OCCLUSION__);
+          this.DraftState.physx = this.ReadDraftInt("physx",__BOOTSTRAP_PHYSX__);
+          this.DraftState.stereo = this.ReadDraftInt("stereo",__BOOTSTRAP_STEREO__);
        }
        function CaptureInitialState()
        {
@@ -189,6 +199,14 @@ internal static class GraphicsOptionsScriptTemplates
              this.InitialState[_loc2_[_loc3_]] = this.DraftState[_loc2_[_loc3_]];
              _loc3_ = _loc3_ + 1;
           }
+       }
+       function GetDraftSnapshotText()
+       {
+          return "fullscreen=" + this.DraftState.fullscreen + ",resolutionWidth=" + this.DraftState.resolutionWidth + ",resolutionHeight=" + this.DraftState.resolutionHeight + ",vsync=" + this.DraftState.vsync + ",msaa=" + this.DraftState.msaa + ",detailLevel=" + this.DraftState.detailLevel + ",bloom=" + this.DraftState.bloom + ",dynamicShadows=" + this.DraftState.dynamicShadows + ",motionBlur=" + this.DraftState.motionBlur + ",distortion=" + this.DraftState.distortion + ",fogVolumes=" + this.DraftState.fogVolumes + ",sphericalHarmonicLighting=" + this.DraftState.sphericalHarmonicLighting + ",ambientOcclusion=" + this.DraftState.ambientOcclusion + ",physx=" + this.DraftState.physx + ",stereo=" + this.DraftState.stereo;
+       }
+       function LogDraftSnapshot(stage)
+       {
+          this.LogExitState(stage + " " + this.GetDraftSnapshotText());
        }
        function RefreshFocusedRow()
        {
@@ -470,10 +488,18 @@ internal static class GraphicsOptionsScriptTemplates
           {
              this.DraftState.detailLevel = this.DeriveDetailLevelFromDraft();
           }
+          this.LogExitState("SetDraftRowState row=" + rowName + " key=" + _loc2_ + " nextState=" + nextState);
+          this.LogDraftSnapshot("SetDraftRowState before-native");
           var _loc3_ = flash.external.ExternalInterface.call("Helen_SetInt",_loc2_,nextState);
+          this.LogExitState("SetDraftRowState nativeResult key=" + _loc2_ + " result=" + _loc3_);
           if(_loc3_)
           {
              this.LoadDraftValues();
+             this.LogDraftSnapshot("SetDraftRowState after-reload");
+          }
+          else
+          {
+             this.LogDraftSnapshot("SetDraftRowState after-failed-native");
           }
           this.RefreshFocusedRow();
           return true;
@@ -522,22 +548,32 @@ internal static class GraphicsOptionsScriptTemplates
        }
        function HandleRowAction(rowName)
        {
+          this.LogExitState("HandleRowAction row=" + rowName + " promptOpen=" + this.IsExitPromptOpen() + " pending=" + this.IsExitTransitionPending());
           if(this.IsExitPromptOpen())
           {
+             this.LogExitState("HandleRowAction ignored prompt-open row=" + rowName);
              return undefined;
           }
           if(this.IsApplyRow(rowName))
           {
+             this.LogExitState("HandleRowAction apply row");
              this.ApplyChanges();
              return undefined;
           }
           if(this.IsInteractiveRow(rowName))
           {
+             this.LogExitState("HandleRowAction interactive row=" + rowName);
              if(this.CycleDraftRowState(rowName))
              {
                 this.PlayStepSound(true);
              }
+             else
+             {
+                this.LogExitState("HandleRowAction cycle-noop row=" + rowName);
+             }
+             return undefined;
           }
+          this.LogExitState("HandleRowAction ignored non-interactive row=" + rowName);
        }
        function IncrementRow(rowName)
        {
@@ -717,13 +753,19 @@ internal static class GraphicsOptionsScriptTemplates
        function ApplyChanges()
        {
           this.LogExitState("ApplyChanges start");
-          if(!flash.external.ExternalInterface.call("Helen_RunCommand","applyBatmanGraphicsDraft"))
+          this.LogDraftSnapshot("ApplyChanges before-native");
+          var _loc2_ = flash.external.ExternalInterface.call("Helen_ApplyBatmanGraphicsDraft");
+          this.LogExitState("ApplyChanges nativeResult=" + _loc2_);
+          if(!_loc2_)
           {
              this.LogExitState("ApplyChanges failed");
+             this.LogDraftSnapshot("ApplyChanges after-failed-native");
              return false;
           }
           this.LoadDraftValues();
+          this.LogDraftSnapshot("ApplyChanges after-reload");
           this.CaptureInitialState();
+          this.LogDraftSnapshot("ApplyChanges after-capture");
           this.RefreshFocusedRow();
           this.LogExitState("ApplyChanges succeeded");
           return true;
@@ -776,6 +818,42 @@ internal static class GraphicsOptionsScriptTemplates
     this.AddItem(GraphicsRow15,13,0,-1,-1);
     _rotation = -2;
     """;
+
+    /// <summary>
+    /// Creates the graphics screen frame-1 ActionScript with INI-backed startup fallback values baked into the draft reads.
+    /// </summary>
+    /// <param name="bootstrapSnapshot">The normalized graphics defaults that should appear when runtime bridge reads are unavailable.</param>
+    /// <returns>The complete frame-1 ActionScript text for the graphics screen.</returns>
+    public static string CreateGraphicsOptionsFrame1(BatmanGraphicsIniBootstrapSnapshot bootstrapSnapshot)
+    {
+        string script = GraphicsOptionsFrame1Template;
+        script = script.Replace("__BOOTSTRAP_FULLSCREEN__", FormatScriptInt(bootstrapSnapshot.Fullscreen), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_RESOLUTION_WIDTH__", FormatScriptInt(bootstrapSnapshot.ResolutionWidth), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_RESOLUTION_HEIGHT__", FormatScriptInt(bootstrapSnapshot.ResolutionHeight), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_VSYNC__", FormatScriptInt(bootstrapSnapshot.Vsync), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_MSAA__", FormatScriptInt(bootstrapSnapshot.Msaa), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_DETAIL_LEVEL__", FormatScriptInt(bootstrapSnapshot.DetailLevel), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_BLOOM__", FormatScriptInt(bootstrapSnapshot.Bloom), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_DYNAMIC_SHADOWS__", FormatScriptInt(bootstrapSnapshot.DynamicShadows), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_MOTION_BLUR__", FormatScriptInt(bootstrapSnapshot.MotionBlur), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_DISTORTION__", FormatScriptInt(bootstrapSnapshot.Distortion), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_FOG_VOLUMES__", FormatScriptInt(bootstrapSnapshot.FogVolumes), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_SPHERICAL_HARMONIC_LIGHTING__", FormatScriptInt(bootstrapSnapshot.SphericalHarmonicLighting), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_AMBIENT_OCCLUSION__", FormatScriptInt(bootstrapSnapshot.AmbientOcclusion), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_PHYSX__", FormatScriptInt(bootstrapSnapshot.Physx), StringComparison.Ordinal);
+        script = script.Replace("__BOOTSTRAP_STEREO__", FormatScriptInt(bootstrapSnapshot.Stereo), StringComparison.Ordinal);
+        return script;
+    }
+
+    /// <summary>
+    /// Formats an integer for direct insertion into ActionScript source using culture-invariant digits.
+    /// </summary>
+    /// <param name="value">The integer value to embed in the script.</param>
+    /// <returns>The culture-invariant integer literal.</returns>
+    private static string FormatScriptInt(int value)
+    {
+        return value.ToString(CultureInfo.InvariantCulture);
+    }
 
     /// <summary>
     /// Settles the graphics options screen after the cloned timeline finishes loading and refreshes every fixed row.
@@ -902,28 +980,44 @@ internal static class GraphicsOptionsScriptTemplates
             };
             this.RunAction = function(bMouse)
             {
+              if(_parent.GraphicsController != undefined)
+              {
+                 _parent.GraphicsController.LogExitState("Row.RunAction row=" + this.RowName + " mouse=" + bMouse + " enabled=" + this.IsEnabled() + " interactive=" + this.IsInteractiveRow() + " apply=" + this.IsApplyRow());
+              }
               if(this.IsApplyRow())
               {
                  if(this.IsEnabled())
                  {
+                    _parent.GraphicsController.LogExitState("Row.RunAction dispatch-apply row=" + this.RowName);
                     _parent.GraphicsController.HandleRowAction(this.RowName);
+                 }
+                 else if(_parent.GraphicsController != undefined)
+                 {
+                    _parent.GraphicsController.LogExitState("Row.RunAction blocked-apply-disabled row=" + this.RowName);
                  }
                  return undefined;
               }
               if(!this.IsInteractiveRow() || !this.IsEnabled())
               {
+                 if(_parent.GraphicsController != undefined)
+                 {
+                    _parent.GraphicsController.LogExitState("Row.RunAction blocked-noninteractive row=" + this.RowName + " enabled=" + this.IsEnabled() + " interactive=" + this.IsInteractiveRow());
+                 }
                  return undefined;
               }
               if(this.Names.length < 3 || !bMouse)
               {
+                 _parent.GraphicsController.LogExitState("Row.RunAction dispatch-cycle row=" + this.RowName);
                  _parent.GraphicsController.HandleRowAction(this.RowName);
               }
               else if(this._xmouse < 0)
               {
+                 _parent.GraphicsController.LogExitState("Row.RunAction dispatch-decrement row=" + this.RowName);
                  _parent.GraphicsController.DecrementRow(this.RowName);
               }
               else
               {
+                 _parent.GraphicsController.LogExitState("Row.RunAction dispatch-increment row=" + this.RowName);
                  _parent.GraphicsController.IncrementRow(this.RowName);
               }
             };

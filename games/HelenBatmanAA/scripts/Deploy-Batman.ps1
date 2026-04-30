@@ -1,12 +1,19 @@
 param(
     [string]$GameBin = 'D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries',
-    [string]$Configuration = 'Debug'
+    [string]$BuilderRoot = '',
+    [string]$Configuration = 'Release'
 )
 
 $ErrorActionPreference = 'Stop'
 
 $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $RepoRoot = (Resolve-Path (Join-Path $BatmanRoot '..\..')).Path
+$ResolvedBuilderRoot = $BuilderRoot
+if ([string]::IsNullOrWhiteSpace($ResolvedBuilderRoot)) {
+    $ResolvedBuilderRoot = Join-Path $RepoRoot 'games\HelenBatmanAA\builder'
+}
+
+$ResolvedBuilderRoot = (Resolve-Path $ResolvedBuilderRoot).Path
 $GameRoot = [System.IO.Path]::GetFullPath((Join-Path $GameBin '..'))
 $PackSource = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles'
 $PackDestination = Join-Path $GameBin 'helengamehook\packs\batman-aa-subtitles'
@@ -21,12 +28,15 @@ $StagedBuildRoot = Join-Path $PackStagingDestination 'builds\steam-goty-1.0'
 $StagedFilesJsonPath = Join-Path $StagedBuildRoot 'files.json'
 $StagedPackagesPath = Join-Path $StagedBuildRoot 'assets\packages'
 $SourceGameplayDeltaPath = Join-Path $PackSource 'builds\steam-goty-1.0\assets\deltas\BmGame-subtitle-signal.hgdelta'
-$SourceFrontendDeltaPath = Join-Path $PackSource 'builds\steam-goty-1.0\assets\deltas\Frontend-main-menu-subtitle-size.hgdelta'
 $SourcePackagesPath = Join-Path $PackSource 'assets\packages'
+$RebuildPackScriptPath = Join-Path $PSScriptRoot 'Rebuild-BatmanPack.ps1'
 $VerifierPath = Join-Path $PSScriptRoot 'Test-BatmanKnownGoodGameplayPackage.ps1'
 $InstalledBaseVerifierPath = Join-Path $PSScriptRoot 'Test-BatmanInstalledBaseCompatibility.ps1'
+$NativeSubtitleExePatcherProjectPath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\NativeSubtitleExePatcher.csproj'
 $HelenGameHookPath = Join-Path $RepoRoot "bin\Win32\$Configuration\HelenGameHook.dll"
 $ProxyPath = Join-Path $RepoRoot "bin\Win32\$Configuration\dinput8.dll"
+$GameExePath = Join-Path $GameBin 'ShippingPC-BmGame.exe'
+$GameExeBackupPath = Join-Path $GameBin 'ShippingPC-BmGame.exe.subtitle-signal.clean-backup'
 $ExpectedVirtualFiles = @(
     @{
         Id = 'bmgameGameplayPackage'
@@ -36,15 +46,6 @@ $ExpectedVirtualFiles = @(
         DeltaPath = 'assets/deltas/BmGame-subtitle-signal.hgdelta'
         SourceDeltaPath = $SourceGameplayDeltaPath
         DeltaHash = (Get-FileHash -LiteralPath $SourceGameplayDeltaPath -Algorithm SHA256).Hash
-    },
-    @{
-        Id = 'frontendMapPackage'
-        Path = 'BmGame/CookedPC/Maps/Frontend/Frontend.umap'
-        Mode = 'delta-on-read'
-        Kind = 'delta-file'
-        DeltaPath = 'assets/deltas/Frontend-main-menu-subtitle-size.hgdelta'
-        SourceDeltaPath = $SourceFrontendDeltaPath
-        DeltaHash = (Get-FileHash -LiteralPath $SourceFrontendDeltaPath -Algorithm SHA256).Hash
     }
 )
 
@@ -99,10 +100,45 @@ function Test-ExpectedVirtualFiles {
     }
 }
 
-foreach ($RequiredPath in @($PackSource, $SourceGameplayDeltaPath, $SourceFrontendDeltaPath, $HelenGameHookPath, $ProxyPath, $InstalledBaseVerifierPath)) {
+foreach ($RequiredPath in @($PackSource, $SourceGameplayDeltaPath, $HelenGameHookPath, $ProxyPath, $InstalledBaseVerifierPath, $NativeSubtitleExePatcherProjectPath, $GameExePath)) {
     if (-not (Test-Path -LiteralPath $RequiredPath)) {
         throw "Batman deployment input not found: $RequiredPath"
     }
+}
+
+& $RebuildPackScriptPath -BuilderRoot $ResolvedBuilderRoot -Configuration $Configuration
+if ($LASTEXITCODE -ne 0) {
+    throw "Batman pack rebuild failed with exit code $LASTEXITCODE."
+}
+
+if (Test-Path -LiteralPath $GameExeBackupPath) {
+    Copy-Item -LiteralPath $GameExeBackupPath -Destination $GameExePath -Force
+}
+
+function Update-DeployedBuildMatch {
+    param(
+        [string]$BuildJsonPath,
+        [string]$ExecutablePath
+    )
+
+    if (-not (Test-Path -LiteralPath $BuildJsonPath)) {
+        throw "Batman deployed build manifest not found: $BuildJsonPath"
+    }
+
+    if (-not (Test-Path -LiteralPath $ExecutablePath)) {
+        throw "Batman deployed executable not found: $ExecutablePath"
+    }
+
+    $BuildManifest = Get-Content -LiteralPath $BuildJsonPath -Raw | ConvertFrom-Json
+    $ExecutableItem = Get-Item -LiteralPath $ExecutablePath
+    $ExecutableHash = (Get-FileHash -LiteralPath $ExecutablePath -Algorithm SHA256).Hash.ToUpperInvariant()
+
+    $BuildManifest.match.fileSize = [UInt64]$ExecutableItem.Length
+    $BuildManifest.match.sha256 = $ExecutableHash
+
+    $BuildManifestJson = ($BuildManifest | ConvertTo-Json -Depth 16).TrimStart([char]0xFEFF)
+    $Utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($BuildJsonPath, $BuildManifestJson, $Utf8WithoutBom)
 }
 
 if (Test-Path -LiteralPath $SourcePackagesPath) {
@@ -112,7 +148,7 @@ if (Test-Path -LiteralPath $SourcePackagesPath) {
     }
 }
 
-& $VerifierPath -BatmanRoot $BatmanRoot
+& $VerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $ResolvedBuilderRoot
 & $InstalledBaseVerifierPath -GameRoot $GameRoot -PackBuildRoot (Join-Path $PackSource 'builds\steam-goty-1.0')
 
 Get-Process ShippingPC-BmGame -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -145,6 +181,47 @@ try {
     }
 
     Move-Item -LiteralPath $PackStagingDestination -Destination $PackDestination
+
+    if (Test-Path -LiteralPath $GameExeBackupPath) {
+        Copy-Item -LiteralPath $GameExeBackupPath -Destination $GameExePath -Force
+    }
+
+    $PatchArguments = @(
+        'run',
+        '--project',
+        $NativeSubtitleExePatcherProjectPath,
+        '-c',
+        $Configuration,
+        '--',
+        'patch-bink-text-scale',
+        '--exe',
+        $GameExePath,
+        '--global',
+        '--ui-state-live',
+        '--small-scale',
+        '1.0',
+        '--medium-scale',
+        '1.5',
+        '--large-scale',
+        '2.0',
+        '--very-large-scale',
+        '4.0',
+        '--huge-scale',
+        '6.0',
+        '--massive-scale',
+        '8.0'
+    )
+
+    if (-not (Test-Path -LiteralPath $GameExeBackupPath)) {
+        $PatchArguments += @('--backup', '--backup-path', $GameExeBackupPath)
+    }
+
+    & dotnet @PatchArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Batman subtitle signal patching failed with exit code $LASTEXITCODE."
+    }
+
+    Update-DeployedBuildMatch -BuildJsonPath (Join-Path $PackBuildRoot 'build.json') -ExecutablePath $GameExePath
 
     if ($BackupExists -and (Test-Path -LiteralPath $PackBackupDestination)) {
         Remove-Item -LiteralPath $PackBackupDestination -Recurse -Force

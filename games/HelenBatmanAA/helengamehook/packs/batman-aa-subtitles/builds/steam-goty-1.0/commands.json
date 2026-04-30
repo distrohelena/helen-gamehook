@@ -5,6 +5,9 @@
       "name": "Apply Saved Subtitle Size",
       "steps": [
         {
+          "kind": "load-batman-subtitle-size-into-config"
+        },
+        {
           "kind": "run-command",
           "command": "applySubtitleSize"
         }
@@ -19,29 +22,32 @@
           "configKey": "ui.subtitleSize",
           "valueName": "subtitleSizeState"
         },
-        {
-          "kind": "map-int-to-double",
-          "inputValueName": "subtitleSizeState",
-          "outputValueName": "subtitleScale",
-          "mappings": [
             {
-              "match": 0,
-              "value": 2.0
+              "kind": "map-int-to-double",
+              "inputValueName": "subtitleSizeState",
+              "outputValueName": "subtitleScale",
+              "mappings": [
+                {
+                  "match": 0,
+                  "value": 1.0
+                },
+                {
+                  "match": 1,
+                  "value": 1.5
+                },
+                {
+                  "match": 2,
+                  "value": 2.0
+                }
+              ]
             },
-            {
-              "match": 1,
-              "value": 4.0
-            },
-            {
-              "match": 2,
-              "value": 8.0
-            }
-          ]
-        },
         {
           "kind": "set-live-double",
           "target": "subtitle.scale",
           "valueName": "subtitleScale"
+        },
+        {
+          "kind": "apply-batman-subtitle-size-config"
         },
         {
           "kind": "log-message",

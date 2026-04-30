@@ -52,8 +52,7 @@ internal static class ScriptTemplates
        }
        function ReadSubtitleSizeState()
        {
-          flash.external.ExternalInterface.call("Helen_Ini_LoadDraft","batmanFrontendUi");
-          return this.NormalizeStoredSubtitleState(flash.external.ExternalInterface.call("Helen_Ini_GetInt","batmanFrontendUi","subtitleSize"));
+          return this.NormalizeStoredSubtitleState(flash.external.ExternalInterface.call("Helen_GetInt","ui.subtitleSize"));
        }
        function IsBinarySubtitleToggle()
        {
@@ -69,7 +68,7 @@ internal static class ScriptTemplates
        }
        function StoreSubtitleSizeState()
        {
-          flash.external.ExternalInterface.call("Helen_Ini_SetInt","batmanFrontendUi","subtitleSize",this.State);
+          flash.external.ExternalInterface.call("Helen_SetInt","ui.subtitleSize",this.State);
        }
        function ApplySubtitleSizeRuntime()
        {
@@ -100,6 +99,13 @@ internal static class ScriptTemplates
              _loc3_ = _loc3_ + 1;
           }
           var _loc4_;
+          if(this.UsesSubtitleSizeStorage() && this.Names.length > 3)
+          {
+             while(this.Names.length > 3)
+             {
+                this.Names.pop();
+             }
+          }
           if(this.UsesSubtitleSizeStorage())
           {
              _loc4_ = this.ReadSubtitleSizeState();
@@ -323,363 +329,10 @@ internal static class ScriptTemplates
     """;
 
     /// <summary>
-    /// Replaces the pause-menu ListItem with subtitle-size runtime toggling behavior.
+    /// Reuses the runtime subtitle-size menu behavior for pause assets so all subtitle-size
+    /// builds stay at three states (Small/Normal/Large).
     /// </summary>
-    public const string PauseListItem = """
-    class rs.ui.ListItem extends MovieClip
-    {
-       var ItemText;
-       var Label;
-       var LabelName;
-       var LeftClicker;
-       var Names;
-       var RightClicker;
-       var GameVariable = "?name?";
-       var State = 0;
-       var Initial = 0;
-       var Default = 0;
-       function ListItem()
-       {
-          super();
-       }
-       function IsDedicatedSubtitleSizeOption()
-       {
-          return this.GameVariable == "SubtitleSize";
-       }
-       function IsFrontendSubtitleSizeOption()
-       {
-          return this.GameVariable == "Subtitles" && this.Names.length == 4;
-       }
-       function UsesSubtitleSizeStorage()
-       {
-          return this.IsDedicatedSubtitleSizeOption() || this.IsFrontendSubtitleSizeOption();
-       }
-       function NormalizeBoolState(InValue, DefaultValue)
-       {
-          if(InValue == undefined)
-          {
-             return DefaultValue;
-          }
-          return InValue != 0 ? 1 : 0;
-       }
-       function GetSubtitleDefaultState()
-       {
-          if(this.IsFrontendSubtitleSizeOption())
-          {
-             if(this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetDefaultSubtitles"),1) == 0)
-             {
-                return 0;
-             }
-             return 2;
-          }
-          return 1;
-       }
-       function GetSubtitleBitsState()
-       {
-          var _loc2_ = this.GetSubtitleDefaultBits();
-          var _loc3_ = this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetControlType"),_loc2_.ControlType);
-          var _loc4_ = this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetSixAxis"),_loc2_.SixAxis);
-          if(_loc4_ != _loc2_.SixAxis)
-          {
-             return 2;
-          }
-          if(_loc3_ != _loc2_.ControlType)
-          {
-             return 0;
-          }
-          return 1;
-       }
-       function GetSubtitleDefaultBits()
-       {
-          var _loc2_ = this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetDefaultControlType"),0);
-          var _loc3_ = this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetDefaultSixAxis"),0);
-          return {ControlType:_loc2_,SixAxis:_loc3_};
-       }
-       function ReadSubtitleSizeState()
-       {
-          if(this.IsFrontendSubtitleSizeOption() && this.NormalizeBoolState(flash.external.ExternalInterface.call("FE_GetSubtitles"),1) == 0)
-          {
-             return 0;
-          }
-          var _loc2_ = this.GetSubtitleBitsState();
-          if(this.IsFrontendSubtitleSizeOption())
-          {
-             return _loc2_ + 1;
-          }
-          return _loc2_;
-       }
-       function WriteSubtitleSizeState()
-       {
-          var _loc3_ = this.State;
-          if(this.IsFrontendSubtitleSizeOption())
-          {
-             flash.external.ExternalInterface.call("FE_SetSubtitles",this.State != 0 ? 1 : 0,"");
-             _loc3_ = this.State == 0 ? 1 : this.State - 1;
-          }
-          var _loc2_ = this.GetSubtitleDefaultBits();
-          switch(_loc3_)
-          {
-             case 0:
-                _loc2_.ControlType = 1 - _loc2_.ControlType;
-                break;
-             case 2:
-                _loc2_.SixAxis = 1 - _loc2_.SixAxis;
-          }
-          flash.external.ExternalInterface.call("FE_SetControlType",_loc2_.ControlType,_loc2_.ControlType != 0 ? "$UI.Mode1" : "$UI.Mode0");
-          flash.external.ExternalInterface.call("FE_SetSixAxis",_loc2_.SixAxis,_loc2_.SixAxis != 0 ? "$UI.Yes" : "$UI.No");
-          this.ApplySubtitleSizeRuntime();
-       }
-       function RunEngineCommand(InCommand)
-       {
-          flash.external.ExternalInterface.call("FE_RunCommand",InCommand);
-       }
-       function GetSubtitleSizeBurstCount()
-       {
-          switch(this.State)
-          {
-             case 0:
-                return 2;
-             case 2:
-                return 6;
-             default:
-                return 4;
-          }
-       }
-       function ApplySubtitleSizeRuntime()
-       {
-          if(!this.UsesSubtitleSizeStorage())
-          {
-             return undefined;
-          }
-          var _loc2_ = flash.external.ExternalInterface.call("IsShowingSubtitles");
-          if(_loc2_ == undefined)
-          {
-             _loc2_ = 1;
-          }
-          _loc2_ = this.NormalizeBoolState(_loc2_,1);
-          var _loc3_ = this.GetSubtitleSizeBurstCount();
-          var _loc4_ = 0;
-          var _loc5_ = 1 - _loc2_;
-          while(_loc4_ < _loc3_)
-          {
-             flash.external.ExternalInterface.call("FE_SetSubtitles",_loc4_ % 2 == 0 ? _loc5_ : _loc2_,"");
-             _loc4_ = _loc4_ + 1;
-          }
-       }
-       function Init()
-       {
-          this.Names = new Array();
-          this.GameVariable = arguments[0];
-          if(this.UsesSubtitleSizeStorage())
-          {
-             this.LabelName = "Subtitle Size";
-          }
-          else
-          {
-             this.LabelName = "$UI." + arguments[0];
-          }
-          this.Label.text = this.LabelName;
-          var _loc3_ = 1;
-          while(_loc3_ < arguments.length)
-          {
-             this.Names.push(arguments[_loc3_]);
-             _loc3_ = _loc3_ + 1;
-          }
-          var _loc4_;
-          if(this.UsesSubtitleSizeStorage())
-          {
-             _loc4_ = this.ReadSubtitleSizeState();
-          }
-          else
-          {
-             _loc4_ = flash.external.ExternalInterface.call("FE_Get" + this.GameVariable);
-          }
-          if(_loc4_ == undefined)
-          {
-             _loc4_ = 0;
-          }
-          if(_loc4_ < 0 || _loc4_ >= this.Names.length)
-          {
-             _loc4_ = !this.UsesSubtitleSizeStorage() ? 0 : this.GetSubtitleDefaultState();
-          }
-          this.State = _loc4_;
-          this.Initial = _loc4_;
-          this.UpdateLRMarkers();
-          this.FetchDefault();
-       }
-       function Destroy()
-       {
-          while(this.Names.length)
-          {
-             this.Names.pop();
-          }
-       }
-       function HasChanged()
-       {
-          return this.State != this.Initial;
-       }
-       function RestoreInitialValue()
-       {
-          if(this.HasChanged())
-          {
-             this.State = this.Initial;
-             this.UpdateLRMarkers();
-          }
-       }
-       function IsDefault()
-       {
-          return this.State == this.Default;
-       }
-       function FetchDefault()
-       {
-          var _loc2_;
-          if(this.UsesSubtitleSizeStorage())
-          {
-             _loc2_ = this.GetSubtitleDefaultState();
-          }
-          else
-          {
-             _loc2_ = flash.external.ExternalInterface.call("FE_GetDefault" + this.GameVariable);
-          }
-          if(_loc2_ == undefined)
-          {
-             _loc2_ = 0;
-          }
-          this.Default = _loc2_;
-       }
-       function SetDefault()
-       {
-          this.State = this.Default;
-          this.UpdateLRMarkers();
-       }
-       function onRollOver()
-       {
-          this._parent.DoSetFocus(this);
-       }
-       function onPress()
-       {
-          this._parent.DoPress(this,true);
-       }
-       function onRelease()
-       {
-          this._parent.DoRelease(this,true,true);
-       }
-       function onReleaseOutside()
-       {
-          this._parent.DoRelease(this,true,false);
-       }
-       function Update()
-       {
-          this.UpdateLRMarkers();
-       }
-       function ShowPrompt()
-       {
-          var _loc3_ = _root.PromptManager;
-          if(this._parent.BackScreen != "")
-          {
-             _loc3_.SetPrompt(_loc3_.CI_B,"$UI.Cancel",this._parent.myListener.onPromptClick,100,100);
-          }
-          if(this.Names.length > 1)
-          {
-             _loc3_.SetPrompt(_loc3_.CI_Interact,"$UI.Cycle",this._parent.myListener.onPromptClick,100,100);
-          }
-       }
-       function UpdateLRMarkersReal()
-       {
-          this.ItemText.text = this.Names[this.State];
-          if(this.State > 0)
-          {
-             this.LeftClicker._visible = true;
-          }
-          else
-          {
-             this.LeftClicker._visible = false;
-          }
-          if(this.State < this.Names.length - 1)
-          {
-             this.RightClicker._visible = true;
-          }
-          else
-          {
-             this.RightClicker._visible = false;
-          }
-          if(this.UsesSubtitleSizeStorage())
-          {
-             this.WriteSubtitleSizeState();
-          }
-          else
-          {
-             flash.external.ExternalInterface.call("FE_Set" + this.GameVariable,this.State,this.Names[this.State]);
-          }
-       }
-       function UpdateLRMarkers()
-       {
-          this.UpdateLRMarkersReal();
-       }
-       function Increment()
-       {
-          if(this.State < this.Names.length - 1)
-          {
-             this.State += 1;
-             this.UpdateLRMarkers();
-             flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Forward");
-          }
-       }
-       function Decrement()
-       {
-          if(this.State > 0)
-          {
-             this.State -= 1;
-             this.UpdateLRMarkers();
-             flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Back");
-          }
-       }
-       function HasAction()
-       {
-          return false;
-       }
-       function Cycle()
-       {
-          if(this.Names.length == 1)
-          {
-             return undefined;
-          }
-          this.State += 1;
-          if(this.State >= this.Names.length)
-          {
-             this.State = 0;
-          }
-          this.UpdateLRMarkers();
-          flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Forward");
-       }
-       function RunAction(bMouse)
-       {
-          if(this.Names.length < 3)
-          {
-             this.Cycle();
-          }
-          else if(bMouse)
-          {
-             if(this._xmouse < 0)
-             {
-                this.Decrement();
-             }
-             else
-             {
-                this.Increment();
-             }
-          }
-          else
-          {
-             this.Cycle();
-          }
-       }
-       function IsListButton()
-       {
-          return false;
-       }
-    }
-    """;
+    public const string PauseListItem = PauseRuntimeScaleListItem;
 
     public const string PauseAudioFrame1 = """
     function CancelScreen()
