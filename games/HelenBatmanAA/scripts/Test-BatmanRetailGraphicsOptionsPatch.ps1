@@ -64,6 +64,45 @@ function Get-DefineSpriteNodeOuterXml {
     return $Nodes[0].OuterXml
 }
 
+function Get-ActionScriptFunctionText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptText,
+        [Parameter(Mandatory = $true)]
+        [string]$FunctionName
+    )
+
+    $FunctionToken = "function $FunctionName("
+    $FunctionIndex = $ScriptText.IndexOf($FunctionToken, [System.StringComparison]::Ordinal)
+    if ($FunctionIndex -lt 0) {
+        throw "ActionScript function '$FunctionName' was not found."
+    }
+
+    $BraceStartIndex = $ScriptText.IndexOf('{', $FunctionIndex)
+    if ($BraceStartIndex -lt 0) {
+        throw "ActionScript function '$FunctionName' is missing an opening brace."
+    }
+
+    $Depth = 1
+    $Cursor = $BraceStartIndex + 1
+    while ($Cursor -lt $ScriptText.Length -and $Depth -gt 0) {
+        $CurrentCharacter = $ScriptText[$Cursor]
+        if ($CurrentCharacter -eq '{') {
+            $Depth++
+        } elseif ($CurrentCharacter -eq '}') {
+            $Depth--
+        }
+
+        $Cursor++
+    }
+
+    if ($Depth -ne 0) {
+        throw "ActionScript function '$FunctionName' is missing a closing brace."
+    }
+
+    return $ScriptText.Substring($FunctionIndex, $Cursor - $FunctionIndex)
+}
+
 if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
     $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 } else {
@@ -98,15 +137,19 @@ $ExpectedTokens = @(
     'Graphics Options',
     'ScreenOptionsGraphics',
     'Helen_GetInt',
-    'Helen_SetInt',
-    'Helen_RunCommand',
-    'applyBatmanGraphicsDraft',
+    'Helen_Log',
+    'FE_RunCommand',
+    'gfx_apply:',
     'this.BindFixedRow(this.Screen.GraphicsRow1,"Fullscreen");',
     'this.BindFixedRow(this.Screen.GraphicsRow15,"ApplyChanges");',
     'this.RefreshRowClip(this.Screen.GraphicsRow15,"ApplyChanges");',
     'return new Array("Windowed","Fullscreen");',
     'this.AddItem(GraphicsRow1,14,1,-1,-1);',
-    'this.AddItem(GraphicsRow15,13,0,-1,-1);'
+    'this.AddItem(GraphicsRow15,13,0,-1,-1);',
+    'this.LogExitState("HandleRowAction row=" + rowName + " promptOpen=" + this.IsExitPromptOpen() + " pending=" + this.IsExitTransitionPending());',
+    'this.LogExitState("HandleRowAction apply row");',
+    'this.LogDraftSnapshot("ApplyChanges before-native");',
+    'this.LogDraftSnapshot("ApplyChanges after-reload");'
 )
 
 $ForbiddenTokens = @(
@@ -120,6 +163,8 @@ $ForbiddenTokens = @(
     'Helen_BatmanGraphicsGetInt',
     'Helen_BatmanGraphicsSetInt',
     'Helen_BatmanGraphicsApplyDraft',
+    'Helen_SetInt',
+    'Helen_ApplyBatmanGraphicsDraft',
     'this.WindowStartIndex = 0;',
     'this.VisibleRowCount = 5;',
     'this.VisibleRows = new Array();',
@@ -155,6 +200,8 @@ $ExpectedFixedRowClipPaths = @(
 )
 
 $RequiredRowClipTokens = @(
+    '_parent.GraphicsController.LogExitState("Row.RunAction row=" + this.RowName + " mouse=" + bMouse + " enabled=" + this.IsEnabled() + " interactive=" + this.IsInteractiveRow() + " apply=" + this.IsApplyRow());',
+    '_parent.GraphicsController.LogExitState("Row.RunAction dispatch-apply row=" + this.RowName);',
     '_parent.GraphicsController.HandleRowAction(this.RowName);',
     '_parent.GraphicsController.IncrementRow(this.RowName);',
     '_parent.GraphicsController.DecrementRow(this.RowName);',
@@ -351,6 +398,44 @@ if ($GraphicsScreenDirectories.Count -ne 1) {
 }
 
 $GraphicsScreenExportRoot = $GraphicsScreenDirectories[0].FullName
+$GraphicsScreenScriptPath = Join-Path $GraphicsScreenExportRoot 'frame_1\DoAction.as'
+if (-not (Test-Path -LiteralPath $GraphicsScreenScriptPath)) {
+    throw "Expected exported retail graphics screen script was not found: $GraphicsScreenScriptPath"
+}
+
+$GraphicsScreenScript = Get-Content -LiteralPath $GraphicsScreenScriptPath -Raw
+$SetDraftRowStateFunction = Get-ActionScriptFunctionText -ScriptText $GraphicsScreenScript -FunctionName 'SetDraftRowState'
+if ($SetDraftRowStateFunction.IndexOf('Helen_SetInt', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Retail-patched SetDraftRowState must not call Helen_SetInt.'
+}
+
+if ($SetDraftRowStateFunction.IndexOf('this.LoadDraftValues();', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Retail-patched SetDraftRowState must not reload draft values from disk.'
+}
+
+$ApplyChangesFunction = Get-ActionScriptFunctionText -ScriptText $GraphicsScreenScript -FunctionName 'ApplyChanges'
+foreach ($RequiredApplyChangesToken in @(
+    'flash.external.ExternalInterface.call("FE_RunCommand",',
+    'gfx_apply:',
+    'this.LoadDraftValues();',
+    'this.LogDraftSnapshot("ApplyChanges after-reload");',
+    'this.CaptureInitialState();',
+    'this.LogDraftSnapshot("ApplyChanges after-capture");',
+    'this.RefreshFocusedRow();'
+)) {
+    if ($ApplyChangesFunction.IndexOf($RequiredApplyChangesToken, [System.StringComparison]::Ordinal) -lt 0) {
+        throw "Retail-patched ApplyChanges is missing required FE-carrier token: $RequiredApplyChangesToken"
+    }
+}
+
+foreach ($ForbiddenApplyChangesToken in @(
+    'Helen_ApplyBatmanGraphicsDraft',
+    'ReturnFromScreen()'
+)) {
+    if ($ApplyChangesFunction.IndexOf($ForbiddenApplyChangesToken, [System.StringComparison]::Ordinal) -ge 0) {
+        throw "Retail-patched ApplyChanges still contains forbidden token: $ForbiddenApplyChangesToken"
+    }
+}
 
 foreach ($ExpectedFixedRowClipPath in $ExpectedFixedRowClipPaths) {
     $ResolvedFixedRowClipPath = Join-Path $GraphicsScreenExportRoot $ExpectedFixedRowClipPath

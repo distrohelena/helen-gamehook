@@ -91,6 +91,18 @@
                          "configKey":  "stereo"
                      },
                      {
+                         "id":  "graphicsRunLoadDraft",
+                         "externalName":  "Helen_RunCommand",
+                         "mode":  "run-command",
+                         "command":  "loadBatmanGraphicsDraftIntoConfig"
+                     },
+                     {
+                         "id":  "graphicsRunApplyDraft",
+                         "externalName":  "Helen_RunCommand",
+                         "mode":  "run-command",
+                         "command":  "applyBatmanGraphicsDraft"
+                     },
+                     {
                          "id":  "graphicsSetVsync",
                          "externalName":  "Helen_SetInt",
                          "mode":  "set-int",
@@ -169,12 +181,6 @@
                          "externalName":  "Helen_SetInt",
                          "mode":  "set-int",
                          "configKey":  "stereo"
-                     },
-                     {
-                         "id":  "graphicsApplyDraft",
-                         "externalName":  "Helen_RunCommand",
-                         "mode":  "run-command",
-                         "command":  "applyBatmanGraphicsDraft"
                      }
                  ]
 }

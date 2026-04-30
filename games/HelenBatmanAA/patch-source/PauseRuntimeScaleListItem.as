@@ -30,6 +30,15 @@ class rs.ui.ListItem extends MovieClip
       return int(InValue);
    }
 
+   function NormalizeBoolState(InValue, DefaultValue)
+   {
+      if(InValue == undefined)
+      {
+         return DefaultValue;
+      }
+      return InValue != 0 ? 1 : 0;
+   }
+
    function GetSubtitleDefaultState()
    {
       return 1;
@@ -83,6 +92,42 @@ class rs.ui.ListItem extends MovieClip
    function WriteSubtitleSizeState()
    {
       flash.external.ExternalInterface.call("FE_SetControlType",this.MapSubtitleStateToStoredCode(this.State),"");
+      this.ApplySubtitleSizeRuntime();
+   }
+
+   function GetSubtitleSizeBurstCount()
+   {
+      switch(this.State)
+      {
+         case 0:
+            return 2;
+         case 2:
+            return 6;
+         default:
+            return 4;
+      }
+   }
+
+   function ApplySubtitleSizeRuntime()
+   {
+      if(!this.UsesSubtitleSizeStorage())
+      {
+         return undefined;
+      }
+      var _loc2_ = flash.external.ExternalInterface.call("IsShowingSubtitles");
+      if(_loc2_ == undefined)
+      {
+         _loc2_ = 1;
+      }
+      _loc2_ = this.NormalizeBoolState(_loc2_,1);
+      var _loc3_ = this.GetSubtitleSizeBurstCount();
+      var _loc4_ = 0;
+      var _loc5_ = 1 - _loc2_;
+      while(_loc4_ < _loc3_)
+      {
+         flash.external.ExternalInterface.call("FE_SetSubtitles",_loc4_ % 2 == 0 ? _loc5_ : _loc2_,"");
+         _loc4_ = _loc4_ + 1;
+      }
    }
 
    function Init()

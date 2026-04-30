@@ -217,6 +217,7 @@ $ExpectedGraphicsShellPlacements = @(
 )
 
 $RequiredFixedRowControllerTokens = @(
+    'flash.external.ExternalInterface.call("Helen_RunCommand","loadBatmanGraphicsDraftIntoConfig");',
     'this.BindFixedRow(this.Screen.GraphicsRow1,"Fullscreen");',
     'this.BindFixedRow(this.Screen.GraphicsRow2,"Resolution");',
     'this.BindFixedRow(this.Screen.GraphicsRow3,"VSync");',
@@ -234,7 +235,18 @@ $RequiredFixedRowControllerTokens = @(
     'this.BindFixedRow(this.Screen.GraphicsRow15,"ApplyChanges");',
     'flash.external.ExternalInterface.call("Helen_GetInt",key)',
     'flash.external.ExternalInterface.call("Helen_SetInt"',
-    'flash.external.ExternalInterface.call("Helen_RunCommand","applyBatmanGraphicsDraft")',
+    'flash.external.ExternalInterface.call("Helen_ApplyBatmanGraphicsDraft")',
+    'this.LogExitState("HandleRowAction row=" + rowName + " promptOpen=" + this.IsExitPromptOpen() + " pending=" + this.IsExitTransitionPending());',
+    'this.LogExitState("HandleRowAction apply row");',
+    'this.LogDraftSnapshot("ApplyChanges before-native");',
+    'this.LogDraftSnapshot("ApplyChanges after-reload");',
+    '_loc2_.ApplyDetailPresetToDraft = function(detailLevel)',
+    '_loc2_.DeriveDetailLevelFromDraft = function()',
+    'flash.external.ExternalInterface.call("Helen_SetInt",_loc4_,nextState);',
+    '_loc2_.IsExitPromptOpen = function()',
+    '_loc2_.OpenExitPrompt = function()',
+    '_loc2_.ClearExitPrompt = function()',
+    'if(this.IsExitPromptOpen())',
     'HasUnsavedChanges',
     'return new Array("Windowed","Fullscreen");',
     '_root.TriggerEvent("Options");',
@@ -505,10 +517,18 @@ if (-not (Test-Path -LiteralPath $GraphicsExitPromptScriptPath)) {
     throw "Expected graphics exit prompt frame script was not found: $GraphicsExitPromptScriptPath"
 }
 
+$GraphicsExitPromptOutroScriptPath = Join-Path $ExportScriptsRoot 'DefineSprite_601_GraphicsExitPrompt\frame_23\DoAction.as'
+if (-not (Test-Path -LiteralPath $GraphicsExitPromptOutroScriptPath)) {
+    throw "Expected graphics exit prompt outro frame script was not found: $GraphicsExitPromptOutroScriptPath"
+}
+
 $PromptButtonScriptPaths = @(
-    (Join-Path $ExportScriptsRoot 'DefineSprite_601_GraphicsExitPrompt\frame_1\PlaceObject2_117_GenericButton_11\CLIPACTIONRECORD onClipEvent(load).as'),
     (Join-Path $ExportScriptsRoot 'DefineSprite_601_GraphicsExitPrompt\frame_1\PlaceObject2_117_GenericButton_13\CLIPACTIONRECORD onClipEvent(load).as'),
     (Join-Path $ExportScriptsRoot 'DefineSprite_601_GraphicsExitPrompt\frame_1\PlaceObject2_117_GenericButton_15\CLIPACTIONRECORD onClipEvent(load).as')
+)
+
+$ForbiddenPromptButtonScriptPaths = @(
+    (Join-Path $ExportScriptsRoot 'DefineSprite_601_GraphicsExitPrompt\frame_1\PlaceObject2_117_GenericButton_11\CLIPACTIONRECORD onClipEvent(load).as')
 )
 
 foreach ($PromptButtonScriptPath in $PromptButtonScriptPaths) {
@@ -517,16 +537,48 @@ foreach ($PromptButtonScriptPath in $PromptButtonScriptPaths) {
     }
 }
 
+foreach ($ForbiddenPromptButtonScriptPath in $ForbiddenPromptButtonScriptPaths) {
+    if (Test-Path -LiteralPath $ForbiddenPromptButtonScriptPath) {
+        throw "Graphics exit prompt should not expose a hidden third button script: $ForbiddenPromptButtonScriptPath"
+    }
+}
+
 $GraphicsExitPromptScript = Get-Content -LiteralPath $GraphicsExitPromptScriptPath -Raw
-$ExpectedPromptAddItemLines = @(
-    'this.AddItem(Yes,2,1,-1,-1);',
-    'this.AddItem(Apply,0,2,-1,-1);',
-    'this.AddItem(No,1,0,-1,-1);'
+$GraphicsExitPromptOutroScript = Get-Content -LiteralPath $GraphicsExitPromptOutroScriptPath -Raw
+$ExpectedPromptFrame1Tokens = @(
+    'Response("cancel");',
+    'this.PendingResponse = undefined;',
+    'gotoAndStop("out");',
+    'play();',
+    'this.AddItem(Yes,1,1,-1,-1);',
+    'this.AddItem(No,0,0,-1,-1);'
 )
 
-foreach ($ExpectedPromptLine in $ExpectedPromptAddItemLines) {
-    if ($GraphicsExitPromptScript.IndexOf($ExpectedPromptLine, [System.StringComparison]::Ordinal) -lt 0) {
-        throw "Graphics exit prompt script is missing required AddItem line: $ExpectedPromptLine"
+foreach ($ExpectedPromptFrame1Token in $ExpectedPromptFrame1Tokens) {
+    if ($GraphicsExitPromptScript.IndexOf($ExpectedPromptFrame1Token, [System.StringComparison]::Ordinal) -lt 0) {
+        throw "Graphics exit prompt frame_1 script is missing required token: $ExpectedPromptFrame1Token"
+    }
+}
+
+foreach ($ExpectedPromptFrame23Token in @(
+    'this.GraphicsController.OnExitPromptResponse(this.PendingResponse);',
+    'this.DestroyScreen();'
+)) {
+    if ($GraphicsExitPromptOutroScript.IndexOf($ExpectedPromptFrame23Token, [System.StringComparison]::Ordinal) -lt 0) {
+        throw "Graphics exit prompt frame_23 script is missing required token: $ExpectedPromptFrame23Token"
+    }
+}
+
+if ($GraphicsExitPromptScript.IndexOf('this._parent.GraphicsController.OpenExitPrompt();', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Graphics exit prompt frame must not directly open the modal input block.'
+}
+
+foreach ($ForbiddenPromptFocusToken in @(
+    'this.AddItem(Yes,2,1,-1,-1);',
+    'this.AddItem(No,1,0,-1,-1);'
+)) {
+    if ($GraphicsExitPromptScript.IndexOf($ForbiddenPromptFocusToken, [System.StringComparison]::Ordinal) -ge 0) {
+        throw "Graphics exit prompt still contains invalid two-button focus wiring: $ForbiddenPromptFocusToken"
     }
 }
 
@@ -534,7 +586,7 @@ $PromptButtonContents = ($PromptButtonScriptPaths | ForEach-Object {
     Get-Content -LiteralPath $_ -Raw
 }) -join [Environment]::NewLine
 
-foreach ($ExpectedPromptToken in @('Response("apply")', 'Response("discard")', 'Response("cancel")')) {
+foreach ($ExpectedPromptToken in @('Response("apply")', 'Response("discard")')) {
     if ($PromptButtonContents.IndexOf($ExpectedPromptToken, [System.StringComparison]::Ordinal) -lt 0) {
         throw "Graphics exit prompt button wiring is missing token: $ExpectedPromptToken"
     }
@@ -582,6 +634,8 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedGraphicsRowClipPaths.Count; $RowIndex
         '_parent.GraphicsController.GetRowValues(rowName);',
         'this.Names = _parent.GraphicsController.GetRowValues(this.RowName);',
         'this.State = _parent.GraphicsController.GetRowState(this.RowName);',
+        '_parent.GraphicsController.LogExitState("Row.RunAction row=" + this.RowName + " mouse=" + bMouse + " enabled=" + this.IsEnabled() + " interactive=" + this.IsInteractiveRow() + " apply=" + this.IsApplyRow());',
+        '_parent.GraphicsController.LogExitState("Row.RunAction dispatch-apply row=" + this.RowName);',
         '_parent.GraphicsController.HandleRowAction(this.RowName);',
         '_parent.GraphicsController.IncrementRow(this.RowName);',
         '_parent.GraphicsController.DecrementRow(this.RowName);',
@@ -679,6 +733,15 @@ foreach ($ForbiddenFullscreenDisplayToken in @(
     if ($GraphicsScreenScript.IndexOf($ForbiddenFullscreenDisplayToken, [System.StringComparison]::Ordinal) -ge 0) {
         throw "Graphics screen script still contains legacy fullscreen display token: $ForbiddenFullscreenDisplayToken"
     }
+}
+
+if ($GraphicsScreenScript.IndexOf('this.ShowRestartRequiredPrompt();', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Apply Changes must not open a modal restart prompt because it blocks Graphics Options input after applying.'
+}
+
+if ($GraphicsScreenScript.IndexOf('if(this.ApplyChanges())', [System.StringComparison]::Ordinal) -lt 0 -or
+    $GraphicsScreenScript.IndexOf('this.Screen.ReturnFromScreen();', [System.StringComparison]::Ordinal) -lt 0) {
+    throw 'Unsaved-changes prompt Apply must persist changes and then return from Graphics Options.'
 }
 
 foreach ($ForbiddenScrollControllerToken in $ForbiddenScrollControllerTokens) {

@@ -3,7 +3,7 @@
     "executable":  "ShippingPC-BmGame.exe",
     "match":  {
                   "fileSize":  38758728,
-                  "sha256":  "4DAC1F5E2AC6710B7378FDCE74601F616F4753E3756CB5FDA63C7519CC2EB028"
+                  "sha256":  "9E23F9D4E0E5D81A6B8DFA7937A6E6E7FB6953EFFA607105C8B0E5DED4C72C19"
               },
     "startupCommands":  [
                             "loadBatmanGraphicsDraftIntoConfig"

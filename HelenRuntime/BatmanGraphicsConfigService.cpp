@@ -1,5 +1,6 @@
 #include <HelenHook/BatmanGraphicsConfigService.h>
 
+#include <HelenHook/Log.h>
 #include <HelenHook/CommandDispatcher.h>
 
 #include <array>
@@ -391,6 +392,97 @@ namespace
     }
 
     /**
+     * @brief Ensures one INI assignment exists by updating it when present or appending it when missing.
+     * @param lines Loaded INI file lines that should be updated in place.
+     * @param section_name Exact section name that owns the target value.
+     * @param key_name Exact key name that should be updated or inserted.
+     * @param encoded_value Replacement value text that should be written.
+     * @return True when the section exists and is updated, or when a new section/key is appended.
+     */
+    bool UpsertIniValue(
+        std::vector<std::string>& lines,
+        std::string_view section_name,
+        std::string_view key_name,
+        std::string_view encoded_value)
+    {
+        if (UpdateIniValue(lines, section_name, key_name, encoded_value))
+        {
+            return true;
+        }
+
+        const std::string section_header = std::string("[") + std::string(section_name) + "]";
+        bool in_target_section = false;
+        bool section_found = false;
+        std::size_t insert_index = lines.size();
+
+        for (std::size_t index = 0; index < lines.size(); ++index)
+        {
+            const std::string trimmed = TrimAscii(lines[index]);
+            if (trimmed.empty() || trimmed[0] == ';')
+            {
+                continue;
+            }
+
+            if (trimmed.front() == '[')
+            {
+                if (in_target_section)
+                {
+                    insert_index = index;
+                    in_target_section = false;
+                }
+
+                if (IsIniSectionDeclaration(trimmed, section_name))
+                {
+                    section_found = true;
+                    in_target_section = true;
+                }
+
+                continue;
+            }
+
+            if (!in_target_section)
+            {
+                continue;
+            }
+
+            std::string key;
+            std::string value;
+            if (!TrySplitIniAssignment(trimmed, key, value))
+            {
+                continue;
+            }
+
+            if (key == key_name)
+            {
+                lines[index] = std::string(key_name) + "=" + std::string(encoded_value);
+                return true;
+            }
+        }
+
+        if (in_target_section)
+        {
+            section_found = true;
+            insert_index = lines.size();
+        }
+
+        const std::string new_line = std::string(key_name) + "=" + std::string(encoded_value);
+        if (section_found)
+        {
+            lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(insert_index), new_line);
+            return true;
+        }
+
+        if (!lines.empty() && !TrimAscii(lines.back()).empty())
+        {
+            lines.push_back("");
+        }
+
+        lines.push_back(section_header);
+        lines.push_back(new_line);
+        return true;
+    }
+
+    /**
      * @brief Parses one strict integer setting from trimmed INI text.
      * @param text Trimmed INI value that should encode an integer.
      * @param value Receives the parsed integer on success.
@@ -533,6 +625,169 @@ namespace
         if (normalized_value == 5 || normalized_value == 6)
         {
             encoded_value = 16;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @brief Maps one normalized subtitle-size state into the expected `Engine.HUD.ConsoleFontSize` INI value.
+     * @param subtitle_size_state Normalized subtitle option from the config store.
+     * @param encoded_value Receives the encoded font-size integer for `Engine.HUD.ConsoleFontSize`.
+     * @return True when `subtitle_size_state` is a supported option; otherwise false.
+     */
+    bool TryMapSubtitleSizeStateToFontSize(int subtitle_size_state, int& encoded_value)
+    {
+        if (subtitle_size_state == 0)
+        {
+            encoded_value = 5;
+            return true;
+        }
+
+        if (subtitle_size_state == 1)
+        {
+            encoded_value = 6;
+            return true;
+        }
+
+        if (subtitle_size_state == 2)
+        {
+            encoded_value = 7;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @brief Maps one persisted `Engine.HUD.ConsoleFontSize` integer to a normalized subtitle-size state.
+     * @param encoded_value Parsed font-size integer from INI.
+     * @param state Receives the normalized subtitle option value on success.
+     * @return True when `encoded_value` is a supported value; otherwise false.
+     */
+    bool TryMapSubtitleSizeFontSizeToState(int encoded_value, int& state)
+    {
+        if (encoded_value == 5)
+        {
+            state = 0;
+            return true;
+        }
+
+        if (encoded_value == 6)
+        {
+            state = 1;
+            return true;
+        }
+
+        if (encoded_value == 7)
+        {
+            state = 2;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @brief Reads one persisted subtitle-size state from INI file lines.
+     * @param lines INI lines already loaded from disk.
+     * @param state Receives the mapped subtitle state on success.
+     * @return True when `Engine.HUD.ConsoleFontSize` is present and maps to a supported state; otherwise false.
+     */
+    bool TryReadSubtitleSizeStateFromIniLines(const std::vector<std::string>& lines, int& state)
+    {
+        const std::optional<std::string> value = TryReadIniValue(lines, "Engine.HUD", "ConsoleFontSize");
+        if (!value.has_value())
+        {
+            return false;
+        }
+
+        int encoded_value = 0;
+        if (!TryParseIntValue(*value, encoded_value))
+        {
+            return false;
+        }
+
+        return TryMapSubtitleSizeFontSizeToState(encoded_value, state);
+    }
+
+    /**
+     * @brief Tries to resolve the active subtitle INI file path that already stores `Engine.HUD.ConsoleFontSize`.
+     * @param engine_ini_path Existing `BmEngine.ini` path used by this service.
+     * @param resolved_path Receives the resolved subtitle INI path when this returns true.
+     * @param lines Receives the loaded lines from the resolved path.
+     * @return True when one candidate file exists and contains `Engine.HUD.ConsoleFontSize`.
+     */
+    bool TryReadSubtitleIniLinesWithFontSize(
+        const std::filesystem::path& engine_ini_path,
+        std::filesystem::path& resolved_path,
+        std::vector<std::string>& lines)
+    {
+        const std::filesystem::path game_ini_path = engine_ini_path.parent_path() / "BmGame.ini";
+
+        const std::optional<std::vector<std::string>> engine_lines = TryReadAllLines(engine_ini_path);
+        if (engine_lines.has_value())
+        {
+            if (TryReadIniValue(*engine_lines, "Engine.HUD", "ConsoleFontSize").has_value())
+            {
+                resolved_path = engine_ini_path;
+                lines = *engine_lines;
+                return true;
+            }
+        }
+
+        const std::optional<std::vector<std::string>> game_lines = TryReadAllLines(game_ini_path);
+        if (game_lines.has_value())
+        {
+            if (TryReadIniValue(*game_lines, "Engine.HUD", "ConsoleFontSize").has_value())
+            {
+                resolved_path = game_ini_path;
+                lines = *game_lines;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @brief Resolves the preferred subtitle INI target for writes.
+     *
+     * This function prefers the file that already stores `Engine.HUD.ConsoleFontSize`.
+     * When no existing value is found, it prefers `BmGame.ini` and then falls back to `BmEngine.ini`.
+     *
+     * @param engine_ini_path Existing `BmEngine.ini` path used by this service.
+     * @param resolved_path Receives the resolved subtitle INI path.
+     * @return True when one path can be produced.
+     */
+    bool TryResolveSubtitleIniPathForWrite(
+        const std::filesystem::path& engine_ini_path,
+        std::filesystem::path& resolved_path)
+    {
+        std::vector<std::string> lines;
+        if (TryReadSubtitleIniLinesWithFontSize(engine_ini_path, resolved_path, lines))
+        {
+            return true;
+        }
+
+        const std::filesystem::path game_ini_path = engine_ini_path.parent_path() / "BmGame.ini";
+        std::error_code error;
+
+        if (std::filesystem::exists(game_ini_path, error))
+        {
+            resolved_path = game_ini_path;
+            return true;
+        }
+
+        if (error)
+        {
+            return false;
+        }
+
+        if (std::filesystem::exists(engine_ini_path, error))
+        {
+            resolved_path = engine_ini_path;
             return true;
         }
 
@@ -823,7 +1078,7 @@ namespace
 namespace helen
 {
     /**
-     * @brief Binds the service to one concrete `BmEngine.ini` path.
+     * @brief Binds the service to one concrete `BmEngine.ini` anchor path.
      * @param ini_path Absolute or relative path to the Batman user engine INI file.
      * @throws std::invalid_argument Thrown when `ini_path` is empty.
      */
@@ -986,6 +1241,65 @@ namespace helen
     }
 
     /**
+     * @brief Writes one normalized subtitle-size config value back into the resolved subtitle INI file.
+     * @param dispatcher Config dispatcher that supplies `ui.subtitleSize`.
+     * @return True when dispatcher values can be read and `Engine.HUD.ConsoleFontSize` is persisted.
+     */
+    bool BatmanGraphicsConfigService::ApplySubtitleSizeFromDispatcher(const CommandDispatcher& dispatcher) const
+    {
+        int subtitle_size_state = 0;
+        if (!TryReadDispatcherValue(dispatcher, "ui.subtitleSize", subtitle_size_state))
+        {
+            Logf(L"[subtitle] Apply failed: missing ui.subtitleSize in dispatcher.");
+            return false;
+        }
+
+        int subtitle_font_size = 0;
+        if (!TryMapSubtitleSizeStateToFontSize(subtitle_size_state, subtitle_font_size))
+        {
+            Logf(L"[subtitle] Apply failed: unsupported ui.subtitleSize=%d.", subtitle_size_state);
+            return false;
+        }
+
+        std::filesystem::path subtitle_ini_path;
+        if (!TryResolveSubtitleIniPathForWrite(ini_path_, subtitle_ini_path))
+        {
+            Logf(L"[subtitle] Apply failed: unable to resolve subtitle INI path from %ls or %ls/BmGame.ini.",
+                ini_path_.wstring().c_str(),
+                ini_path_.parent_path().wstring().c_str());
+            return false;
+        }
+
+        const std::optional<std::vector<std::string>> existing_lines = TryReadAllLines(subtitle_ini_path);
+        if (!existing_lines.has_value())
+        {
+            Logf(L"[subtitle] Apply failed: unable to read %ls before writing subtitle size.", subtitle_ini_path.wstring().c_str());
+            return false;
+        }
+
+        std::vector<std::string> lines = *existing_lines;
+        const std::string encoded_value = std::to_string(subtitle_font_size);
+        if (!UpsertIniValue(lines, "Engine.HUD", "ConsoleFontSize", encoded_value))
+        {
+            Logf(L"[subtitle] Apply failed: could not write Engine.HUD.ConsoleFontSize into %ls.", subtitle_ini_path.wstring().c_str());
+            return false;
+        }
+
+        if (!WriteAllLines(subtitle_ini_path, lines))
+        {
+            Logf(L"[subtitle] Apply failed: unable to write %ls.", subtitle_ini_path.wstring().c_str());
+            return false;
+        }
+
+        Logf(L"[subtitle] Applied size=%hs from ui.subtitleSize=%d to Engine.HUD.ConsoleFontSize=%hs in %ls.",
+            encoded_value.c_str(),
+            subtitle_size_state,
+            std::to_string(subtitle_font_size).c_str(),
+            subtitle_ini_path.wstring().c_str());
+        return true;
+    }
+
+    /**
      * @brief Recomputes the derived `detailLevel` draft state from the current individual detail toggles.
      * @param dispatcher Config dispatcher that stores the current Batman graphics draft.
      * @return True when the required draft keys exist and the derived `detailLevel` is updated successfully; otherwise false.
@@ -1032,11 +1346,52 @@ namespace helen
     }
 
     /**
-     * @brief Returns the INI path used by this service.
-     * @return Bound `BmEngine.ini` path.
+     * @brief Returns the `BmEngine.ini` anchor path used by this service.
+     * @return Bound `BmEngine.ini` anchor path.
      */
     const std::filesystem::path& BatmanGraphicsConfigService::GetIniPath() const noexcept
     {
         return ini_path_;
+    }
+
+    /**
+     * @brief Loads persisted subtitle size from INI and writes it into `ui.subtitleSize`.
+     * @param dispatcher Config dispatcher that owns `ui.subtitleSize`.
+     * @return True when INI read and conversion succeed, and dispatcher value is updated; otherwise false.
+     */
+    bool BatmanGraphicsConfigService::LoadSubtitleSizeIntoDispatcher(CommandDispatcher& dispatcher) const
+    {
+        std::filesystem::path subtitle_ini_path;
+        std::vector<std::string> lines;
+        if (!TryReadSubtitleIniLinesWithFontSize(ini_path_, subtitle_ini_path, lines))
+        {
+            const std::filesystem::path game_ini_path = ini_path_.parent_path() / "BmGame.ini";
+            Logf(
+                L"[subtitle] Load failed: missing or unsupported Engine.HUD.ConsoleFontSize in %ls or %ls.",
+                ini_path_.wstring().c_str(),
+                game_ini_path.wstring().c_str());
+            return false;
+        }
+
+        int subtitle_size_state = 0;
+        if (!TryReadSubtitleSizeStateFromIniLines(lines, subtitle_size_state))
+        {
+            Logf(L"[subtitle] Load failed: unsupported Engine.HUD.ConsoleFontSize in %ls.", subtitle_ini_path.wstring().c_str());
+            return false;
+        }
+
+        if (!TryWriteDispatcherValue(dispatcher, "ui.subtitleSize", subtitle_size_state))
+        {
+            Logf(L"[subtitle] Load failed: missing ui.subtitleSize in dispatcher.");
+            return false;
+        }
+
+        const int encoded_value = subtitle_size_state == 0 ? 5 : (subtitle_size_state == 1 ? 6 : 7);
+        Logf(
+            L"[subtitle] Loaded ui.subtitleSize=%d from Engine.HUD.ConsoleFontSize=%d in %ls.",
+            subtitle_size_state,
+            encoded_value,
+            subtitle_ini_path.wstring().c_str());
+        return true;
     }
 }

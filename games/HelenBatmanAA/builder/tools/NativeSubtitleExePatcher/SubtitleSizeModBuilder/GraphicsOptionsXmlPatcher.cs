@@ -84,11 +84,6 @@ internal static class GraphicsOptionsXmlPatcher
     private const int PromptYesButtonDepth = 15;
 
     /// <summary>
-    /// Target depth used by the new graphics prompt "Apply" button timeline.
-    /// </summary>
-    private const int PromptApplyButtonDepth = 11;
-
-    /// <summary>
     /// Character id for the shared list-row template used by option rows.
     /// </summary>
     private const int ListTemplateCharacterId = 290;
@@ -1042,57 +1037,14 @@ internal static class GraphicsOptionsXmlPatcher
     }
 
     /// <summary>
-    /// Rebuilds the cloned prompt sprite to include a third interactive button at depth 11.
+    /// Rebuilds the cloned prompt sprite to use the original two-button layout with graphics-specific instance names.
     /// </summary>
     /// <param name="graphicsExitPromptSprite">The cloned prompt sprite that will become id 601.</param>
     private static void PatchGraphicsExitPromptSprite(XmlElement graphicsExitPromptSprite)
     {
         XmlElement subTags = GetSingleElement(graphicsExitPromptSprite, "subTags");
-        List<XmlElement> originalChildren = subTags.ChildNodes.OfType<XmlElement>().ToList();
-
-        ClonePromptDepthTimeline(subTags, originalChildren, PromptNoButtonDepth, PromptApplyButtonDepth, "Apply");
         RenamePromptButtonInstance(subTags, PromptNoButtonDepth, "No");
         RenamePromptButtonInstance(subTags, PromptYesButtonDepth, "Yes");
-        CenterApplyPromptButton(subTags);
-    }
-
-    /// <summary>
-    /// Clones every timeline tag at a source depth to a target depth so prompt button behavior remains frame-correct.
-    /// </summary>
-    /// <param name="subTags">The prompt timeline node collection.</param>
-    /// <param name="originalChildren">Snapshot of the original timeline nodes.</param>
-    /// <param name="sourceDepth">The source button depth.</param>
-    /// <param name="targetDepth">The target button depth for the clone.</param>
-    /// <param name="targetInstanceName">The target instance name for cloned button placements.</param>
-    private static void ClonePromptDepthTimeline(
-        XmlElement subTags,
-        IEnumerable<XmlElement> originalChildren,
-        int sourceDepth,
-        int targetDepth,
-        string targetInstanceName)
-    {
-        foreach (XmlElement child in originalChildren)
-        {
-            if (!IsDepthTag(child, sourceDepth))
-            {
-                continue;
-            }
-
-            if (!IsTimelineDepthTagType(child))
-            {
-                continue;
-            }
-
-            XmlElement clone = (XmlElement)child.CloneNode(deep: true);
-            SetAttribute(clone, "depth", targetDepth.ToString());
-
-            if (GetAttribute(clone, "type") == "PlaceObject2Tag" && GetAttribute(clone, "characterId") == "117")
-            {
-                SetAttribute(clone, "name", targetInstanceName);
-            }
-
-            child.ParentNode!.InsertAfter(clone, child);
-        }
     }
 
     /// <summary>
@@ -1111,27 +1063,6 @@ internal static class GraphicsOptionsXmlPatcher
                 GetAttribute(node, "characterId") == "117");
 
         SetAttribute(initialPlacement, "name", instanceName);
-    }
-
-    /// <summary>
-    /// Places the cloned Apply button midway between the original Yes and No button positions.
-    /// </summary>
-    /// <param name="subTags">The prompt timeline node collection.</param>
-    private static void CenterApplyPromptButton(XmlElement subTags)
-    {
-        XmlElement noPlacement = FindInitialPromptButtonPlacement(subTags, PromptNoButtonDepth);
-        XmlElement yesPlacement = FindInitialPromptButtonPlacement(subTags, PromptYesButtonDepth);
-        XmlElement applyPlacement = FindInitialPromptButtonPlacement(subTags, PromptApplyButtonDepth);
-
-        XmlElement noMatrix = GetSingleElement(noPlacement, "matrix");
-        XmlElement yesMatrix = GetSingleElement(yesPlacement, "matrix");
-        XmlElement applyMatrix = GetSingleElement(applyPlacement, "matrix");
-
-        int noTranslateY = ReadRequiredTranslateY(noMatrix);
-        int yesTranslateY = ReadRequiredTranslateY(yesMatrix);
-        int centeredTranslateY = (noTranslateY + yesTranslateY) / 2;
-
-        SetTranslateY(applyMatrix, centeredTranslateY);
     }
 
     /// <summary>

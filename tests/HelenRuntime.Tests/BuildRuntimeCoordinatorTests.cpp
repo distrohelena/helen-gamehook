@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 
 namespace
@@ -135,6 +136,10 @@ namespace
         command.Id = "applySavedSubtitleSize";
         command.Name = "Apply Saved Subtitle Size";
 
+        helen::CommandStepDefinition load_step;
+        load_step.Kind = "load-batman-subtitle-size-into-config";
+        command.Steps.push_back(load_step);
+
         helen::CommandStepDefinition run_step;
         run_step.Kind = "run-command";
         run_step.CommandId = "applySubtitleSize";
@@ -197,6 +202,38 @@ namespace
             ("runtime-coordinator-" + std::to_string(process_id)) /
             "BmEngine.ini";
     }
+
+    /**
+     * @brief Returns the sibling `BmGame.ini` path that sits next to one `BmEngine.ini` path.
+     * @param engine_ini_path Absolute or relative `BmEngine.ini` path used by the graphics-config service.
+     * @return Sibling `BmGame.ini` path in the same directory as `engine_ini_path`.
+     */
+    std::filesystem::path GetSiblingBatmanGameIniPath(const std::filesystem::path& engine_ini_path)
+    {
+        return engine_ini_path.parent_path() / "BmGame.ini";
+    }
+
+    /**
+     * @brief Writes UTF-8 text to a test file, replacing any prior content.
+     * @param path Target file path that should receive the supplied text.
+     * @param text UTF-8 text content that should be written to disk.
+     */
+    void WriteAllText(const std::filesystem::path& path, const char* text)
+    {
+        std::filesystem::create_directories(path.parent_path());
+
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        if (!stream)
+        {
+            throw std::runtime_error("Failed to open the Batman subtitle INI fixture for writing.");
+        }
+
+        stream << text;
+        if (!stream)
+        {
+            throw std::runtime_error("Failed to write the Batman subtitle INI fixture.");
+        }
+    }
 }
 
 /**
@@ -212,17 +249,21 @@ void RunBuildRuntimeCoordinatorTests()
 
     const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
     const std::uintptr_t candidate_address = page_address + 64;
-    ConfigureStateBlock(candidate_address, 4101);
+    ConfigureStateBlock(candidate_address, 4103);
 
     helen::CommandDispatcher dispatcher;
     dispatcher.RegisterConfigInt("ui.subtitleSize", 1);
-    Expect(dispatcher.TrySetInt("ui.subtitleSize", 2), "Failed to seed the saved subtitle size config.");
+    Expect(dispatcher.TrySetInt("ui.subtitleSize", 0), "Failed to seed the saved subtitle size config.");
 
     helen::RuntimeValueStore runtime_values;
     Expect(runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the subtitle scale runtime slot.");
 
-    const std::filesystem::path unused_batman_ini_path = CreateTemporaryBatmanGraphicsIniPath();
-    helen::BatmanGraphicsConfigService graphics_config_service(unused_batman_ini_path);
+    const std::filesystem::path batman_engine_ini_path = CreateTemporaryBatmanGraphicsIniPath();
+    const std::filesystem::path batman_game_ini_path = GetSiblingBatmanGameIniPath(batman_engine_ini_path);
+    WriteAllText(batman_engine_ini_path, "[SystemSettings]\r\nFullscreen=False\r\n");
+    WriteAllText(batman_game_ini_path, "[Engine.HUD]\r\nConsoleFontSize=7\r\n");
+
+    helen::BatmanGraphicsConfigService graphics_config_service(batman_engine_ini_path);
     helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
     Expect(executor.RegisterCommand(CreateApplySubtitleSizeCommand("applySubtitleSize")), "Failed to register applySubtitleSize.");
     Expect(executor.RegisterCommand(CreateApplySavedSubtitleSizeCommand()), "Failed to register applySavedSubtitleSize.");
@@ -236,6 +277,9 @@ void RunBuildRuntimeCoordinatorTests()
     try
     {
         Expect(coordinator.Start(), "Build runtime coordinator failed to start.");
+
+        const std::optional<int> startup_mirror_value = dispatcher.TryGetInt("ui.subtitleSize");
+        Expect(startup_mirror_value.has_value() && *startup_mirror_value == 2, "Startup commands did not mirror the INI-backed subtitle size into config.");
 
         std::optional<double> slot_value = runtime_values.TryGetDouble("subtitle.scale");
         Expect(slot_value.has_value(), "Startup command removed the subtitle scale slot.");

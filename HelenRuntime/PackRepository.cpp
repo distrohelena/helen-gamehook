@@ -800,7 +800,17 @@ namespace
             return true;
         }
 
+        if (definition.Kind == "load-batman-subtitle-size-into-config")
+        {
+            return true;
+        }
+
         if (definition.Kind == "apply-batman-graphics-config")
+        {
+            return true;
+        }
+
+        if (definition.Kind == "apply-batman-subtitle-size-config")
         {
             return true;
         }

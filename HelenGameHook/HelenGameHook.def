@@ -7,6 +7,8 @@ EXPORTS
     HelenInitialize=_HelenInitialize@0
     HelenLogA=_HelenLogA@4
     Helen_Log=_HelenLogA@4
+    HelenApplyBatmanGraphicsDraftA=_HelenApplyBatmanGraphicsDraftA@0
+    Helen_ApplyBatmanGraphicsDraft=_HelenApplyBatmanGraphicsDraftA@0
     HelenRunCommandA=_HelenRunCommandA@4
     Helen_RunCommand=_HelenRunCommandA@4
     HelenSetConfigIntA=_HelenSetConfigIntA@8

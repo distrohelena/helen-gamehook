@@ -61,9 +61,10 @@ internal static class GraphicsOptionsAssetBuilder
     {
         ValidateInputs(paths);
         PrepareOutputDirectories(paths);
+        BatmanGraphicsIniBootstrapSnapshot bootstrapSnapshot = BatmanGraphicsIniBootstrapLoader.Load(paths.BatmanUserIniPath);
 
         CopyDirectory(paths.FrontendScriptsPath, paths.FrontendWorkingScriptsPath);
-        PatchFrontendScripts(paths.FrontendWorkingScriptsPath);
+        PatchFrontendScripts(paths.FrontendWorkingScriptsPath, bootstrapSnapshot);
         GraphicsOptionsXmlPatcher.Patch(paths.FrontendXmlPath, paths.FrontendPatchedXmlPath);
 
         RunProcess(paths.FfdecPath, "-xml2swf", paths.FrontendPatchedXmlPath, paths.FrontendStructuralGfxPath);
@@ -84,7 +85,8 @@ internal static class GraphicsOptionsAssetBuilder
     /// Applies graphics-options script overrides to a staged frontend script tree.
     /// </summary>
     /// <param name="scriptsRoot">The staged writable frontend script root.</param>
-    private static void PatchFrontendScripts(string scriptsRoot)
+    /// <param name="bootstrapSnapshot">The normalized graphics defaults injected into the frontend fallback reads.</param>
+    private static void PatchFrontendScripts(string scriptsRoot, BatmanGraphicsIniBootstrapSnapshot bootstrapSnapshot)
     {
         WriteAllText(
             Path.Combine(scriptsRoot, "ScreenOptionsGraphics.as"),
@@ -117,7 +119,7 @@ internal static class GraphicsOptionsAssetBuilder
 
         WriteAllText(
             Path.Combine(scriptsRoot, "DefineSprite_600_ScreenOptionsGraphics", "frame_1", "DoAction.as"),
-            GraphicsOptionsScriptTemplates.GraphicsOptionsFrame1);
+            GraphicsOptionsScriptTemplates.CreateGraphicsOptionsFrame1(bootstrapSnapshot));
 
         WriteAllText(
             Path.Combine(scriptsRoot, "DefineSprite_600_ScreenOptionsGraphics", "frame_15", "DoAction.as"),
@@ -130,13 +132,8 @@ internal static class GraphicsOptionsAssetBuilder
             GraphicsOptionsScriptTemplates.GraphicsExitPromptFrame1);
 
         WriteAllText(
-            Path.Combine(
-                scriptsRoot,
-                "DefineSprite_601_GraphicsExitPrompt",
-                "frame_1",
-                "PlaceObject2_117_GenericButton_11",
-                "CLIPACTIONRECORD onClipEvent(load).as"),
-            GraphicsOptionsScriptTemplates.GraphicsExitPromptApplyButton);
+            Path.Combine(scriptsRoot, "DefineSprite_601_GraphicsExitPrompt", "frame_23", "DoAction.as"),
+            GraphicsOptionsScriptTemplates.GraphicsExitPromptFrame23);
 
         WriteAllText(
             Path.Combine(
@@ -168,7 +165,8 @@ internal static class GraphicsOptionsAssetBuilder
             paths.FrontendXmlPath,
             paths.FrontendSourceGfxPath,
             paths.FrontendScriptsPath,
-            paths.FfdecPath
+            paths.FfdecPath,
+            paths.BatmanUserIniPath
         };
 
         foreach (string requiredPath in requiredPaths)

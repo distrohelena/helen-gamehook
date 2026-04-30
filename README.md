@@ -32,6 +32,18 @@ This is a working Batman-first vertical slice, not a finished general-purpose fr
 - native blob-backed hook installation
 - bounded state observation for Batman subtitle size
 
+## Live game navigation tools
+
+Do not drive Batman or any other game with ad-hoc OS-global keyboard automation such as PowerShell `SendKeys`, `System.Windows.Forms.SendKeys`, or scripts that only call `SetForegroundWindow` and then type. Those inputs can land in the wrong foreground app.
+
+Use the HelenUI navigation tooling instead:
+
+- `C:\dev\helenui\plugins\navigator-service`: the session-based navigation plugin/service for capture, recognition, targeted keyboard input, and project-driven navigation.
+- `C:\dev\helenui\plugins\screenshot-cli`: window capture helper used by the navigation service and diagnostics.
+- `C:\dev\helenui\plugins\recognition-cli`: recognition pipeline for matching screenshots against HelenUI project JSON.
+
+For Batman live tests, start a navigator session against the `ShippingPC-BmGame.exe` window and let `navigator-service` send inputs through its session API or `navigateToScreen` flow. If a one-off diagnostic script is needed, it must call the navigator service or a targeted input primitive, not global `SendKeys`.
+
 It does not yet include:
 
 - a finished developer GUI workflow

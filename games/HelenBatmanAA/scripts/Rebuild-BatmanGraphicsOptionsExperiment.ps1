@@ -225,19 +225,20 @@ $BindingsObject = [ordered]@{
         [ordered]@{ id = 'graphicsGetAmbientOcclusion'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'ambientOcclusion' },
         [ordered]@{ id = 'graphicsGetPhysx'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'physx' },
         [ordered]@{ id = 'graphicsGetStereo'; externalName = 'Helen_GetInt'; mode = 'get-int'; configKey = 'stereo' },
+        [ordered]@{ id = 'graphicsRunLoadDraft'; externalName = 'Helen_RunCommand'; mode = 'run-command'; command = 'loadBatmanGraphicsDraftIntoConfig' },
+        [ordered]@{ id = 'graphicsRunApplyDraft'; externalName = 'Helen_RunCommand'; mode = 'run-command'; command = 'applyBatmanGraphicsDraft' },
         [ordered]@{ id = 'graphicsSetVsync'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'vsync' },
         [ordered]@{ id = 'graphicsSetMsaa'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'msaa' },
-        [ordered]@{ id = 'graphicsSetDetailLevel'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'detailLevel' },
-        [ordered]@{ id = 'graphicsSetBloom'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'bloom' },
-        [ordered]@{ id = 'graphicsSetDynamicShadows'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'dynamicShadows' },
-        [ordered]@{ id = 'graphicsSetMotionBlur'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'motionBlur' },
-        [ordered]@{ id = 'graphicsSetDistortion'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'distortion' },
-        [ordered]@{ id = 'graphicsSetFogVolumes'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'fogVolumes' },
-        [ordered]@{ id = 'graphicsSetSphericalHarmonicLighting'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'sphericalHarmonicLighting' },
-        [ordered]@{ id = 'graphicsSetAmbientOcclusion'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'ambientOcclusion' },
+        [ordered]@{ id = 'graphicsSetDetailLevel'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'detailLevel'; command = 'syncBatmanGraphicsPreset' },
+        [ordered]@{ id = 'graphicsSetBloom'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'bloom'; command = 'syncBatmanGraphicsDetailLevel' },
+        [ordered]@{ id = 'graphicsSetDynamicShadows'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'dynamicShadows'; command = 'syncBatmanGraphicsDetailLevel' },
+        [ordered]@{ id = 'graphicsSetMotionBlur'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'motionBlur'; command = 'syncBatmanGraphicsDetailLevel' },
+        [ordered]@{ id = 'graphicsSetDistortion'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'distortion'; command = 'syncBatmanGraphicsDetailLevel' },
+        [ordered]@{ id = 'graphicsSetFogVolumes'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'fogVolumes'; command = 'syncBatmanGraphicsDetailLevel' },
+        [ordered]@{ id = 'graphicsSetSphericalHarmonicLighting'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'sphericalHarmonicLighting'; command = 'syncBatmanGraphicsDetailLevel' },
+        [ordered]@{ id = 'graphicsSetAmbientOcclusion'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'ambientOcclusion'; command = 'syncBatmanGraphicsDetailLevel' },
         [ordered]@{ id = 'graphicsSetPhysx'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'physx' },
-        [ordered]@{ id = 'graphicsSetStereo'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'stereo' },
-        [ordered]@{ id = 'graphicsApplyDraft'; externalName = 'Helen_RunCommand'; mode = 'run-command'; command = 'applyBatmanGraphicsDraft' }
+        [ordered]@{ id = 'graphicsSetStereo'; externalName = 'Helen_SetInt'; mode = 'set-int'; configKey = 'stereo' }
     )
 }
 
@@ -249,6 +250,24 @@ $CommandsObject = [ordered]@{
             steps = @(
                 [ordered]@{
                     kind = 'load-batman-graphics-draft-into-config'
+                }
+            )
+        },
+        [ordered]@{
+            id = 'syncBatmanGraphicsPreset'
+            name = 'Sync Batman Graphics Preset'
+            steps = @(
+                [ordered]@{
+                    kind = 'sync-batman-graphics-detail-preset'
+                }
+            )
+        },
+        [ordered]@{
+            id = 'syncBatmanGraphicsDetailLevel'
+            name = 'Sync Batman Graphics Detail Level'
+            steps = @(
+                [ordered]@{
+                    kind = 'sync-batman-graphics-detail-level'
                 }
             )
         },

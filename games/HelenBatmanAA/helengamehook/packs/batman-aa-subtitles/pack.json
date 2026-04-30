@@ -1,101 +1,81 @@
 {
-  "schemaVersion": 1,
-  "id": "batman-aa-subtitles",
-  "name": "Batman Arkham Asylum Gameplay Subtitle Slice",
-  "description": "Gameplay-only Helen sample pack for Batman subtitle experiments.",
-  "targets": [
-    {
-      "gameId": "batman-arkham-asylum",
-      "executables": [
-        "ShippingPC-BmGame.exe"
-      ]
-    }
-  ],
-  "config": [
-    {
-      "key": "ui.subtitleSize",
-      "type": "int",
-      "defaultValue": 1
-    },
-    {
-      "key": "graphics.brightness",
-      "type": "float",
-      "defaultValue": 0.5
-    },
-    {
-      "key": "graphics.gamma",
-      "type": "float",
-      "defaultValue": 1.0
-    },
-    {
-      "key": "graphics.vsync",
-      "type": "bool",
-      "defaultValue": true
-    }
-  ],
-  "features": [
-    {
-      "id": "subtitleSize",
-      "name": "Subtitle Size",
-      "kind": "enum",
-      "configKey": "ui.subtitleSize",
-      "defaultValue": 1
-    },
-    {
-      "id": "graphicsOptions",
-      "name": "Graphics Options",
-      "kind": "group",
-      "configKeys": [
-        "graphics.brightness",
-        "graphics.gamma",
-        "graphics.vsync"
-      ]
-    }
-  ],
-  "iniFiles": [
-    {
-      "id": "user-engine",
-      "root": "documents",
-      "path": "Square Enix/Batman Arkham Asylum GOTY/BmGame/Config/BmEngine.ini"
-    }
-  ],
-  "iniStores": [
-    {
-      "id": "batmanFrontendUi",
-      "files": [
-        "user-engine"
-      ],
-      "keys": [
-        "subtitleSize"
-      ]
-    }
-  ],
-  "iniKeys": [
-    {
-      "id": "subtitleSize",
-      "file": "user-engine",
-      "section": "Engine.HUD",
-      "key": "ConsoleFontSize",
-      "type": "choice-map",
-      "writable": true,
-      "ownership": "hijacked-native-key",
-      "valueMap": [
-        {
-          "match": 0,
-          "encodedValue": 5
-        },
-        {
-          "match": 1,
-          "encodedValue": 6
-        },
-        {
-          "match": 2,
-          "encodedValue": 7
-        }
-      ]
-    }
-  ],
-  "builds": [
-    "steam-goty-1.0"
-  ]
+    "schemaVersion":  1,
+    "id":  "batman-aa-subtitles",
+    "name":  "Batman Arkham Asylum Gameplay Subtitle Slice",
+    "description":  "Gameplay-only Helen sample pack for Batman subtitle experiments.",
+    "targets":  [
+                    {
+                        "gameId":  "batman-arkham-asylum",
+                        "executables":  [
+                                            "ShippingPC-BmGame.exe"
+                                        ]
+                    }
+                ],
+    "config":  [
+                   {
+                       "key":  "ui.subtitleSize",
+                       "type":  "int",
+                       "defaultValue":  1
+                   }
+               ],
+    "features":  [
+                     {
+                         "id":  "subtitleSize",
+                         "name":  "Subtitle Size",
+                         "configKey":  "ui.subtitleSize",
+                         "defaultValue":  1,
+                         "kind":  "enum",
+                         "options":  [
+                                         "Small",
+                                         "Normal",
+                                         "Large"
+                                     ]
+                     }
+                 ],
+    "iniFiles":  [
+                     {
+                         "root":  "documents",
+                         "path":  "Square Enix/Batman Arkham Asylum GOTY/BmGame/Config/BmEngine.ini",
+                         "id":  "user-engine"
+                     }
+                 ],
+    "iniStores":  [
+                      {
+                          "keys":  [
+                                       "subtitleSize"
+                                   ],
+                          "files":  [
+                                        "user-engine"
+                                    ],
+                          "id":  "batmanFrontendUi"
+                      }
+                  ],
+    "iniKeys":  [
+                    {
+                        "id":  "subtitleSize",
+                        "file":  "user-engine",
+                        "valueMap":  [
+                                         {
+                                             "encodedValue":  5,
+                                             "match":  0
+                                         },
+                                         {
+                                             "encodedValue":  6,
+                                             "match":  1
+                                         },
+                                         {
+                                             "encodedValue":  7,
+                                             "match":  2
+                                         }
+                                     ],
+                        "key":  "ConsoleFontSize",
+                        "type":  "choice-map",
+                        "section":  "Engine.HUD",
+                        "writable":  true,
+                        "ownership":  "hijacked-native-key"
+                    }
+                ],
+    "builds":  [
+                   "steam-goty-1.0"
+               ]
 }

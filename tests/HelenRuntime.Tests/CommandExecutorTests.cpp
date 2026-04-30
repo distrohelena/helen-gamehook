@@ -94,6 +94,22 @@ namespace
     }
 
     /**
+     * @brief Builds one subtitle-size command that also persists the value back to `BmEngine.ini`.
+     * @param id Stable command identifier assigned to the definition.
+     * @return Declarative command definition for the persistence validation flow.
+     */
+    helen::CommandDefinition CreateApplySubtitleSizePersistCommand(const char* id)
+    {
+        helen::CommandDefinition command = CreateApplySubtitleSizeCommand(id);
+
+        helen::CommandStepDefinition persist_step;
+        persist_step.Kind = "apply-batman-subtitle-size-config";
+        command.Steps.push_back(persist_step);
+
+        return command;
+    }
+
+    /**
      * @brief Builds one command that mutates runtime state and then fails so rollback can be validated.
      * @return Command definition that always fails after writing the live slot.
      */
@@ -208,6 +224,16 @@ namespace
     }
 
     /**
+     * @brief Returns the sibling `BmGame.ini` path that sits next to one `BmEngine.ini` path.
+     * @param engine_ini_path Absolute or relative `BmEngine.ini` path used by the graphics-config service.
+     * @return Sibling `BmGame.ini` path in the same directory as `engine_ini_path`.
+     */
+    std::filesystem::path GetSiblingBatmanGameIniPath(const std::filesystem::path& engine_ini_path)
+    {
+        return engine_ini_path.parent_path() / "BmGame.ini";
+    }
+
+    /**
      * @brief Builds a representative Batman graphics INI body that matches a very-high preset setup.
      * @return Test INI text with every required Batman graphics key present.
      */
@@ -232,6 +258,31 @@ namespace
             "DisableSphericalHarmonicLights=False\r\n"
             "AmbientOcclusion=True\r\n"
             "Stereo=False\r\n";
+    }
+
+    /**
+     * @brief Builds a minimal INI body with the required subtitle-size key for persistence tests.
+     * @param console_font_size Encoded subtitle font size written as `Engine.HUD.ConsoleFontSize`.
+     * @return Test INI text containing only the required subtitle section.
+     */
+    std::string CreateBatmanSubtitleIniText(int console_font_size)
+    {
+        return
+            "[Engine.HUD]\r\n"
+            "ConsoleFontSize=" + std::to_string(console_font_size) + "\r\n";
+    }
+
+    /**
+     * @brief Builds a minimal INI body without an `Engine.HUD` section.
+     * @return Test INI text that requires insertion of `Engine.HUD.ConsoleFontSize`.
+     */
+    std::string CreateBatmanSubtitleIniTextMissingHudSection()
+    {
+        return
+            "[SystemSettings]\r\n"
+            "Fullscreen=True\r\n"
+            "ResX=1920\r\n"
+            "ResY=1080\r\n";
     }
 
     /**
@@ -311,7 +362,74 @@ void RunCommandExecutorTests()
     Expect(applied_value.has_value(), "Happy-path command execution removed the live subtitle scale slot.");
     ExpectNear(*applied_value, 1.8, 0.001, "Happy-path command execution wrote the wrong live subtitle scale.");
 
-    Expect(executor.RegisterCommand(CreateFailingCommand()), "Failed to register the rollback subtitle command.");
+    {
+        const std::filesystem::path subtitle_ini_path = CreateTemporaryBatmanGraphicsIniPath();
+        WriteAllText(subtitle_ini_path, CreateBatmanSubtitleIniText(5));
+
+        helen::CommandDispatcher subtitle_dispatcher;
+        subtitle_dispatcher.RegisterConfigInt("ui.subtitleSize", 0);
+
+        helen::RuntimeValueStore subtitle_runtime_values;
+        Expect(subtitle_runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the subtitle test runtime slot.");
+
+        helen::BatmanGraphicsConfigService subtitle_graphics_config_service(subtitle_ini_path);
+        helen::CommandExecutor subtitle_executor(subtitle_dispatcher, subtitle_runtime_values, subtitle_graphics_config_service);
+        Expect(subtitle_dispatcher.TrySetInt("ui.subtitleSize", 2), "Failed to seed the subtitle size config for the persistence command test.");
+        Expect(subtitle_executor.RegisterCommand(CreateApplySubtitleSizePersistCommand("applySubtitleSizeWithPersistence")), "Failed to register the subtitle persistence command.");
+        Expect(subtitle_executor.RunCommand("applySubtitleSizeWithPersistence"), "Subtitle persistence command execution unexpectedly failed.");
+        Expect(ReadAllText(subtitle_ini_path).find("ConsoleFontSize=7") != std::string::npos, "Subtitle persistence command did not update Engine.HUD.ConsoleFontSize.");
+        }
+
+        {
+            const std::filesystem::path subtitle_ini_path = CreateTemporaryBatmanGraphicsIniPath();
+            WriteAllText(subtitle_ini_path, CreateBatmanSubtitleIniTextMissingHudSection());
+
+            helen::CommandDispatcher subtitle_dispatcher;
+            subtitle_dispatcher.RegisterConfigInt("ui.subtitleSize", 0);
+
+            helen::RuntimeValueStore subtitle_runtime_values;
+            Expect(subtitle_runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the subtitle upsert runtime slot.");
+
+            helen::BatmanGraphicsConfigService subtitle_graphics_config_service(subtitle_ini_path);
+            helen::CommandExecutor subtitle_executor(subtitle_dispatcher, subtitle_runtime_values, subtitle_graphics_config_service);
+            Expect(subtitle_dispatcher.TrySetInt("ui.subtitleSize", 2), "Failed to seed the subtitle size config for the insert test.");
+            Expect(subtitle_executor.RegisterCommand(CreateApplySubtitleSizePersistCommand("applySubtitleSizeWithUpsert")), "Failed to register the subtitle upsert command.");
+            Expect(subtitle_executor.RunCommand("applySubtitleSizeWithUpsert"), "Subtitle upsert command execution unexpectedly failed.");
+
+            const std::string saved_text = ReadAllText(subtitle_ini_path);
+            Expect(saved_text.find("[Engine.HUD]") != std::string::npos, "Subtitle upsert did not create Engine.HUD section.");
+            Expect(saved_text.find("ConsoleFontSize=7") != std::string::npos, "Subtitle upsert did not persist ConsoleFontSize=7.");
+        }
+
+        {
+            const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath();
+            const std::filesystem::path game_ini_path = GetSiblingBatmanGameIniPath(engine_ini_path);
+            WriteAllText(engine_ini_path, CreateBatmanSubtitleIniTextMissingHudSection());
+            WriteAllText(game_ini_path, CreateBatmanSubtitleIniText(6));
+
+            helen::CommandDispatcher subtitle_dispatcher;
+            subtitle_dispatcher.RegisterConfigInt("ui.subtitleSize", 0);
+
+            helen::RuntimeValueStore subtitle_runtime_values;
+            Expect(subtitle_runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the subtitle sibling-path runtime slot.");
+
+            helen::BatmanGraphicsConfigService subtitle_graphics_config_service(engine_ini_path);
+            helen::CommandExecutor subtitle_executor(subtitle_dispatcher, subtitle_runtime_values, subtitle_graphics_config_service);
+            Expect(subtitle_executor.RegisterCommand(CreateApplySubtitleSizePersistCommand("applySubtitleSizeWithSiblingBmGame")), "Failed to register the subtitle sibling-path persist command.");
+
+            Expect(subtitle_graphics_config_service.LoadSubtitleSizeIntoDispatcher(subtitle_dispatcher), "Subtitle load did not read the sibling BmGame.ini value.");
+            Expect(subtitle_dispatcher.TryGetInt("ui.subtitleSize") == 1, "Subtitle load mapped the sibling BmGame.ini value incorrectly.");
+
+            Expect(subtitle_dispatcher.TrySetInt("ui.subtitleSize", 2), "Failed to seed the subtitle size config for sibling BmGame.ini persistence.");
+            Expect(subtitle_executor.RunCommand("applySubtitleSizeWithSiblingBmGame"), "Subtitle sibling-path persistence command execution unexpectedly failed.");
+
+            const std::string saved_engine_text = ReadAllText(engine_ini_path);
+            const std::string saved_game_text = ReadAllText(game_ini_path);
+            Expect(saved_engine_text.find("ConsoleFontSize=") == std::string::npos, "Subtitle sibling-path persistence unexpectedly wrote ConsoleFontSize into BmEngine.ini.");
+            Expect(saved_game_text.find("ConsoleFontSize=7") != std::string::npos, "Subtitle sibling-path persistence did not update BmGame.ini.");
+        }
+
+        Expect(executor.RegisterCommand(CreateFailingCommand()), "Failed to register the rollback subtitle command.");
     Expect(runtime_values.SetDouble("subtitle.scale", 1.5), "Failed to reseed the subtitle scale before rollback validation.");
     Expect(!executor.RunCommand("applyBrokenSubtitleSize"), "Rollback command unexpectedly succeeded.");
 
@@ -364,6 +482,9 @@ void RunCommandExecutorTests()
         Expect(batman_dispatcher.TrySetInt("bloom", 0), "Failed to seed the Batman custom detail override.");
         Expect(batman_executor.RunCommand("syncBatmanGraphicsDetailLevel"), "Batman detail-sync command unexpectedly failed.");
         Expect(batman_dispatcher.TryGetInt("detailLevel") == 4, "Batman detail-sync did not derive the Custom detail state.");
+        Expect(batman_executor.RunCommand("applyBatmanGraphicsDraft"), "Batman graphics apply command failed for a custom Bloom draft.");
+        Expect(batman_dispatcher.TryGetInt("detailLevel") == 4, "Batman graphics apply did not preserve the Custom detail state.");
+        Expect(ReadAllText(batman_ini_path).find("Bloom=False") != std::string::npos, "Batman graphics apply did not persist a custom Bloom draft.");
 
         Expect(batman_dispatcher.TrySetInt("detailLevel", 1), "Failed to restore the Batman medium detail-level preset.");
         Expect(batman_executor.RunCommand("syncBatmanGraphicsPreset"), "Batman preset-sync failed during apply setup.");

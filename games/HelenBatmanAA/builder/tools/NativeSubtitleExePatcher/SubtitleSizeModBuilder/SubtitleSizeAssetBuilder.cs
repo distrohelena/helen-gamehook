@@ -230,7 +230,7 @@ internal static class SubtitleSizeAssetBuilder
     }
 
     /// <summary>
-    /// Writes the frontend main-menu audio script overrides and injects the build version label.
+    /// Writes the frontend main-menu audio script overrides and injects the build version label only when explicitly requested.
     /// </summary>
     /// <param name="scriptsRoot">The copied frontend script directory.</param>
     /// <param name="buildVersion">The build label shown in the root frontend script.</param>
@@ -253,7 +253,10 @@ internal static class SubtitleSizeAssetBuilder
                 "CLIPACTIONRECORD onClipEvent(load).as"),
             ScriptTemplates.FrontendAudioSubtitleSizeClipAction);
 
-        PatchFrontendVersionLabelScript(scriptsRoot, buildVersion);
+        if (!string.IsNullOrWhiteSpace(buildVersion))
+        {
+            PatchFrontendVersionLabelScript(scriptsRoot, buildVersion);
+        }
     }
 
     /// <summary>

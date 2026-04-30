@@ -11,7 +11,7 @@ Current supported patches:
   - supports `--global`
   - supports `--subtitle-size-signal` to drive live scale updates from the game's FE setter path
   - also supports `--internal-ini-live` for the older in-process INI polling path
-  - current working mode for larger centered subtitles/tips with in-game size changes is `--global --subtitle-size-signal --scale-multiplier 1.5`
+  - current working mode for larger centered subtitles/tips with in-game size changes is `--global --subtitle-size-signal --small-scale 1.0 --medium-scale 1.5 --large-scale 2.0 --very-large-scale 4.0 --huge-scale 6.0 --massive-scale 8.0`
 - `set-live-text-scale`
   - rewrites the current live scale constant in the running game process
 - `watch-live-text-scale`
@@ -42,12 +42,14 @@ Patch a clean executable with live subtitle-size updates coming from the in-game
 ```powershell
 dotnet .\bin\Release\net8.0\NativeSubtitleExePatcher.dll patch-bink-text-scale `
   --exe "D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries\ShippingPC-BmGame.exe" `
-  --scale-multiplier 1.5 `
   --global `
   --subtitle-size-signal `
-  --small-scale 1.3 `
-  --normal-scale 1.5 `
-  --large-scale 1.8
+  --small-scale 1.0 `
+  --medium-scale 1.5 `
+  --large-scale 2.0 `
+  --very-large-scale 4.0 `
+  --huge-scale 6.0 `
+  --massive-scale 8.0
 ```
 
 Verify the patch:
@@ -69,6 +71,7 @@ dotnet .\bin\Release\net8.0\NativeSubtitleExePatcher.dll watch-live-text-scale `
 - The project assumes the retail Windows executable layout used during investigation.
 - Hook/cave RVAs are hardcoded in [Program.cs](./Program.cs).
 - The fixed global-only patch stores its scale float at `CaveRva + 85`.
-- The `--subtitle-size-signal` mode also allocates a writable state block and one worker cave; the current implementation hooks the executable's one-argument FE wrapper stubs and updates scale for the raw subtitle-size codes `4101/4102/4103`.
+- The `--subtitle-size-signal` mode also allocates a writable state block and one worker cave; the current implementation hooks the executable's one-argument FE wrapper stubs and updates scale for the raw subtitle-size codes `4101/4102/4103/4104/4105/4106`.
 - `--internal-ini-live` is kept for investigation history, but the FE signal path is the current runtime route.
 - Always keep an untouched backup of the original executable before patching.
+

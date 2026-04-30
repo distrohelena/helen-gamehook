@@ -12,8 +12,8 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
 }
 $PrepareScriptPath = Join-Path $BatmanRoot 'scripts\Prepare-BatmanBuilderWorkspace.ps1'
 $BasePackagePath = Join-Path $BatmanRoot 'builder\extracted\bmgame-unpacked\BmGame.u'
-$SourceFrontendBasePackagePath = Join-Path $BatmanRoot 'builder\extracted\frontend\frontend-umap-unpacked\Frontend.umap'
-$FrontendBasePackagePath = Join-Path $BatmanRoot 'builder\extracted\frontend\frontend-umap-unpacked\Frontend.umap'
+$SourceFrontendBasePackagePath = Join-Path $BatmanRoot 'builder\extracted\frontend-retail\Frontend.umap'
+$FrontendBasePackagePath = Join-Path $BatmanRoot 'builder\extracted\frontend-retail\Frontend.umap'
 $FfdecCliPath = Join-Path $BatmanRoot 'builder\extracted\ffdec\ffdec-cli.exe'
 $ExpectedBaseSha256 = '621A5C8D99C9F7C7283531D05A4A6D56BDF15AD93EDE0D5BF2F5D3E45117FF36'
 $ExpectedFrontendGfxSha256 = '9589D663DD76A5DC530378115A8F8CFA6CEE9550276C853319E1DCD9B6E8FCEC'

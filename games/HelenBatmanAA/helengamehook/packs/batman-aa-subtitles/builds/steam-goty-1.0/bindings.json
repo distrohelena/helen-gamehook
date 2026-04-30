@@ -1,3 +1,22 @@
 {
-  "bindings": []
+    "bindings":  [
+                     {
+                         "id":  "subtitleSizeGet",
+                         "externalName":  "Helen_GetInt",
+                         "mode":  "get-int",
+                         "configKey":  "ui.subtitleSize"
+                     },
+                     {
+                         "id":  "subtitleSizeSet",
+                         "externalName":  "Helen_SetInt",
+                         "mode":  "set-int",
+                         "configKey":  "ui.subtitleSize"
+                     },
+                     {
+                         "id":  "subtitleSizeApply",
+                         "externalName":  "Helen_RunCommand",
+                         "mode":  "run-command",
+                         "command":  "applySubtitleSize"
+                     }
+                 ]
 }
