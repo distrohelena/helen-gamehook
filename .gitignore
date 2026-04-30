@@ -12,6 +12,7 @@
 /games/HelenBatmanAA/builder/extracted/
 /games/HelenBatmanAA/builder/generated/
 /games/HelenBatmanAA/builder/tools/NativeSubtitleExePatcher/.git.local/
+/games/HelenBatmanAA/helengamehook/packs/**/assets/deltas/*.hgdelta
 *.VC.db
 *.VC.opendb
 *.suo

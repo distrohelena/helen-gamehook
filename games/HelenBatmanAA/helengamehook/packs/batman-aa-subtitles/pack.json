@@ -27,8 +27,11 @@
                          "kind":  "enum",
                          "options":  [
                                          "Small",
-                                         "Normal",
-                                         "Large"
+                                         "Medium",
+                                         "Large",
+                                         "Very Large",
+                                         "Huge",
+                                         "Massive"
                                      ]
                      }
                  ],
@@ -66,6 +69,18 @@
                                          {
                                              "encodedValue":  7,
                                              "match":  2
+                                         },
+                                         {
+                                             "encodedValue":  8,
+                                             "match":  3
+                                         },
+                                         {
+                                             "encodedValue":  9,
+                                             "match":  4
+                                         },
+                                         {
+                                             "encodedValue":  10,
+                                             "match":  5
                                          }
                                      ],
                         "key":  "ConsoleFontSize",

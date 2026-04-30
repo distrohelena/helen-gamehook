@@ -82,11 +82,11 @@ $ExpectedVirtualFiles = @(
         Kind = 'delta-file'
         DeltaPath = 'assets/deltas/BmGame-subtitle-signal.hgdelta'
         DeltaFilePath = $GameplayDeltaPath
-        DeltaFileHash = '74b4d535883f4b0dccfd93c87df476f2e11516b708dd5130f74bf59c595c2107'
+        DeltaFileHash = 'c41d07c92ddda66d3f2df6a6f34028370d8c278bd0af2b53da3bab8a5c246fa8'
         BaseSize = 59857525
         BaseSha256 = '4306148e7627ec2c0de4144fd6ab45521b3b7e090d1028a0b685cadafafb89e6'
-        TargetSize = 106217949
-        TargetSha256 = '3e83e7001b9bc806c20fdff77865f0af1aedad6079032d7b43952a93db8db7bd'
+        TargetSize = 106218185
+        TargetSha256 = '07e3594cf0d758b35f8f116f3af404863278615bfa197a51166b5a2860917e96'
         ChunkSize = 65536
         ChunkTableOffset = 116
     }
@@ -263,7 +263,10 @@ $ExpectedIniKeys = @(
         valueMap = @(
             @{ match = 0; encodedValue = 5 },
             @{ match = 1; encodedValue = 6 },
-            @{ match = 2; encodedValue = 7 }
+            @{ match = 2; encodedValue = 7 },
+            @{ match = 3; encodedValue = 8 },
+            @{ match = 4; encodedValue = 9 },
+            @{ match = 5; encodedValue = 10 }
         )
     }
 )
@@ -274,7 +277,10 @@ $HooksJsonPath = Join-Path $PackBuildRoot 'hooks.json'
 $ExpectedSubtitleScaleMappings = @(
     @{ match = 0; value = 1.0 },
     @{ match = 1; value = 1.5 },
-    @{ match = 2; value = 2.0 }
+    @{ match = 2; value = 2.0 },
+    @{ match = 3; value = 4.0 },
+    @{ match = 4; value = 6.0 },
+    @{ match = 5; value = 8.0 }
 )
 $ExpectedBindings = @(
     @{
@@ -301,6 +307,10 @@ if (@($PackManifest.iniFiles).Count -ne $ExpectedIniFiles.Count) {
     throw "Batman subtitle pack expected exactly $($ExpectedIniFiles.Count) iniFiles entry, found $(@($PackManifest.iniFiles).Count)."
 }
 
+if (@($PackManifest.features).Count -ne 1) {
+    throw "Batman subtitle pack expected exactly one feature entry, found $(@($PackManifest.features).Count)."
+}
+
 if (@($PackManifest.iniStores).Count -ne $ExpectedIniStores.Count) {
     throw "Batman subtitle pack expected exactly $($ExpectedIniStores.Count) iniStores entry, found $(@($PackManifest.iniStores).Count)."
 }
@@ -321,6 +331,20 @@ if ($ActualIniStore.id -ne $ExpectedIniStores[0].id -or
     (@($ActualIniStore.files) -join ',') -ne (@($ExpectedIniStores[0].files) -join ',') -or
     (@($ActualIniStore.keys) -join ',') -ne (@($ExpectedIniStores[0].keys) -join ',')) {
     throw 'Batman subtitle pack iniStores declaration did not match the expected batmanFrontendUi store.'
+}
+
+$ExpectedOptions = @('Small', 'Medium', 'Large', 'Very Large', 'Huge', 'Massive')
+$ActualFeature = @($PackManifest.features)[0]
+if ($ActualFeature.id -ne 'subtitleSize') {
+    throw "Batman subtitle pack feature id mismatch. Expected subtitleSize but found $($ActualFeature.id)."
+}
+
+if ($ActualFeature.defaultValue -ne 1) {
+    throw "Batman subtitle pack feature default mismatch. Expected 1 but found $($ActualFeature.defaultValue)."
+}
+
+if ((@($ActualFeature.options) -join '|') -ne ($ExpectedOptions -join '|')) {
+    throw 'Batman subtitle pack options did not match the approved six-label order.'
 }
 
 $ActualIniKey = @($PackManifest.iniKeys)[0]
