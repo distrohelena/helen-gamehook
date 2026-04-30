@@ -2,6 +2,7 @@
 
 #include <HelenHook/CommandDispatcher.h>
 #include <HelenHook/CommandExecutor.h>
+#include <HelenHook/Log.h>
 #include <HelenHook/MemoryStateObserverService.h>
 #include <HelenHook/MemoryStateObserverUpdate.h>
 
@@ -78,14 +79,31 @@ namespace helen
 
     void BuildRuntimeCoordinator::HandleObserverUpdate(const MemoryStateObserverUpdate& update)
     {
-        if (!command_dispatcher_.TrySetInt(update.ConfigKey, update.MappedValue))
+        const bool set_succeeded = command_dispatcher_.TrySetInt(update.ConfigKey, update.MappedValue);
+        if (!set_succeeded)
         {
+            Logf(
+                L"[observer] update id=%hs raw=%d mapped=%d key=%hs setResult=0",
+                update.ObserverId.c_str(),
+                update.RawValue,
+                update.MappedValue,
+                update.ConfigKey.c_str());
             return;
         }
 
+        bool command_succeeded = true;
         if (update.CommandId.has_value())
         {
-            static_cast<void>(command_executor_.RunCommand(*update.CommandId));
+            command_succeeded = command_executor_.RunCommand(*update.CommandId);
         }
+
+        Logf(
+            L"[observer] update id=%hs raw=%d mapped=%d key=%hs setResult=1 command=%hs commandResult=%d",
+            update.ObserverId.c_str(),
+            update.RawValue,
+            update.MappedValue,
+            update.ConfigKey.c_str(),
+            update.CommandId.has_value() ? update.CommandId->c_str() : "<none>",
+            static_cast<int>(command_succeeded));
     }
 }

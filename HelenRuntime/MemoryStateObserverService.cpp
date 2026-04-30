@@ -1,5 +1,7 @@
 #include <HelenHook/MemoryStateObserverService.h>
 
+#include <HelenHook/Log.h>
+
 #include <Windows.h>
 
 #include <algorithm>
@@ -237,11 +239,16 @@ namespace helen
         std::lock_guard<std::mutex> lock(mutex_);
         if (running_ || definitions_.empty())
         {
+            if (definitions_.empty())
+            {
+                Logf(L"[observer] start skipped because no observers were declared.");
+            }
             return true;
         }
 
         stop_requested_ = false;
         running_ = true;
+        Logf(L"[observer] starting service with %zu observer(s).", definitions_.size());
         worker_thread_ = std::thread(&MemoryStateObserverService::RunWorkerLoop, this);
         return true;
     }
@@ -356,10 +363,12 @@ namespace helen
         const MemoryStateObserverDefinition& definition = definitions_[observer_index];
         std::uintptr_t cached_address = 0;
         std::optional<int> previous_mapped_value;
+        std::uint64_t previous_rescan_count = 0;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             cached_address = debug_views_[observer_index].CachedAddress;
             previous_mapped_value = debug_views_[observer_index].LastMappedValue;
+            previous_rescan_count = debug_views_[observer_index].RescanCount;
         }
 
         const int minimum_offset = GetMinimumReadOffset(definition);
@@ -605,6 +614,36 @@ namespace helen
                     update = std::move(emitted_update);
                 }
             }
+        }
+
+        if (resolved_address.has_value())
+        {
+            if (cached_address == 0 || cached_address != *resolved_address)
+            {
+                Logf(
+                    L"[observer] resolved id=%hs address=0x%08llX raw=%d mapped=%d",
+                    definition.Id.c_str(),
+                    static_cast<unsigned long long>(*resolved_address),
+                    raw_value.value_or(0),
+                    mapped_value.value_or(0));
+            }
+        }
+        else if (cached_address != 0)
+        {
+            Logf(
+                L"[observer] unresolved id=%hs previousAddress=0x%08llX",
+                definition.Id.c_str(),
+                static_cast<unsigned long long>(cached_address));
+        }
+        else if (previous_rescan_count == 0)
+        {
+            Logf(
+                L"[observer] initial scan found no match for id=%hs range=0x%08llX..0x%08llX stride=%d valueOffset=%d",
+                definition.Id.c_str(),
+                static_cast<unsigned long long>(definition.ScanStartAddress),
+                static_cast<unsigned long long>(definition.ScanEndAddress),
+                definition.ScanStride,
+                definition.ValueOffset);
         }
 
         if (update.has_value() && update_callback_)

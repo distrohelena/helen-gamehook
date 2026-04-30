@@ -74,6 +74,10 @@ $PackBuildRoot = Join-Path $PackRoot 'builds\steam-goty-1.0'
 $PackJsonPath = Join-Path $PackRoot 'pack.json'
 $FilesJsonPath = Join-Path $PackBuildRoot 'files.json'
 $GameplayDeltaPath = Join-Path $PackBuildRoot 'assets\deltas\BmGame-subtitle-signal.hgdelta'
+$GeneratedGameplayPackagePath = Join-Path $BuilderRoot 'generated\pause-runtime-scale\BmGame-subtitle-signal.u'
+$CurrentDeltaFileHash = (Get-FileHash -LiteralPath $GameplayDeltaPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$CurrentGeneratedGameplayPackageHash = (Get-FileHash -LiteralPath $GeneratedGameplayPackagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$CurrentGeneratedGameplayPackageSize = [int64](Get-Item -LiteralPath $GeneratedGameplayPackagePath).Length
 $ExpectedVirtualFiles = @(
     @{
         Id = 'bmgameGameplayPackage'
@@ -82,11 +86,11 @@ $ExpectedVirtualFiles = @(
         Kind = 'delta-file'
         DeltaPath = 'assets/deltas/BmGame-subtitle-signal.hgdelta'
         DeltaFilePath = $GameplayDeltaPath
-        DeltaFileHash = 'c41d07c92ddda66d3f2df6a6f34028370d8c278bd0af2b53da3bab8a5c246fa8'
+        DeltaFileHash = $CurrentDeltaFileHash
         BaseSize = 59857525
         BaseSha256 = '4306148e7627ec2c0de4144fd6ab45521b3b7e090d1028a0b685cadafafb89e6'
-        TargetSize = 106218185
-        TargetSha256 = '07e3594cf0d758b35f8f116f3af404863278615bfa197a51166b5a2860917e96'
+        TargetSize = $CurrentGeneratedGameplayPackageSize
+        TargetSha256 = $CurrentGeneratedGameplayPackageHash
         ChunkSize = 65536
         ChunkTableOffset = 116
     }
@@ -101,7 +105,7 @@ if (-not (Test-Path -LiteralPath $PackJsonPath)) {
 }
 
 foreach ($ExpectedVirtualFile in $ExpectedVirtualFiles) {
-    foreach ($RequiredPath in @($ExpectedVirtualFile.DeltaFilePath)) {
+    foreach ($RequiredPath in @($ExpectedVirtualFile.DeltaFilePath, $GeneratedGameplayPackagePath)) {
         if (-not (Test-Path -LiteralPath $RequiredPath)) {
             throw "Batman pack verification input not found: $RequiredPath"
         }
@@ -302,6 +306,16 @@ $ExpectedBindings = @(
         Command = 'applySubtitleSize'
     }
 )
+$ExpectedSubtitleHook = @{
+    Id = 'subtitleTextScaleHook'
+    Module = 'ShippingPC-BmGame.exe'
+    Rva = '0x006B00DA'
+    ExpectedBytes = 'D9E8D9542404D91C24'
+    Action = 'inline-jump-to-pack-blob'
+    OverwriteLength = 9
+    ResumeOffsetFromTarget = 45
+    BlobAssetPath = 'assets/native/batman-global-text-scale.bin'
+}
 
 if (@($PackManifest.iniFiles).Count -ne $ExpectedIniFiles.Count) {
     throw "Batman subtitle pack expected exactly $($ExpectedIniFiles.Count) iniFiles entry, found $(@($PackManifest.iniFiles).Count)."
@@ -333,7 +347,7 @@ if ($ActualIniStore.id -ne $ExpectedIniStores[0].id -or
     throw 'Batman subtitle pack iniStores declaration did not match the expected batmanFrontendUi store.'
 }
 
-$ExpectedOptions = @('Small', 'Medium', 'Large', 'Very Large', 'Huge', 'Massive')
+$ExpectedOptions = @('Small', 'Medium', 'Large', 'XL', 'XXL', 'XXXL')
 $ActualFeature = @($PackManifest.features)[0]
 if ($ActualFeature.id -ne 'subtitleSize') {
     throw "Batman subtitle pack feature id mismatch. Expected subtitleSize but found $($ActualFeature.id)."
@@ -438,21 +452,141 @@ foreach ($ExpectedBinding in $ExpectedBindings) {
 }
 
 $SubtitleObserver = @($HooksManifest.stateObservers | Where-Object { $_.id -eq 'subtitleUiStateObserver' })[0]
-if ($null -ne $SubtitleObserver) {
-    throw 'Batman gameplay hooks manifest must not depend on subtitleUiStateObserver for live subtitle changes.'
+if ($null -eq $SubtitleObserver) {
+    throw 'Batman gameplay hooks manifest must ship subtitleUiStateObserver for live subtitle changes.'
 }
 
-if (@($HooksManifest.stateObservers).Count -ne 0) {
-    throw 'Batman gameplay subtitle pack should not ship stateObservers after the direct signal-hook migration.'
+if (@($HooksManifest.stateObservers).Count -ne 1) {
+    throw 'Batman gameplay subtitle pack should ship exactly one state observer.'
+}
+
+if ($SubtitleObserver.scanStartAddress -ne '0x10000000' -or
+    $SubtitleObserver.scanEndAddress -ne '0x11000000' -or
+    [int]$SubtitleObserver.scanStride -ne 4 -or
+    [int]$SubtitleObserver.valueOffset -ne 12 -or
+    [int]$SubtitleObserver.pollIntervalMs -ne 25 -or
+    $SubtitleObserver.targetConfigKey -ne 'ui.subtitleSize' -or
+    $SubtitleObserver.command -ne 'applySubtitleSize') {
+    throw 'Batman gameplay subtitle observer header did not match the expected live-scan contract.'
+}
+
+$ExpectedObserverChecks = @(
+    @{ comparison = 'equals-constant'; offset = -16; expectedValue = 50; compareOffset = $null },
+    @{ comparison = 'equals-constant'; offset = -12; expectedValue = 100; compareOffset = $null },
+    @{ comparison = 'equals-constant'; offset = -8; expectedValue = 100; compareOffset = $null },
+    @{ comparison = 'equals-constant'; offset = -4; expectedValue = 100; compareOffset = $null },
+    @{ comparison = 'equals-constant'; offset = 0; expectedValue = 4102; compareOffset = $null },
+    @{ comparison = 'equals-constant'; offset = 4; expectedValue = 1; compareOffset = $null },
+    @{ comparison = 'equals-constant'; offset = 8; expectedValue = 0; compareOffset = $null },
+    @{ comparison = 'equals-constant'; offset = 16; expectedValue = 4102; compareOffset = $null },
+    @{ comparison = 'equals-constant'; offset = 20; expectedValue = 2; compareOffset = $null },
+    @{ comparison = 'equals-constant'; offset = 28; expectedValue = 3; compareOffset = $null },
+    @{ comparison = 'equals-constant'; offset = 32; expectedValue = 3; compareOffset = $null }
+)
+
+$ActualObserverChecks = @($SubtitleObserver.checks)
+if ($ActualObserverChecks.Count -ne $ExpectedObserverChecks.Count) {
+    throw 'Batman gameplay subtitle observer check count mismatch.'
+}
+
+for ($Index = 0; $Index -lt $ExpectedObserverChecks.Count; $Index++) {
+    $ActualObserverCheck = $ActualObserverChecks[$Index]
+    $ExpectedObserverCheck = $ExpectedObserverChecks[$Index]
+    if ($ActualObserverCheck.comparison -ne $ExpectedObserverCheck.comparison -or
+        [int]$ActualObserverCheck.offset -ne [int]$ExpectedObserverCheck.offset) {
+        throw "Batman gameplay subtitle observer check mismatch at index $Index."
+    }
+
+    if ($ExpectedObserverCheck.expectedValue -ne $null -and [int]$ActualObserverCheck.expectedValue -ne [int]$ExpectedObserverCheck.expectedValue) {
+        throw "Batman gameplay subtitle observer expectedValue mismatch at index $Index."
+    }
+
+    if ($ExpectedObserverCheck.compareOffset -ne $null -and [int]$ActualObserverCheck.compareOffset -ne [int]$ExpectedObserverCheck.compareOffset) {
+        throw "Batman gameplay subtitle observer compareOffset mismatch at index $Index."
+    }
+}
+
+$ExpectedObserverMappings = @(
+    @{ match = 4101; value = 0 },
+    @{ match = 4102; value = 1 },
+    @{ match = 4103; value = 2 },
+    @{ match = 4104; value = 3 },
+    @{ match = 4105; value = 4 },
+    @{ match = 4106; value = 5 }
+)
+
+$ActualObserverMappings = @($SubtitleObserver.mappings)
+if ($ActualObserverMappings.Count -ne $ExpectedObserverMappings.Count) {
+    throw 'Batman gameplay subtitle observer mapping count mismatch.'
+}
+
+for ($Index = 0; $Index -lt $ExpectedObserverMappings.Count; $Index++) {
+    if ([int]$ActualObserverMappings[$Index].match -ne [int]$ExpectedObserverMappings[$Index].match -or
+        [int]$ActualObserverMappings[$Index].value -ne [int]$ExpectedObserverMappings[$Index].value) {
+        throw "Batman gameplay subtitle observer mapping mismatch at index $Index."
+    }
 }
 
 $SubtitleScaleHook = @($HooksManifest.hooks | Where-Object { $_.id -eq 'subtitleTextScaleHook' })[0]
-if ($null -ne $SubtitleScaleHook) {
-    throw 'Batman gameplay hooks manifest must not ship subtitleTextScaleHook after the direct signal-hook migration.'
+if ($null -eq $SubtitleScaleHook) {
+    throw 'Batman gameplay hooks manifest must ship subtitleTextScaleHook for live subtitle scaling.'
 }
 
-if (@($HooksManifest.hooks).Count -ne 0) {
-    throw 'Batman gameplay subtitle pack should not ship runtime inline hooks after the direct signal-hook migration.'
+if (@($HooksManifest.hooks).Count -ne 1) {
+    throw 'Batman gameplay subtitle pack should ship exactly one runtime inline hook.'
+}
+
+if (@($HooksManifest.runtimeSlots).Count -ne 1) {
+    throw 'Batman gameplay subtitle pack should ship exactly one runtime slot.'
+}
+
+$RuntimeSlot = @($HooksManifest.runtimeSlots | Where-Object { $_.id -eq 'subtitle.scale' })[0]
+if ($null -eq $RuntimeSlot) {
+    throw 'Batman gameplay hooks manifest is missing the subtitle.scale runtime slot.'
+}
+
+if ($RuntimeSlot.type -ne 'float32' -or [double]$RuntimeSlot.initialValue -ne 1.5) {
+    throw 'Batman gameplay subtitle runtime slot declaration did not match the expected float32 initial value.'
+}
+
+if ($SubtitleScaleHook.id -ne $ExpectedSubtitleHook.Id -or
+    $SubtitleScaleHook.module -ne $ExpectedSubtitleHook.Module -or
+    $SubtitleScaleHook.rva -ne $ExpectedSubtitleHook.Rva -or
+    $SubtitleScaleHook.expectedBytes -ne $ExpectedSubtitleHook.ExpectedBytes -or
+    $SubtitleScaleHook.action -ne $ExpectedSubtitleHook.Action -or
+    [int]$SubtitleScaleHook.overwriteLength -ne [int]$ExpectedSubtitleHook.OverwriteLength -or
+    [int]$SubtitleScaleHook.resumeOffsetFromTarget -ne [int]$ExpectedSubtitleHook.ResumeOffsetFromTarget) {
+    throw 'Batman gameplay subtitle hook header did not match the expected inline hook contract.'
+}
+
+if ($SubtitleScaleHook.blob.assetPath -ne $ExpectedSubtitleHook.BlobAssetPath -or
+    [int]$SubtitleScaleHook.blob.entryOffset -ne 0) {
+    throw 'Batman gameplay subtitle hook blob metadata did not match the expected asset contract.'
+}
+
+$ExpectedRelocations = @(
+    @{ offset = 2; encoding = 'abs32'; kind = 'runtime-slot'; slot = 'subtitle.scale' },
+    @{ offset = 36; encoding = 'abs32'; kind = 'runtime-slot'; slot = 'subtitle.scale' },
+    @{ offset = 58; encoding = 'rel32'; kind = 'hook-resume'; slot = $null }
+)
+
+$ActualRelocations = @($SubtitleScaleHook.blob.relocations)
+if ($ActualRelocations.Count -ne $ExpectedRelocations.Count) {
+    throw 'Batman gameplay subtitle hook relocation count mismatch.'
+}
+
+for ($Index = 0; $Index -lt $ExpectedRelocations.Count; $Index++) {
+    $ActualRelocation = $ActualRelocations[$Index]
+    $ExpectedRelocation = $ExpectedRelocations[$Index]
+    if ([int]$ActualRelocation.offset -ne [int]$ExpectedRelocation.offset -or
+        $ActualRelocation.encoding -ne $ExpectedRelocation.encoding -or
+        $ActualRelocation.source.kind -ne $ExpectedRelocation.kind) {
+        throw "Batman gameplay subtitle hook relocation mismatch at index $Index."
+    }
+
+    if ($ExpectedRelocation.slot -ne $null -and $ActualRelocation.source.slot -ne $ExpectedRelocation.slot) {
+        throw "Batman gameplay subtitle hook runtime-slot relocation mismatch at index $Index."
+    }
 }
 
 Write-Output 'PASS'

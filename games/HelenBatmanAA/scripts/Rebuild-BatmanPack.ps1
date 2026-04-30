@@ -25,6 +25,7 @@ $BmGameGfxPatcherProjectPath = Join-Path $ToolRoot 'BmGameGfxPatcher\BmGameGfxPa
 $PackBuildRoot = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles\builds\steam-goty-1.0'
 $PackJsonPath = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-subtitles\pack.json'
 $BindingsJsonPath = Join-Path $PackBuildRoot 'bindings.json'
+$HooksJsonPath = Join-Path $PackBuildRoot 'hooks.json'
 $BuildAssetsRoot = Join-Path $GeneratedRoot 'pause-runtime-scale'
 $FfdecPath = Join-Path $ExtractedRoot 'ffdec\ffdec-cli.exe'
 $BasePackagePath = Join-Path $ExtractedRoot 'bmgame-retail\BmGame.u'
@@ -184,9 +185,9 @@ $packManifest = [ordered]@{
                 'Small',
                 'Medium',
                 'Large',
-                'Very Large',
-                'Huge',
-                'Massive'
+                'XL',
+                'XXL',
+                'XXXL'
             )
         }
     )
@@ -267,8 +268,136 @@ $bindingsManifest = [ordered]@{
     )
 }
 
+$hooksManifest = [ordered]@{
+    runtimeSlots = @(
+        [ordered]@{
+            id = 'subtitle.scale'
+            type = 'float32'
+            initialValue = 1.5
+        }
+    )
+    stateObservers = @(
+        [ordered]@{
+            id = 'subtitleUiStateObserver'
+            scanStartAddress = '0x10000000'
+            scanEndAddress = '0x11000000'
+            scanStride = 4
+            valueOffset = 12
+            pollIntervalMs = 25
+            targetConfigKey = 'ui.subtitleSize'
+            command = 'applySubtitleSize'
+            checks = @(
+                [ordered]@{
+                    comparison = 'equals-constant'
+                    offset = -16
+                    expectedValue = 50
+                },
+                [ordered]@{
+                    comparison = 'equals-constant'
+                    offset = -12
+                    expectedValue = 100
+                },
+                [ordered]@{
+                    comparison = 'equals-constant'
+                    offset = -8
+                    expectedValue = 100
+                },
+                [ordered]@{
+                    comparison = 'equals-constant'
+                    offset = -4
+                    expectedValue = 100
+                },
+                [ordered]@{
+                    comparison = 'equals-constant'
+                    offset = 0
+                    expectedValue = 4102
+                },
+                [ordered]@{
+                    comparison = 'equals-constant'
+                    offset = 4
+                    expectedValue = 1
+                },
+                [ordered]@{
+                    comparison = 'equals-constant'
+                    offset = 8
+                    expectedValue = 0
+                },
+                [ordered]@{
+                    comparison = 'equals-constant'
+                    offset = 16
+                    expectedValue = 4102
+                },
+                [ordered]@{
+                    comparison = 'equals-constant'
+                    offset = 20
+                    expectedValue = 2
+                },
+                [ordered]@{
+                    comparison = 'equals-constant'
+                    offset = 28
+                    expectedValue = 3
+                },
+                [ordered]@{
+                    comparison = 'equals-constant'
+                    offset = 32
+                    expectedValue = 3
+                }
+            )
+            mappings = @(
+                [ordered]@{ match = 4101; value = 0 },
+                [ordered]@{ match = 4102; value = 1 },
+                [ordered]@{ match = 4103; value = 2 },
+                [ordered]@{ match = 4104; value = 3 },
+                [ordered]@{ match = 4105; value = 4 },
+                [ordered]@{ match = 4106; value = 5 }
+            )
+        }
+    )
+    hooks = @(
+        [ordered]@{
+            id = 'subtitleTextScaleHook'
+            module = 'ShippingPC-BmGame.exe'
+            rva = '0x006B00DA'
+            expectedBytes = 'D9E8D9542404D91C24'
+            action = 'inline-jump-to-pack-blob'
+            overwriteLength = 9
+            resumeOffsetFromTarget = 45
+            blob = [ordered]@{
+                assetPath = 'assets/native/batman-global-text-scale.bin'
+                entryOffset = 0
+                relocations = @(
+                    [ordered]@{
+                        offset = 2
+                        encoding = 'abs32'
+                        source = [ordered]@{
+                            kind = 'runtime-slot'
+                            slot = 'subtitle.scale'
+                        }
+                    },
+                    [ordered]@{
+                        offset = 36
+                        encoding = 'abs32'
+                        source = [ordered]@{
+                            kind = 'runtime-slot'
+                            slot = 'subtitle.scale'
+                        }
+                    },
+                    [ordered]@{
+                        offset = 58
+                        encoding = 'rel32'
+                        source = [ordered]@{
+                            kind = 'hook-resume'
+                        }
+                    }
+                )
+            }
+        }
+    )
+}
+
 $filesManifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $FilesJsonPath
 $bindingsManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $BindingsJsonPath
+$hooksManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $HooksJsonPath
 $packManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $PackJsonPath
 
 & dotnet run --project $NativeSubtitleExePatcherProjectPath -c $Configuration -- `
