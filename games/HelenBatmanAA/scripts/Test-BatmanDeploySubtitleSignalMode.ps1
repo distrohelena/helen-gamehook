@@ -31,6 +31,14 @@ if ($UsesControlTypeBackend) {
     if ($DeployScriptText.IndexOf("'--subtitle-tail-debug-signal'", [System.StringComparison]::Ordinal) -ge 0) {
         throw "Deploy-Batman must not patch the executable with --subtitle-tail-debug-signal while the pause subtitle row uses FE_SetControlType."
     }
+
+    if ($DeployScriptText.IndexOf("'--render3d-tail-debug-signal'", [System.StringComparison]::Ordinal) -ge 0) {
+        throw "Deploy-Batman must not patch the executable with --render3d-tail-debug-signal while the pause subtitle row uses FE_SetControlType."
+    }
+
+    if ($DeployScriptText.IndexOf("'--invoke-trace'", [System.StringComparison]::Ordinal) -ge 0) {
+        throw "Deploy-Batman must not patch the executable with --invoke-trace while the pause subtitle row uses FE_SetControlType."
+    }
 }
 
 Write-Output 'PASS'
