@@ -76,6 +76,7 @@
     <ClCompile Include="BuildHookInstaller.cpp" />
     <ClCompile Include="CommandDispatcher.cpp" />
     <ClCompile Include="CommandExecutor.cpp" />
+    <ClCompile Include="D3d9TextureReplacementHookSet.cpp" />
     <ClCompile Include="DebugHookCallbacks.cpp" />
     <ClCompile Include="DebugTraceService.cpp" />
     <ClCompile Include="DeltaVirtualFileSource.cpp" />
@@ -99,6 +100,7 @@
     <ClCompile Include="ProxyBootstrapCoordinator.cpp" />
     <ClCompile Include="RuntimeLayout.cpp" />
     <ClCompile Include="RuntimeValueStore.cpp" />
+    <ClCompile Include="TextureDumpSerializer.cpp" />
     <ClCompile Include="VirtualFileService.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -113,6 +115,7 @@
     <ClInclude Include="..\include\HelenHook\CommandMapEntryDefinition.h" />
     <ClInclude Include="..\include\HelenHook\CommandStepDefinition.h" />
     <ClInclude Include="..\include\HelenHook\ConfigEntryDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\D3d9TextureReplacementHookSet.h" />
     <ClInclude Include="..\include\HelenHook\DebugHookCallbacks.h" />
     <ClInclude Include="..\include\HelenHook\DebugTraceService.h" />
     <ClInclude Include="..\include\HelenHook\DeltaVirtualFileSource.h" />
@@ -148,6 +151,8 @@
     <ClInclude Include="..\include\HelenHook\ProxyBootstrapCoordinator.h" />
     <ClInclude Include="..\include\HelenHook\RuntimeLayout.h" />
     <ClInclude Include="..\include\HelenHook\RuntimeValueStore.h" />
+    <ClInclude Include="..\include\HelenHook\TextureReplacementDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\TextureDumpSerializer.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileDefinition.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileHashDefinition.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileHandle.h" />

@@ -1,6 +1,7 @@
 #include <HelenHook/DeltaVirtualFileSource.h>
 
 #include <HelenHook/HgdeltaChunkKind.h>
+#include <HelenHook/Log.h>
 
 #include <windows.h>
 #include <wincrypt.h>
@@ -409,6 +410,13 @@ namespace
             return false;
         }
 
+        helen::Logf(
+            L"[runtime] delta materialize begin resolved=%ls base=%ls targetBytes=%llu chunks=%zu",
+            resolved_path.c_str(),
+            base_file_path.c_str(),
+            static_cast<unsigned long long>(delta.TargetFileSize),
+            delta.Chunks.size());
+
         std::ifstream base_stream(base_file_path, std::ios::binary);
         if (!base_stream)
         {
@@ -503,6 +511,7 @@ namespace
             return false;
         }
 
+        helen::Logf(L"[runtime] delta materialize complete resolved=%ls", resolved_path.c_str());
         return true;
     }
 }
@@ -569,6 +578,14 @@ namespace helen
             definition.Id,
             BaseFingerprint,
             DeltaFingerprint);
+
+        helen::Logf(
+            L"[runtime] delta virtual file source ready id=%hs base=%ls delta=%ls resolved=%ls targetBytes=%llu",
+            definition.Id.c_str(),
+            BaseFilePath.c_str(),
+            DeltaFilePath.c_str(),
+            ResolvedFilePath.c_str(),
+            static_cast<unsigned long long>(Delta.TargetFileSize));
     }
 
     std::uint64_t DeltaVirtualFileSource::GetSize() const
@@ -614,12 +631,24 @@ namespace helen
             if (chunk_index_value > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)()) ||
                 chunk_index_value >= Delta.Chunks.size())
             {
+                helen::Logf(
+                    L"[runtime] delta read failed source=%ls offset=%llu reason=chunk-index-out-of-range chunkIndex=%llu chunkCount=%zu",
+                    BaseFilePath.c_str(),
+                    static_cast<unsigned long long>(current_offset),
+                    static_cast<unsigned long long>(chunk_index_value),
+                    Delta.Chunks.size());
                 return false;
             }
 
             const HgdeltaChunkDefinition& chunk = Delta.Chunks[static_cast<std::size_t>(chunk_index_value)];
             if (current_offset < chunk.TargetOffset || current_offset >= chunk.TargetOffset + chunk.TargetSize)
             {
+                helen::Logf(
+                    L"[runtime] delta read failed source=%ls offset=%llu reason=chunk-boundary-mismatch chunkOffset=%llu chunkSize=%llu",
+                    BaseFilePath.c_str(),
+                    static_cast<unsigned long long>(current_offset),
+                    static_cast<unsigned long long>(chunk.TargetOffset),
+                    static_cast<unsigned long long>(chunk.TargetSize));
                 return false;
             }
 
@@ -654,6 +683,11 @@ namespace helen
             }
             else
             {
+                helen::Logf(
+                    L"[runtime] delta read failed source=%ls offset=%llu reason=unknown-chunk-kind kind=%u",
+                    BaseFilePath.c_str(),
+                    static_cast<unsigned long long>(current_offset),
+                    static_cast<unsigned int>(chunk.Kind));
                 return false;
             }
 
@@ -670,6 +704,13 @@ namespace helen
         DWORD maximum_size_high,
         DWORD maximum_size_low)
     {
+        helen::Logf(
+            L"[runtime] delta mapping begin source=%ls resolved=%ls protect=0x%08lX max=%lu:%lu",
+            BaseFilePath.c_str(),
+            ResolvedFilePath.c_str(),
+            static_cast<unsigned long>(protection),
+            static_cast<unsigned long>(maximum_size_high),
+            static_cast<unsigned long>(maximum_size_low));
         {
             std::lock_guard<std::mutex> lock(ResolvedCacheMaterializationMutex);
             if (!IsResolvedFileValid(ResolvedFilePath, Delta) &&
@@ -717,10 +758,20 @@ namespace helen
         CloseHandle(file_handle);
         if (mapping_handle == nullptr)
         {
+            helen::Logf(
+                L"[runtime] delta mapping failed source=%ls resolved=%ls lastError=%lu",
+                BaseFilePath.c_str(),
+                ResolvedFilePath.c_str(),
+                static_cast<unsigned long>(last_error));
             SetLastError(last_error);
             return std::nullopt;
         }
 
+        helen::Logf(
+            L"[runtime] delta mapping complete source=%ls resolved=%ls mapping=0x%p",
+            BaseFilePath.c_str(),
+            ResolvedFilePath.c_str(),
+            mapping_handle);
         return mapping_handle;
     }
 }

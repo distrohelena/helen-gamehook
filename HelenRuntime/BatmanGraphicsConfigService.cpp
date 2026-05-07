@@ -657,6 +657,24 @@ namespace
             return true;
         }
 
+        if (subtitle_size_state == 3)
+        {
+            encoded_value = 8;
+            return true;
+        }
+
+        if (subtitle_size_state == 4)
+        {
+            encoded_value = 9;
+            return true;
+        }
+
+        if (subtitle_size_state == 5)
+        {
+            encoded_value = 10;
+            return true;
+        }
+
         return false;
     }
 
@@ -683,6 +701,24 @@ namespace
         if (encoded_value == 7)
         {
             state = 2;
+            return true;
+        }
+
+        if (encoded_value == 8)
+        {
+            state = 3;
+            return true;
+        }
+
+        if (encoded_value == 9)
+        {
+            state = 4;
+            return true;
+        }
+
+        if (encoded_value == 10)
+        {
+            state = 5;
             return true;
         }
 

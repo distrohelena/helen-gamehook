@@ -121,6 +121,9 @@ void RunPackRepositoryTests()
             R"({
   "id": "steam-goty-1.0",
   "executable": "ShippingPC-BmGame.exe",
+  "enableD3d9TextureReplacementHooks": true,
+  "enableD3d9TextureHashLogging": true,
+  "enableD3d9TextureImageDumping": true,
   "startupCommands": [
     "applySavedSubtitleSize"
   ],
@@ -174,6 +177,29 @@ void RunPackRepositoryTests()
 })");
 
         WriteAllText(valid_build_root / "bindings.json", R"({ "bindings": [] })");
+
+        WriteAllText(
+            valid_build_root / "textures.json",
+            R"({
+  "replacements": [
+    {
+      "id": "batman-subtitle-font-atlas",
+      "api": "d3d9",
+      "match": {
+        "width": 1024,
+        "height": 512,
+        "format": "A8R8G8B8",
+        "hash": "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+      },
+      "replacement": {
+        "path": "assets/textures/batman-subtitle-font-atlas.png"
+      },
+      "scope": {
+        "samplerStage": 0
+      }
+    }
+  ]
+})");
 
         WriteAllText(
             valid_build_root / "commands.json",
@@ -460,6 +486,9 @@ void RunPackRepositoryTests()
         Expect(loaded_valid_pack.has_value(), "Expected the synthetic Batman pack to load for the matching executable fingerprint.");
         Expect(loaded_valid_pack->Pack.Id == "batman-aa-subtitles", "Loaded pack identifier mismatch.");
         Expect(loaded_valid_pack->Build.Id == "steam-goty-1.0", "Loaded build identifier mismatch.");
+        Expect(loaded_valid_pack->Build.EnableD3d9TextureReplacementHooks, "Loaded build should enable D3D9 texture replacement hooks.");
+        Expect(loaded_valid_pack->Build.EnableD3d9TextureHashLogging, "Loaded build should enable D3D9 texture hash logging.");
+        Expect(loaded_valid_pack->Build.EnableD3d9TextureImageDumping, "Loaded build should enable D3D9 texture image dumping.");
         Expect(loaded_valid_pack->Build.StartupCommandIds.size() == 1, "Loaded startup command count mismatch.");
         Expect(loaded_valid_pack->Build.StartupCommandIds[0] == "applySavedSubtitleSize", "Loaded startup command identifier mismatch.");
         Expect(loaded_valid_pack->Build.VirtualFiles.size() == 2, "Loaded virtual file count mismatch.");
@@ -500,9 +529,25 @@ void RunPackRepositoryTests()
         Expect(loaded_valid_pack->Build.RuntimeSlots.size() == 1, "Loaded runtime slot count mismatch.");
         Expect(loaded_valid_pack->Build.StateObservers.size() == 1, "Loaded state observer count mismatch.");
         Expect(loaded_valid_pack->Build.Hooks.size() == 1, "Loaded hook count mismatch.");
+        Expect(loaded_valid_pack->Build.TextureReplacements.size() == 1, "Loaded texture replacement count mismatch.");
         Expect(loaded_valid_pack->Build.Commands.size() == 2, "Loaded command count mismatch.");
         Expect(loaded_valid_pack->Build.Hooks[0].RelativeVirtualAddress.has_value(), "Loaded hook did not preserve its exact RVA target.");
         Expect(*loaded_valid_pack->Build.Hooks[0].RelativeVirtualAddress == 0x006B00DA, "Loaded hook RVA mismatch.");
+        Expect(loaded_valid_pack->Build.TextureReplacements[0].Id == "batman-subtitle-font-atlas", "Loaded texture replacement id mismatch.");
+        Expect(loaded_valid_pack->Build.TextureReplacements[0].Api == "d3d9", "Loaded texture replacement api mismatch.");
+        Expect(loaded_valid_pack->Build.TextureReplacements[0].Width == 1024, "Loaded texture replacement width mismatch.");
+        Expect(loaded_valid_pack->Build.TextureReplacements[0].Height == 512, "Loaded texture replacement height mismatch.");
+        Expect(loaded_valid_pack->Build.TextureReplacements[0].Format == "A8R8G8B8", "Loaded texture replacement format mismatch.");
+        Expect(
+            loaded_valid_pack->Build.TextureReplacements[0].Hash == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "Loaded texture replacement hash normalization mismatch.");
+        Expect(
+            loaded_valid_pack->Build.TextureReplacements[0].ReplacementPath == std::filesystem::path("assets/textures/batman-subtitle-font-atlas.png"),
+            "Loaded texture replacement path mismatch.");
+        Expect(
+            loaded_valid_pack->Build.TextureReplacements[0].SamplerStage.has_value() &&
+                *loaded_valid_pack->Build.TextureReplacements[0].SamplerStage == 0,
+            "Loaded texture replacement sampler stage mismatch.");
 
         const std::optional<helen::LoadedBuildPack> mismatched_valid_pack = repository.LoadForExecutable(
             packs_root,
@@ -542,9 +587,13 @@ void RunPackRepositoryTests()
         Expect(loaded_batman_pack->Build.VirtualFiles.size() == 1, "Checked-in Batman graphics pack virtual file count mismatch.");
         Expect(loaded_batman_pack->Build.StartupCommandIds.size() == 1, "Checked-in Batman graphics pack startup command count mismatch.");
         Expect(loaded_batman_pack->Build.StartupCommandIds[0] == "loadBatmanGraphicsDraftIntoConfig", "Checked-in Batman graphics pack startup command mismatch.");
+        Expect(loaded_batman_pack->Build.EnableD3d9TextureReplacementHooks, "Checked-in Batman graphics pack should enable D3D9 texture replacement hooks.");
+        Expect(!loaded_batman_pack->Build.EnableD3d9TextureHashLogging, "Checked-in Batman graphics pack should leave D3D9 texture hash logging disabled.");
+        Expect(!loaded_batman_pack->Build.EnableD3d9TextureImageDumping, "Checked-in Batman graphics pack should leave D3D9 texture image dumping disabled.");
         Expect(loaded_batman_pack->Build.RuntimeSlots.empty(), "Checked-in Batman graphics pack unexpectedly declared runtime slots.");
         Expect(loaded_batman_pack->Build.StateObservers.empty(), "Checked-in Batman graphics pack unexpectedly declared state observers.");
         Expect(loaded_batman_pack->Build.Hooks.empty(), "Checked-in Batman graphics pack unexpectedly declared hooks.");
+        Expect(loaded_batman_pack->Build.TextureReplacements.empty(), "Checked-in Batman graphics pack unexpectedly declared texture replacements.");
         Expect(loaded_batman_pack->Build.Commands.size() == 4, "Checked-in Batman graphics pack command count mismatch.");
         Expect(loaded_batman_pack->Build.ExternalBindings.size() == 27, "Checked-in Batman graphics pack external binding count mismatch.");
 

@@ -1,6 +1,9 @@
 {
   "id": "steam-goty-1.0",
   "executable": "ShippingPC-BmGame.exe",
+  "enableD3d9TextureReplacementHooks": true,
+  "enableD3d9TextureHashLogging": false,
+  "enableD3d9TextureImageDumping": false,
   "startupCommands": [
     "applySavedSubtitleSize"
   ],

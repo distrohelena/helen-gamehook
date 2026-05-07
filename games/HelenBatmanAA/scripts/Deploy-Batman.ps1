@@ -32,11 +32,8 @@ $SourcePackagesPath = Join-Path $PackSource 'assets\packages'
 $RebuildPackScriptPath = Join-Path $PSScriptRoot 'Rebuild-BatmanPack.ps1'
 $VerifierPath = Join-Path $PSScriptRoot 'Test-BatmanKnownGoodGameplayPackage.ps1'
 $InstalledBaseVerifierPath = Join-Path $PSScriptRoot 'Test-BatmanInstalledBaseCompatibility.ps1'
-$NativeSubtitleExePatcherProjectPath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\NativeSubtitleExePatcher.csproj'
 $HelenGameHookPath = Join-Path $RepoRoot "bin\Win32\$Configuration\HelenGameHook.dll"
 $ProxyPath = Join-Path $RepoRoot "bin\Win32\$Configuration\dinput8.dll"
-$GameExePath = Join-Path $GameBin 'ShippingPC-BmGame.exe'
-$GameExeBackupPath = Join-Path $GameBin 'ShippingPC-BmGame.exe.subtitle-signal.clean-backup'
 $ExpectedVirtualFiles = @(
     @{
         Id = 'bmgameGameplayPackage'
@@ -100,7 +97,7 @@ function Test-ExpectedVirtualFiles {
     }
 }
 
-foreach ($RequiredPath in @($PackSource, $SourceGameplayDeltaPath, $HelenGameHookPath, $ProxyPath, $InstalledBaseVerifierPath, $NativeSubtitleExePatcherProjectPath, $GameExePath)) {
+foreach ($RequiredPath in @($PackSource, $SourceGameplayDeltaPath, $HelenGameHookPath, $ProxyPath, $InstalledBaseVerifierPath)) {
     if (-not (Test-Path -LiteralPath $RequiredPath)) {
         throw "Batman deployment input not found: $RequiredPath"
     }
@@ -111,34 +108,8 @@ if ($LASTEXITCODE -ne 0) {
     throw "Batman pack rebuild failed with exit code $LASTEXITCODE."
 }
 
-if (Test-Path -LiteralPath $GameExeBackupPath) {
-    Copy-Item -LiteralPath $GameExeBackupPath -Destination $GameExePath -Force
-}
-
-function Update-DeployedBuildMatch {
-    param(
-        [string]$BuildJsonPath,
-        [string]$ExecutablePath
-    )
-
-    if (-not (Test-Path -LiteralPath $BuildJsonPath)) {
-        throw "Batman deployed build manifest not found: $BuildJsonPath"
-    }
-
-    if (-not (Test-Path -LiteralPath $ExecutablePath)) {
-        throw "Batman deployed executable not found: $ExecutablePath"
-    }
-
-    $BuildManifest = Get-Content -LiteralPath $BuildJsonPath -Raw | ConvertFrom-Json
-    $ExecutableItem = Get-Item -LiteralPath $ExecutablePath
-    $ExecutableHash = (Get-FileHash -LiteralPath $ExecutablePath -Algorithm SHA256).Hash.ToUpperInvariant()
-
-    $BuildManifest.match.fileSize = [UInt64]$ExecutableItem.Length
-    $BuildManifest.match.sha256 = $ExecutableHash
-
-    $BuildManifestJson = ($BuildManifest | ConvertTo-Json -Depth 16).TrimStart([char]0xFEFF)
-    $Utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($BuildJsonPath, $BuildManifestJson, $Utf8WithoutBom)
+foreach ($ExpectedVirtualFile in $ExpectedVirtualFiles) {
+    $ExpectedVirtualFile.DeltaHash = (Get-FileHash -LiteralPath $ExpectedVirtualFile.SourceDeltaPath -Algorithm SHA256).Hash
 }
 
 if (Test-Path -LiteralPath $SourcePackagesPath) {
@@ -181,47 +152,6 @@ try {
     }
 
     Move-Item -LiteralPath $PackStagingDestination -Destination $PackDestination
-
-    if (Test-Path -LiteralPath $GameExeBackupPath) {
-        Copy-Item -LiteralPath $GameExeBackupPath -Destination $GameExePath -Force
-    }
-
-    $PatchArguments = @(
-        'run',
-        '--project',
-        $NativeSubtitleExePatcherProjectPath,
-        '-c',
-        $Configuration,
-        '--',
-        'patch-bink-text-scale',
-        '--exe',
-        $GameExePath,
-        '--global',
-        '--ui-state-live',
-        '--small-scale',
-        '1.0',
-        '--medium-scale',
-        '1.5',
-        '--large-scale',
-        '2.0',
-        '--very-large-scale',
-        '4.0',
-        '--huge-scale',
-        '6.0',
-        '--massive-scale',
-        '8.0'
-    )
-
-    if (-not (Test-Path -LiteralPath $GameExeBackupPath)) {
-        $PatchArguments += @('--backup', '--backup-path', $GameExeBackupPath)
-    }
-
-    & dotnet @PatchArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Batman subtitle signal patching failed with exit code $LASTEXITCODE."
-    }
-
-    Update-DeployedBuildMatch -BuildJsonPath (Join-Path $PackBuildRoot 'build.json') -ExecutablePath $GameExePath
 
     if ($BackupExists -and (Test-Path -LiteralPath $PackBackupDestination)) {
         Remove-Item -LiteralPath $PackBackupDestination -Recurse -Force

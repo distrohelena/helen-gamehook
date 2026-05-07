@@ -92,6 +92,11 @@ void RunRuntimeValueStoreTests();
 void RunHgdeltaFileTests();
 
 /**
+ * @brief Runs the texture dump serializer test coverage for DDS extraction of compressed live textures.
+ */
+void RunTextureDumpSerializerTests();
+
+/**
  * @brief Runs the delta-backed virtual file source coverage for exact base-file reconstruction.
  */
 void RunDeltaVirtualFileSourceTests();
@@ -120,6 +125,7 @@ int main()
         RunFileFingerprintTests();
         RunExecutableFingerprintTests();
         RunHgdeltaFileTests();
+        RunTextureDumpSerializerTests();
         RunDeltaVirtualFileSourceTests();
         RunPackAssetResolverTests();
         RunPackRepositoryTests();

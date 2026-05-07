@@ -95,6 +95,7 @@
     <ClCompile Include="RuntimeValueStoreTests.cpp" />
     <ClCompile Include="RuntimeLayoutTests.cpp" />
     <ClCompile Include="HgdeltaFileTests.cpp" />
+    <ClCompile Include="TextureDumpSerializerTests.cpp" />
     <ClCompile Include="VirtualFileServiceTests.cpp" />
     <ClCompile Include="TestMain.cpp" />
   </ItemGroup>

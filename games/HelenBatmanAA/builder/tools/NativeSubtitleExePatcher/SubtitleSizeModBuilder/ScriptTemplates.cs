@@ -41,23 +41,66 @@ internal static class ScriptTemplates
        {
           return 1;
        }
-       function NormalizeStoredSubtitleState(InValue)
+       function MapStoredSubtitleCodeToState(InValue)
        {
-          var _loc2_ = this.NormalizeIntState(InValue,this.GetSubtitleDefaultState());
-          if(_loc2_ < 0 || _loc2_ > 2)
+          switch(this.NormalizeIntState(InValue,4102))
           {
-             _loc2_ = this.GetSubtitleDefaultState();
+             case 4101:
+                return 0;
+             case 4102:
+                return 1;
+             case 4103:
+                return 2;
+             case 4104:
+                return 3;
+             case 4105:
+                return 4;
+             case 4106:
+                return 5;
+             default:
+                return this.GetSubtitleDefaultState();
           }
-          return _loc2_;
        }
+
+       function MapSubtitleStateToStoredCode(InValue)
+       {
+          switch(this.NormalizeIntState(InValue,this.GetSubtitleDefaultState()))
+          {
+             case 0:
+                return 4101;
+             case 1:
+                return 4102;
+             case 2:
+                return 4103;
+             case 3:
+                return 4104;
+             case 4:
+                return 4105;
+             case 5:
+                return 4106;
+             default:
+                return 4102;
+          }
+       }
+
        function ReadSubtitleSizeState()
        {
-          return this.NormalizeStoredSubtitleState(flash.external.ExternalInterface.call("Helen_GetInt","ui.subtitleSize"));
+          return this.MapStoredSubtitleCodeToState(flash.external.ExternalInterface.call("FE_GetControlType"));
        }
        function IsBinarySubtitleToggle()
        {
           return this.GameVariable == "Subtitles" && this.Names.length == 2;
        }
+
+       function NormalizeBoolState(InValue, DefaultValue)
+       {
+          if(InValue == undefined)
+          {
+             return DefaultValue;
+          }
+          return InValue != 0 ? 1 : 0;
+       }
+
        function NormalizeSubtitleToggleState(InValue)
        {
           if(InValue == undefined)
@@ -66,17 +109,37 @@ internal static class ScriptTemplates
           }
           return InValue != 0 ? 1 : 0;
        }
-       function StoreSubtitleSizeState()
+       function GetSubtitleSizeBurstCount()
        {
-          flash.external.ExternalInterface.call("Helen_SetInt","ui.subtitleSize",this.State);
+          return (this.State + 1) * 2;
        }
+
        function ApplySubtitleSizeRuntime()
        {
           flash.external.ExternalInterface.call("Helen_RunCommand","applySubtitleSize");
+          if(!this.UsesSubtitleSizeStorage())
+          {
+             return undefined;
+          }
+          var _loc2_ = flash.external.ExternalInterface.call("IsShowingSubtitles");
+          if(_loc2_ == undefined)
+          {
+             _loc2_ = 1;
+          }
+          _loc2_ = this.NormalizeBoolState(_loc2_,1);
+          var _loc3_ = this.GetSubtitleSizeBurstCount();
+          var _loc4_ = 0;
+          var _loc5_ = 1 - _loc2_;
+          while(_loc4_ < _loc3_)
+          {
+             flash.external.ExternalInterface.call("FE_SetSubtitles",_loc4_ % 2 == 0 ? _loc5_ : _loc2_,"");
+             _loc4_ = _loc4_ + 1;
+          }
        }
        function WriteSubtitleSizeState()
        {
-          this.StoreSubtitleSizeState();
+          flash.external.ExternalInterface.call("Helen_SetInt","ui.subtitleSize",this.State);
+          flash.external.ExternalInterface.call("FE_SetControlType",this.MapSubtitleStateToStoredCode(this.State),"");
           this.ApplySubtitleSizeRuntime();
        }
        function Init()
@@ -237,7 +300,6 @@ internal static class ScriptTemplates
             else
             {
                 flash.external.ExternalInterface.call("FE_SetSubtitles",1,this.Names[this.State]);
-                flash.external.ExternalInterface.call("Helen_RunCommand","applySubtitleSize");
             }
           }
           else
@@ -361,7 +423,7 @@ internal static class ScriptTemplates
     /// </summary>
     public const string PauseAudioSubtitleSizeClipAction = """
     onClipEvent(load){
-       this.Init("SubtitleSize","Small","Medium","Large","Very Large","Huge","Massive");
+       this.Init("SubtitleSize","Small","Medium","Large","XL","XXL","XXXL");
     }
     """;
 

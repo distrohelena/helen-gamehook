@@ -232,8 +232,11 @@ namespace helen
                 inserted_virtual_file.SharedSource->GetSize() :
                 inserted_virtual_file.Definition.Source.Target.FileSize;
             Logf(
-                L"[runtime] registered virtual file path=%ls bytes=%llu",
+                L"[runtime] registered virtual file id=%hs mode=%hs path=%ls source=%ls bytes=%llu",
+                inserted_virtual_file.Definition.Id.c_str(),
+                inserted_virtual_file.Definition.Mode.c_str(),
                 normalized_game_path.c_str(),
+                inserted_virtual_file.Definition.Source.Path.c_str(),
                 static_cast<unsigned long long>(registered_size));
         }
 
@@ -330,6 +333,11 @@ namespace helen
         if (source == nullptr &&
             !CreateSource(registered_virtual_file->Definition, game_relative_path, source))
         {
+            Logf(
+                L"[runtime] virtual file source creation failed path=%ls id=%hs mode=%hs",
+                normalized_game_path.c_str(),
+                registered_virtual_file->Definition.Id.c_str(),
+                registered_virtual_file->Definition.Mode.c_str());
             CloseHandle(handle);
             return std::nullopt;
         }
@@ -350,7 +358,13 @@ namespace helen
             return std::nullopt;
         }
 
-        Logf(L"[runtime] serving virtual file path=%ls", normalized_game_path.c_str());
+        Logf(
+            L"[runtime] virtual file open matched handle=0x%p id=%hs mode=%hs path=%ls source=%ls",
+            handle,
+            registered_virtual_file->Definition.Id.c_str(),
+            registered_virtual_file->Definition.Mode.c_str(),
+            normalized_game_path.c_str(),
+            registered_virtual_file->Definition.Source.Path.c_str());
         return handle;
     }
 
@@ -377,6 +391,12 @@ namespace helen
             return std::nullopt;
         }
 
+        Logf(
+            L"[runtime] virtual file mapping request handle=0x%p protect=0x%08lX max=%lu:%lu",
+            handle,
+            static_cast<unsigned long>(protection),
+            static_cast<unsigned long>(maximum_size_high),
+            static_cast<unsigned long>(maximum_size_low));
         return source->CreateFileMapping(protection, maximum_size_high, maximum_size_low);
     }
 
@@ -415,6 +435,7 @@ namespace helen
         }
 
         VirtualFileHandle& virtual_handle = found->second;
+        const std::uint64_t original_position = virtual_handle.ReadPosition;
         if (bytes_to_read == 0)
         {
             return true;
@@ -432,12 +453,17 @@ namespace helen
             return false;
         }
 
-        const std::uint64_t original_position = virtual_handle.ReadPosition;
         const std::uint64_t size = virtual_handle.Source->GetSize();
         const std::uint64_t start = std::min(original_position, size);
         std::size_t copied = 0;
         if (!virtual_handle.Source->Read(start, buffer, static_cast<std::size_t>(bytes_to_read), copied))
         {
+            Logf(
+                L"[runtime] virtual file read failed handle=0x%p offset=%llu bytes=%lu size=%llu",
+                handle,
+                static_cast<unsigned long long>(original_position),
+                static_cast<unsigned long>(bytes_to_read),
+                static_cast<unsigned long long>(size));
             return false;
         }
 

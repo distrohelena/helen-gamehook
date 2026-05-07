@@ -1,12 +1,16 @@
 param(
     [string]$GameBin = 'D:\steam\steamapps\common\Batman Arkham Asylum GOTY\Binaries',
-    [string]$Configuration = 'Release'
+    [string]$Configuration = 'Release',
+    [string]$BuilderRoot
 )
 
 $ErrorActionPreference = 'Stop'
+$BuilderWorkspaceHelpersPath = Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1'
+. $BuilderWorkspaceHelpersPath
 
 $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $RepoRoot = (Resolve-Path (Join-Path $BatmanRoot '..\..')).Path
+$BuilderRoot = Resolve-OptionalBuilderRoot -BatmanRootPath $BatmanRoot -BuilderRootPath $BuilderRoot
 $GameRoot = [System.IO.Path]::GetFullPath((Join-Path $GameBin '..'))
 $PackSource = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-graphics-options'
 $PackDestination = Join-Path $GameBin 'helengamehook\packs\batman-aa-graphics-options'
@@ -83,7 +87,7 @@ if (Test-Path -LiteralPath $SourceHooksJsonPath) {
 }
 
 try {
-    & $VerifierPath -BatmanRoot $BatmanRoot -BuilderRoot (Join-Path $BatmanRoot 'builder')
+    & $VerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot
 } catch {
     throw "Batman graphics-options package verification failed before deployment. $($_.Exception.Message)"
 }

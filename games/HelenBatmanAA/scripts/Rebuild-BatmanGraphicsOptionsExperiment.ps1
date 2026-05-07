@@ -40,8 +40,7 @@ $GeneratedRoot = Join-Path $BuilderRoot 'generated'
 $ExperimentRoot = Join-Path $GeneratedRoot 'graphics-options-experiment'
 $PrototypeBuildRoot = Join-Path $ExperimentRoot 'prototype'
 $PrototypeGfxPath = Join-Path $PrototypeBuildRoot 'MainV2-graphics-options.gfx'
-$DecompressedRetailFrontendPackagePath = Join-Path $ExperimentRoot 'Frontend-retail.decompressed.umap'
-$PatchedDecompressedFrontendPackagePath = Join-Path $ExperimentRoot 'Frontend-graphics-options.decompressed.umap'
+$PatchManifestPath = Join-Path $ExperimentRoot 'MainV2-graphics-options.manifest.json'
 $GeneratedFrontendPackagePath = Join-Path $ExperimentRoot 'Frontend-graphics-options.umap'
 $PackSourceRoot = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-graphics-options'
 $PackBuildRoot = Join-Path $PackSourceRoot 'builds\steam-goty-1.0'
@@ -52,7 +51,7 @@ $FilesJsonPath = Join-Path $PackBuildRoot 'files.json'
 $PackJsonPath = Join-Path $PackSourceRoot 'pack.json'
 $BuildJsonPath = Join-Path $PackBuildRoot 'build.json'
 $BuildMatchScriptPath = Join-Path $PSScriptRoot 'Get-BatmanSteamBuildMatch.ps1'
-$FfdecPath = Join-Path $SourceBuilderRoot 'extracted\ffdec\ffdec-cli.exe'
+$FfdecPath = Join-Path $BuilderRoot 'extracted\ffdec\ffdec-cli.exe'
 $SubtitleSizeModBuilderProjectPath = Join-Path $SourceBuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj'
 $BmGameGfxPatcherProjectPath = Join-Path $SourceBuilderRoot 'tools\NativeSubtitleExePatcher\BmGameGfxPatcher\BmGameGfxPatcher.csproj'
 $RetailFrontendBasePackagePath = Join-Path $BuilderRoot 'extracted\frontend-retail\Frontend.umap'
@@ -64,9 +63,9 @@ foreach ($RequiredPath in @(
     $BmGameGfxPatcherProjectPath,
     $BuildMatchScriptPath,
     $RetailFrontendBasePackagePath,
-    (Join-Path $SourceBuilderRoot 'extracted\frontend\mainv2\frontend-mainv2.xml'),
-    (Join-Path $SourceBuilderRoot 'extracted\frontend\mainv2\frontend-mainv2.gfx'),
-    (Join-Path $SourceBuilderRoot 'extracted\frontend\mainv2\frontend-mainv2-export\scripts')
+    (Join-Path $BuilderRoot 'extracted\frontend\mainv2\frontend-mainv2.xml'),
+    (Join-Path $BuilderRoot 'extracted\frontend\mainv2\frontend-mainv2.gfx'),
+    (Join-Path $BuilderRoot 'extracted\frontend\mainv2\frontend-mainv2-export\scripts')
 )) {
     if (-not (Test-Path -LiteralPath $RequiredPath)) {
         throw "Batman graphics-options build input was not found: $RequiredPath"
@@ -103,30 +102,28 @@ if ($LASTEXITCODE -ne 0) {
     throw 'build-main-menu-graphics failed.'
 }
 
+$PatchManifest = [ordered]@{
+    name = 'MainMenu MainV2 graphics-options patch'
+    patches = @(
+        [ordered]@{
+            owner = 'MainMenu'
+            exportName = 'MainV2'
+            exportType = 'GFxMovieInfo'
+            replacementPath = $PrototypeGfxPath
+            payloadMagic = 'GFX'
+        }
+    )
+}
+
+Write-Utf8TextFile -Path $PatchManifestPath -Contents ($PatchManifest | ConvertTo-Json -Depth 4)
+
 & dotnet run --project $BmGameGfxPatcherProjectPath -c $Configuration -- `
-    decompress `
+    patch `
     --package $RetailFrontendBasePackagePath `
-    --output $DecompressedRetailFrontendPackagePath
-if ($LASTEXITCODE -ne 0) {
-    throw 'decompress failed for the retail frontend base package.'
-}
-
-& dotnet run --project $BmGameGfxPatcherProjectPath -c $Configuration -- `
-    patch-mainv2-graphics-options `
-    --package $DecompressedRetailFrontendPackagePath `
-    --output $PatchedDecompressedFrontendPackagePath `
-    --prototype-gfx $PrototypeGfxPath
-if ($LASTEXITCODE -ne 0) {
-    throw 'patch-mainv2-graphics-options failed.'
-}
-
-& dotnet run --project $BmGameGfxPatcherProjectPath -c $Configuration -- `
-    compress `
-    --input $PatchedDecompressedFrontendPackagePath `
-    --original $RetailFrontendBasePackagePath `
+    --manifest $PatchManifestPath `
     --output $GeneratedFrontendPackagePath
 if ($LASTEXITCODE -ne 0) {
-    throw 'compress failed for the generated graphics-options frontend package.'
+    throw 'patch failed for the generated graphics-options frontend package.'
 }
 
 $DeltaInfo = & $BuildHgdeltaScriptPath `
@@ -199,6 +196,7 @@ $PackJsonObject = [ordered]@{
 $BuildJsonObject = [ordered]@{
     id = $BuildMatch.BuildId
     executable = $BuildMatch.Executable
+    enableD3d9TextureReplacementHooks = $true
     match = [ordered]@{
         fileSize = $BuildMatch.FileSize
         sha256 = $BuildMatch.Sha256

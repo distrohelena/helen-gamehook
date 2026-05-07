@@ -112,9 +112,12 @@ namespace
         map_step.Kind = "map-int-to-double";
         map_step.InputValueName = "subtitleSizeState";
         map_step.OutputValueName = "subtitleScale";
-        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 0, .Value = 2.0 });
-        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 1, .Value = 4.0 });
-        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 2, .Value = 8.0 });
+        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 0, .Value = 1.0 });
+        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 1, .Value = 1.5 });
+        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 2, .Value = 2.0 });
+        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 3, .Value = 4.0 });
+        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 4, .Value = 6.0 });
+        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 5, .Value = 8.0 });
         command.Steps.push_back(map_step);
 
         helen::CommandStepDefinition set_live_step;
@@ -261,7 +264,7 @@ void RunBuildRuntimeCoordinatorTests()
     const std::filesystem::path batman_engine_ini_path = CreateTemporaryBatmanGraphicsIniPath();
     const std::filesystem::path batman_game_ini_path = GetSiblingBatmanGameIniPath(batman_engine_ini_path);
     WriteAllText(batman_engine_ini_path, "[SystemSettings]\r\nFullscreen=False\r\n");
-    WriteAllText(batman_game_ini_path, "[Engine.HUD]\r\nConsoleFontSize=7\r\n");
+    WriteAllText(batman_game_ini_path, "[Engine.HUD]\r\nConsoleFontSize=9\r\n");
 
     helen::BatmanGraphicsConfigService graphics_config_service(batman_engine_ini_path);
     helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
@@ -279,11 +282,11 @@ void RunBuildRuntimeCoordinatorTests()
         Expect(coordinator.Start(), "Build runtime coordinator failed to start.");
 
         const std::optional<int> startup_mirror_value = dispatcher.TryGetInt("ui.subtitleSize");
-        Expect(startup_mirror_value.has_value() && *startup_mirror_value == 2, "Startup commands did not mirror the INI-backed subtitle size into config.");
+        Expect(startup_mirror_value.has_value() && *startup_mirror_value == 4, "Startup commands did not mirror the INI-backed subtitle size into config.");
 
         std::optional<double> slot_value = runtime_values.TryGetDouble("subtitle.scale");
         Expect(slot_value.has_value(), "Startup command removed the subtitle scale slot.");
-        ExpectNear(*slot_value, 8.0, 0.001, "Startup commands did not apply the saved subtitle scale.");
+        ExpectNear(*slot_value, 6.0, 0.001, "Startup commands did not apply the saved subtitle scale.");
 
         ConfigureStateBlock(candidate_address, 4101);
         Expect(coordinator.PollStateObserversOnce(), "Observer poll for the initial subtitle state failed.");
@@ -292,7 +295,7 @@ void RunBuildRuntimeCoordinatorTests()
 
         slot_value = runtime_values.TryGetDouble("subtitle.scale");
         Expect(slot_value.has_value(), "Observer update removed the subtitle scale slot.");
-        ExpectNear(*slot_value, 2.0, 0.001, "Observer update did not apply the small subtitle scale.");
+        ExpectNear(*slot_value, 1.0, 0.001, "Observer update did not apply the small subtitle scale.");
 
         ConfigureStateBlock(candidate_address, 4103);
         Expect(coordinator.PollStateObserversOnce(), "Observer poll for the large subtitle state failed.");
@@ -301,7 +304,7 @@ void RunBuildRuntimeCoordinatorTests()
 
         slot_value = runtime_values.TryGetDouble("subtitle.scale");
         Expect(slot_value.has_value(), "Large observer update removed the subtitle scale slot.");
-        ExpectNear(*slot_value, 8.0, 0.001, "Observer update did not apply the large subtitle scale.");
+        ExpectNear(*slot_value, 2.0, 0.001, "Observer update did not apply the large subtitle scale.");
     }
     catch (...)
     {

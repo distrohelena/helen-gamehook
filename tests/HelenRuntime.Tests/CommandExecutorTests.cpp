@@ -79,9 +79,12 @@ namespace
         map_step.Kind = "map-int-to-double";
         map_step.InputValueName = "subtitleSizeState";
         map_step.OutputValueName = "subtitleScale";
-        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 0, .Value = 1.25 });
+        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 0, .Value = 1.0 });
         map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 1, .Value = 1.5 });
-        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 2, .Value = 1.8 });
+        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 2, .Value = 2.0 });
+        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 3, .Value = 4.0 });
+        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 4, .Value = 6.0 });
+        map_step.Mappings.push_back(helen::CommandMapEntryDefinition{ .Match = 5, .Value = 8.0 });
         command.Steps.push_back(map_step);
 
         helen::CommandStepDefinition set_live_step;
@@ -360,7 +363,7 @@ void RunCommandExecutorTests()
     Expect(executor.RunCommand("applySubtitleSize"), "Happy-path command execution unexpectedly failed.");
     const std::optional<double> applied_value = runtime_values.TryGetDouble("subtitle.scale");
     Expect(applied_value.has_value(), "Happy-path command execution removed the live subtitle scale slot.");
-    ExpectNear(*applied_value, 1.8, 0.001, "Happy-path command execution wrote the wrong live subtitle scale.");
+    ExpectNear(*applied_value, 2.0, 0.001, "Happy-path command execution wrote the wrong live subtitle scale.");
 
     {
         const std::filesystem::path subtitle_ini_path = CreateTemporaryBatmanGraphicsIniPath();
@@ -374,10 +377,10 @@ void RunCommandExecutorTests()
 
         helen::BatmanGraphicsConfigService subtitle_graphics_config_service(subtitle_ini_path);
         helen::CommandExecutor subtitle_executor(subtitle_dispatcher, subtitle_runtime_values, subtitle_graphics_config_service);
-        Expect(subtitle_dispatcher.TrySetInt("ui.subtitleSize", 2), "Failed to seed the subtitle size config for the persistence command test.");
+        Expect(subtitle_dispatcher.TrySetInt("ui.subtitleSize", 4), "Failed to seed the subtitle size config for the persistence command test.");
         Expect(subtitle_executor.RegisterCommand(CreateApplySubtitleSizePersistCommand("applySubtitleSizeWithPersistence")), "Failed to register the subtitle persistence command.");
         Expect(subtitle_executor.RunCommand("applySubtitleSizeWithPersistence"), "Subtitle persistence command execution unexpectedly failed.");
-        Expect(ReadAllText(subtitle_ini_path).find("ConsoleFontSize=7") != std::string::npos, "Subtitle persistence command did not update Engine.HUD.ConsoleFontSize.");
+        Expect(ReadAllText(subtitle_ini_path).find("ConsoleFontSize=9") != std::string::npos, "Subtitle persistence command did not update Engine.HUD.ConsoleFontSize.");
         }
 
         {
@@ -405,7 +408,7 @@ void RunCommandExecutorTests()
             const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath();
             const std::filesystem::path game_ini_path = GetSiblingBatmanGameIniPath(engine_ini_path);
             WriteAllText(engine_ini_path, CreateBatmanSubtitleIniTextMissingHudSection());
-            WriteAllText(game_ini_path, CreateBatmanSubtitleIniText(6));
+            WriteAllText(game_ini_path, CreateBatmanSubtitleIniText(9));
 
             helen::CommandDispatcher subtitle_dispatcher;
             subtitle_dispatcher.RegisterConfigInt("ui.subtitleSize", 0);
@@ -418,7 +421,7 @@ void RunCommandExecutorTests()
             Expect(subtitle_executor.RegisterCommand(CreateApplySubtitleSizePersistCommand("applySubtitleSizeWithSiblingBmGame")), "Failed to register the subtitle sibling-path persist command.");
 
             Expect(subtitle_graphics_config_service.LoadSubtitleSizeIntoDispatcher(subtitle_dispatcher), "Subtitle load did not read the sibling BmGame.ini value.");
-            Expect(subtitle_dispatcher.TryGetInt("ui.subtitleSize") == 1, "Subtitle load mapped the sibling BmGame.ini value incorrectly.");
+            Expect(subtitle_dispatcher.TryGetInt("ui.subtitleSize") == 4, "Subtitle load mapped the sibling BmGame.ini value incorrectly.");
 
             Expect(subtitle_dispatcher.TrySetInt("ui.subtitleSize", 2), "Failed to seed the subtitle size config for sibling BmGame.ini persistence.");
             Expect(subtitle_executor.RunCommand("applySubtitleSizeWithSiblingBmGame"), "Subtitle sibling-path persistence command execution unexpectedly failed.");

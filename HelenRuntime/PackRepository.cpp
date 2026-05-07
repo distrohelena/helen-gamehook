@@ -12,6 +12,7 @@
 #include <HelenHook/Log.h>
 #include <HelenHook/MemoryStateObserverCheckDefinition.h>
 #include <HelenHook/RuntimeSlotDefinition.h>
+#include <HelenHook/TextureReplacementDefinition.h>
 #include <HelenHook/VirtualFileHashDefinition.h>
 #include <HelenHook/VirtualFileSourceDefinition.h>
 #include <HelenHook/VirtualFileSourceKind.h>
@@ -630,6 +631,41 @@ namespace
 
         definition.Match.FileSize = *file_size;
         definition.Match.Sha256 = ToLowerAscii(*sha256);
+        definition.EnableD3d9TextureReplacementHooks = false;
+        definition.EnableD3d9TextureHashLogging = false;
+        definition.EnableD3d9TextureImageDumping = false;
+        if (const helen::JsonValue* enable_d3d9_texture_hooks_value = FindObjectMember(root, "enableD3d9TextureReplacementHooks"))
+        {
+            const std::optional<bool> enable_d3d9_texture_hooks = enable_d3d9_texture_hooks_value->AsBoolean();
+            if (!enable_d3d9_texture_hooks.has_value())
+            {
+                return false;
+            }
+
+            definition.EnableD3d9TextureReplacementHooks = *enable_d3d9_texture_hooks;
+        }
+
+        if (const helen::JsonValue* enable_d3d9_texture_hash_logging_value = FindObjectMember(root, "enableD3d9TextureHashLogging"))
+        {
+            const std::optional<bool> enable_d3d9_texture_hash_logging = enable_d3d9_texture_hash_logging_value->AsBoolean();
+            if (!enable_d3d9_texture_hash_logging.has_value())
+            {
+                return false;
+            }
+
+            definition.EnableD3d9TextureHashLogging = *enable_d3d9_texture_hash_logging;
+        }
+
+        if (const helen::JsonValue* enable_d3d9_texture_image_dumping_value = FindObjectMember(root, "enableD3d9TextureImageDumping"))
+        {
+            const std::optional<bool> enable_d3d9_texture_image_dumping = enable_d3d9_texture_image_dumping_value->AsBoolean();
+            if (!enable_d3d9_texture_image_dumping.has_value())
+            {
+                return false;
+            }
+
+            definition.EnableD3d9TextureImageDumping = *enable_d3d9_texture_image_dumping;
+        }
 
         if (const helen::JsonValue* startup_commands_value = FindObjectMember(root, "startupCommands"))
         {
@@ -1240,6 +1276,57 @@ namespace
     }
 
     /**
+     * @brief Parses one texture replacement declaration from `textures.json`.
+     * @param value JSON object that should describe one replacement rule.
+     * @param definition Receives the parsed replacement definition on success.
+     * @return True when the declaration is valid; otherwise false.
+     */
+    bool ParseTextureReplacementDefinition(const helen::JsonValue& value, helen::TextureReplacementDefinition& definition)
+    {
+        const std::optional<std::string> id = TryGetString(FindObjectMember(value, "id"));
+        const std::optional<std::string> api = TryGetString(FindObjectMember(value, "api"));
+        const helen::JsonValue* match_value = FindObjectMember(value, "match");
+        const helen::JsonValue* replacement_value = FindObjectMember(value, "replacement");
+        if (!id.has_value() || id->empty() || !api.has_value() || api->empty() || match_value == nullptr || replacement_value == nullptr)
+        {
+            return false;
+        }
+
+        const std::optional<std::uint32_t> width = TryGetUnsigned32Value(FindObjectMember(*match_value, "width"));
+        const std::optional<std::uint32_t> height = TryGetUnsigned32Value(FindObjectMember(*match_value, "height"));
+        const std::optional<std::string> format = TryGetString(FindObjectMember(*match_value, "format"));
+        const std::optional<std::string> hash = TryGetString(FindObjectMember(*match_value, "hash"));
+        const std::optional<std::string> replacement_path = TryGetString(FindObjectMember(*replacement_value, "path"));
+        if (!width.has_value() || !height.has_value() || *width == 0 || *height == 0 ||
+            !format.has_value() || format->empty() || !hash.has_value() || !IsValidSha256Text(*hash) ||
+            !replacement_path.has_value() || replacement_path->empty())
+        {
+            return false;
+        }
+
+        definition.Id = *id;
+        definition.Api = *api;
+        definition.Width = *width;
+        definition.Height = *height;
+        definition.Format = *format;
+        definition.Hash = ToLowerAscii(*hash);
+        definition.ReplacementPath = std::filesystem::path(*replacement_path);
+
+        if (const helen::JsonValue* scope_value = FindObjectMember(value, "scope"))
+        {
+            const std::optional<int> sampler_stage = TryGetInt(FindObjectMember(*scope_value, "samplerStage"));
+            if (!sampler_stage.has_value() || *sampler_stage < 0)
+            {
+                return false;
+            }
+
+            definition.SamplerStage = *sampler_stage;
+        }
+
+        return true;
+    }
+
+    /**
      * @brief Parses the optional `commands.json` manifest into the build definition.
      * @param path Commands-manifest path that may or may not exist.
      * @param definition Build definition that should receive parsed commands.
@@ -1274,6 +1361,46 @@ namespace
             }
 
             definition.Commands.push_back(std::move(command));
+        }
+
+        return true;
+    }
+
+    /**
+     * @brief Parses the optional `textures.json` manifest into the build definition.
+     * @param path Texture-manifest path that may or may not exist.
+     * @param definition Build definition that should receive parsed texture replacement declarations.
+     * @return True when the manifest is absent or valid; otherwise false.
+     */
+    bool LoadTexturesManifest(const std::filesystem::path& path, helen::BuildDefinition& definition)
+    {
+        if (!std::filesystem::exists(path))
+        {
+            return true;
+        }
+
+        helen::JsonValue root;
+        if (!TryReadJsonFile(path, root))
+        {
+            return false;
+        }
+
+        const helen::JsonValue* replacements_value = FindObjectMember(root, "replacements");
+        const helen::JsonValue::Array* replacements = replacements_value != nullptr ? replacements_value->AsArray() : nullptr;
+        if (replacements == nullptr)
+        {
+            return false;
+        }
+
+        for (const helen::JsonValue& replacement_value : *replacements)
+        {
+            helen::TextureReplacementDefinition replacement;
+            if (!ParseTextureReplacementDefinition(replacement_value, replacement))
+            {
+                return false;
+            }
+
+            definition.TextureReplacements.push_back(std::move(replacement));
         }
 
         return true;
@@ -1463,6 +1590,13 @@ namespace
         if (!LoadHooksManifest(build_directory / "hooks.json", definition))
         {
             helen::Logf(L"[pack] LoadBuildDefinition: hooks.json failed");
+            return false;
+        }
+
+        helen::Logf(L"[pack] LoadBuildDefinition: loading textures.json");
+        if (!LoadTexturesManifest(build_directory / "textures.json", definition))
+        {
+            helen::Logf(L"[pack] LoadBuildDefinition: textures.json failed");
             return false;
         }
 

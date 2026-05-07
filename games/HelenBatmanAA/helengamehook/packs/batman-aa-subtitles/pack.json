@@ -2,7 +2,7 @@
     "schemaVersion":  1,
     "id":  "batman-aa-subtitles",
     "name":  "Batman Arkham Asylum Gameplay Subtitle Slice",
-    "description":  "Gameplay-only Helen sample pack for Batman subtitle experiments.",
+    "description":  "Gameplay-only Helen sample pack for Batman subtitle experiments. Six-size release.",
     "targets":  [
                     {
                         "gameId":  "batman-arkham-asylum",
@@ -29,9 +29,9 @@
                                          "Small",
                                          "Medium",
                                          "Large",
-                                         "Very Large",
-                                         "Huge",
-                                         "Massive"
+                                         "XL",
+                                         "XXL",
+                                         "XXXL"
                                      ]
                      }
                  ],

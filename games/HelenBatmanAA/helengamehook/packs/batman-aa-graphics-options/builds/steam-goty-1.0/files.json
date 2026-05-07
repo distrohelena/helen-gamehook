@@ -10,8 +10,8 @@
                                                      },
                                             "chunkSize":  65536,
                                             "target":  {
-                                                           "sha256":  "19ba18117d5958615e52c03864771e037fe46b315d2083a1a6c9aaf829823882",
-                                                           "size":  4279809
+                                                           "sha256":  "3e010c701fec4fd1f81baec21d66be65e0f09c0ba4112702eedbb4e57869c3cb",
+                                                           "size":  12416760
                                                        },
                                             "kind":  "delta-file"
                                         },

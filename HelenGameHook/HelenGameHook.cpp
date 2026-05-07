@@ -3,6 +3,7 @@
 #include <HelenHook/BuildHookInstaller.h>
 #include <HelenHook/CommandDispatcher.h>
 #include <HelenHook/CommandExecutor.h>
+#include <HelenHook/D3d9TextureReplacementHookSet.h>
 #include <HelenHook/ExecutableFingerprint.h>
 #include <HelenHook/ExternalBindingService.h>
 #include <HelenHook/FileApiHookSet.h>
@@ -59,6 +60,8 @@ namespace
     std::unique_ptr<helen::VirtualFileService> g_virtual_files;
     /** @brief Win32 API hook set that redirects declared virtual files into RAM-backed handles. */
     std::unique_ptr<helen::FileApiHookSet> g_file_hooks;
+    /** @brief Optional Direct3D 9 texture replacement hook set driven by build texture metadata. */
+    std::unique_ptr<helen::D3d9TextureReplacementHookSet> g_d3d9_texture_hooks;
     /** @brief Generic blob-backed native hook installer for the active build. */
     std::unique_ptr<helen::BuildHookInstaller> g_build_hooks;
 
@@ -456,14 +459,22 @@ namespace
      * @param active_pack Active loaded pack/build declaration set chosen for the host executable.
      * @return True when every service initializes successfully; otherwise false.
      */
-    bool InitializeActivePackRuntime(const helen::RuntimeLayout& layout, const helen::LoadedBuildPack& active_pack)
+bool InitializeActivePackRuntime(const helen::RuntimeLayout& layout, const helen::LoadedBuildPack& active_pack)
     {
+        helen::Logf(
+            L"[runtime] active-pack init begin pack=%hs build=%hs",
+            active_pack.Pack.Id.c_str(),
+            active_pack.Build.Id.c_str());
+
         if (!RegisterDeclaredConfigEntries(active_pack))
         {
             return false;
         }
 
+        helen::Log(L"[runtime] active-pack init config entries ready.");
+
         g_runtime_values = std::make_unique<helen::RuntimeValueStore>();
+        helen::Log(L"[runtime] active-pack init runtime value store created.");
         if (!RegisterDeclaredRuntimeSlots(active_pack))
         {
             return false;
@@ -483,16 +494,19 @@ namespace
         }
 
         g_batman_graphics_config_service = std::make_unique<helen::BatmanGraphicsConfigService>(*batman_engine_ini_path);
+        helen::Logf(L"[runtime] active-pack init batman ini=%ls", batman_engine_ini_path->c_str());
         g_command_executor = std::make_unique<helen::CommandExecutor>(
             *g_command_dispatcher,
             *g_runtime_values,
             *g_batman_graphics_config_service);
+        helen::Log(L"[runtime] active-pack init command executor created.");
         if (!RegisterDeclaredCommands(active_pack))
         {
             return false;
         }
 
         g_external_bindings = std::make_unique<helen::ExternalBindingService>(*g_command_dispatcher, *g_command_executor);
+        helen::Log(L"[runtime] active-pack init external binding service created.");
         if (!RegisterDeclaredExternalBindings(active_pack))
         {
             return false;
@@ -501,6 +515,7 @@ namespace
         try
         {
             g_asset_resolver = std::make_unique<helen::PackAssetResolver>(active_pack.PackDirectory, active_pack.BuildDirectory);
+            helen::Log(L"[runtime] active-pack init pack asset resolver created.");
         }
         catch (const std::exception& exception)
         {
@@ -509,35 +524,66 @@ namespace
         }
 
         g_virtual_files = std::make_unique<helen::VirtualFileService>(*g_asset_resolver, layout.CacheDirectory);
+        helen::Log(L"[runtime] active-pack init virtual file service created.");
         if (!RegisterDeclaredVirtualFiles(active_pack))
         {
             return false;
         }
 
         g_build_hooks = std::make_unique<helen::BuildHookInstaller>(*g_asset_resolver);
+        helen::Log(L"[runtime] active-pack init build hook installer created.");
         if (!g_build_hooks->Install(active_pack.Build.Hooks, *g_runtime_values))
         {
             helen::Log(L"[runtime] failed to install build hooks.");
             return false;
         }
+        helen::Log(L"[runtime] active-pack init build hooks installed.");
 
         g_file_hooks = std::make_unique<helen::FileApiHookSet>(*g_virtual_files);
+        helen::Log(L"[runtime] active-pack init file api hook set created.");
         if (!g_file_hooks->Install())
         {
             helen::Log(L"[runtime] failed to install file API hooks.");
             return false;
         }
+        helen::Log(L"[runtime] active-pack init file API hooks installed.");
 
+        g_d3d9_texture_hooks = std::make_unique<helen::D3d9TextureReplacementHookSet>(
+            *g_asset_resolver,
+            active_pack.Build.EnableD3d9TextureReplacementHooks,
+            active_pack.Build.EnableD3d9TextureHashLogging,
+            active_pack.Build.EnableD3d9TextureImageDumping,
+            layout.LogsDirectory / L"d3d9-textures",
+            active_pack.Build.TextureReplacements);
+        helen::Logf(
+            L"[runtime] active-pack init d3d9 hooks created enable=%d hash=%d dump=%d replacements=%zu",
+            static_cast<int>(active_pack.Build.EnableD3d9TextureReplacementHooks),
+            static_cast<int>(active_pack.Build.EnableD3d9TextureHashLogging),
+            static_cast<int>(active_pack.Build.EnableD3d9TextureImageDumping),
+            active_pack.Build.TextureReplacements.size());
+        helen::Log(L"[runtime] active-pack init d3d9 hooks install begin.");
+        if (!g_d3d9_texture_hooks->Install())
+        {
+            helen::Log(L"[runtime] failed to install D3D9 texture replacement hooks.");
+            return false;
+        }
+        helen::Log(L"[runtime] active-pack init d3d9 hooks install returned.");
+
+        helen::Log(L"[runtime] active-pack init build runtime coordinator create begin.");
         g_build_runtime_coordinator = std::make_unique<helen::BuildRuntimeCoordinator>(
             active_pack.Build.StartupCommandIds,
             active_pack.Build.StateObservers,
             *g_command_dispatcher,
             *g_command_executor);
+        helen::Log(L"[runtime] active-pack init build runtime coordinator created.");
+        helen::Log(L"[runtime] active-pack init build runtime coordinator start begin.");
         if (!g_build_runtime_coordinator->Start())
         {
             helen::Log(L"[runtime] failed to start build runtime coordinator.");
             return false;
         }
+
+        helen::Log(L"[runtime] active-pack init complete.");
 
         return true;
     }
@@ -548,6 +594,7 @@ namespace
     void ResetPackRuntimeState()
     {
         g_build_runtime_coordinator.reset();
+        g_d3d9_texture_hooks.reset();
         g_build_hooks.reset();
         g_file_hooks.reset();
         g_virtual_files.reset();
@@ -581,6 +628,7 @@ namespace
     void HandleProcessDetach()
     {
         static_cast<void>(g_build_runtime_coordinator.release());
+        static_cast<void>(g_d3d9_texture_hooks.release());
         static_cast<void>(g_build_hooks.release());
         static_cast<void>(g_file_hooks.release());
         static_cast<void>(g_virtual_files.release());
@@ -627,17 +675,23 @@ extern "C" __declspec(dllexport) BOOL __stdcall HelenInitialize()
     }
 
     helen::SetLogPath(layout.LogsDirectory / L"HelenGameHook.log");
+    helen::Log(L"[runtime] HelenInitialize enter.");
+    helen::Logf(L"[runtime] module=%ls", module_path.c_str());
+    helen::Logf(L"[runtime] helen_root=%ls", layout.HelenRoot.c_str());
+    helen::Logf(L"[runtime] logs=%ls", layout.LogsDirectory.c_str());
     if (!InitializeCommandSurface(layout))
     {
         ResetRuntimeState();
         return FALSE;
     }
+    helen::Log(L"[runtime] command surface initialized.");
 
     if (!InitializePackRepository(layout))
     {
         ResetRuntimeState();
         return FALSE;
     }
+    helen::Log(L"[runtime] pack repository initialized.");
 
     if (g_active_pack && !InitializeActivePackRuntime(layout, *g_active_pack))
     {
@@ -645,9 +699,7 @@ extern "C" __declspec(dllexport) BOOL __stdcall HelenInitialize()
         return FALSE;
     }
 
-    helen::Log(L"[runtime] HelenInitialize");
-    helen::Logf(L"[runtime] module=%ls", module_path.c_str());
-    helen::Logf(L"[runtime] helen_root=%ls", layout.HelenRoot.c_str());
+    helen::Log(L"[runtime] HelenInitialize complete.");
 
     g_layout = layout;
     g_initialized = true;

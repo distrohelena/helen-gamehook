@@ -97,6 +97,7 @@
     <ClInclude Include="..\include\HelenHook\BuildHookInstaller.h" />
     <ClInclude Include="..\include\HelenHook\CommandDispatcher.h" />
     <ClInclude Include="..\include\HelenHook\CommandExecutor.h" />
+    <ClInclude Include="..\include\HelenHook\D3d9TextureReplacementHookSet.h" />
     <ClInclude Include="..\include\HelenHook\ExecutableFingerprint.h" />
     <ClInclude Include="..\include\HelenHook\ExternalBindingService.h" />
     <ClInclude Include="..\include\HelenHook\FileApiHookSet.h" />

@@ -243,7 +243,6 @@ $TrustedFrontendBasePath = Join-Path $BuilderRoot 'extracted\frontend-retail\Fro
 $GeneratedFrontendPackagePath = Join-Path $BuilderRoot 'generated\graphics-options-experiment\Frontend-graphics-options.umap'
 $PrototypeExportScriptsRoot = Join-Path $BuilderRoot 'generated\graphics-options-experiment\prototype\_build\frontend-scripts'
 $GraphicsVerificationRoot = Join-Path $BuilderRoot 'generated\graphics-options-experiment\verification'
-$DecompressedGeneratedFrontendPackagePath = Join-Path $GraphicsVerificationRoot 'Frontend-graphics-options.decompressed.umap'
 $ExtractedGfxPath = Join-Path $GraphicsVerificationRoot 'MainV2-graphics-options.gfx'
 $ExportRoot = Join-Path $GraphicsVerificationRoot 'MainV2-export'
 $ExportScriptsRoot = Join-Path $ExportRoot 'scripts'
@@ -324,6 +323,8 @@ $ExpectedFixedRowClipSuffixes = @(
 $RequiredInteractiveScreenTokens = @(
     'this.RowOrder = new Array("Fullscreen","Resolution","VSync","MSAA","DetailLevel","Bloom","DynamicShadows","MotionBlur","Distortion","FogVolumes","SphericalHarmonicLighting","AmbientOcclusion","PhysX","Stereo3D","ApplyChanges");',
     'flash.external.ExternalInterface.call("Helen_GetInt",key)',
+    'flash.external.ExternalInterface.call("Helen_SetInt",_loc2_,nextState)',
+    'flash.external.ExternalInterface.call("Helen_ApplyBatmanGraphicsDraft")',
     'this.LogDraftSnapshot("ApplyChanges before-native");',
     'this.LogDraftSnapshot("ApplyChanges after-reload");',
     'function ApplyDetailPresetToDraft(detailLevel)',
@@ -336,10 +337,7 @@ $RequiredInteractiveScreenTokens = @(
     'this.Title.text = "Graphics Options";'
 )
 
-$ForbiddenInteractiveScreenTokens = @(
-    'flash.external.ExternalInterface.call("Helen_SetInt"',
-    'flash.external.ExternalInterface.call("Helen_ApplyBatmanGraphicsDraft")'
-)
+$ForbiddenInteractiveScreenTokens = @()
 
 $ForbiddenScrollWindowTokens = @(
     'this.WindowStartIndex = 0;',
@@ -537,6 +535,10 @@ if ($BuildManifest.match.sha256 -ne $ExpectedBuildMatch.Sha256) {
     throw "Batman graphics-options build sha256 mismatch: $($BuildManifest.match.sha256)"
 }
 
+if ($BuildManifest.enableD3d9TextureReplacementHooks -ne $true) {
+    throw 'Batman graphics-options build must enable D3D9 texture replacement hooks.'
+}
+
 $StartupCommands = @($BuildManifest.startupCommands)
 if ($StartupCommands.Count -ne 1 -or $StartupCommands[0] -ne 'loadBatmanGraphicsDraftIntoConfig') {
     throw 'Batman graphics-options build startupCommands drifted.'
@@ -552,12 +554,11 @@ if ($null -ne $BindingsManifest.bindings) {
 
 $ExpectedRunCommandBindings = @(
     [ordered]@{ id = 'graphicsRunLoadDraft'; externalName = 'Helen_RunCommand'; mode = 'run-command'; command = 'loadBatmanGraphicsDraftIntoConfig' },
-    [ordered]@{ id = 'graphicsRunApplyDraft'; externalName = 'Helen_RunCommand'; mode = 'run-command'; command = 'applyBatmanGraphicsDraft' },
-    [ordered]@{ id = 'graphicsFeRunCommand'; externalName = 'FE_RunCommand'; mode = 'run-command'; command = 'graphicsApplyCarrier' }
+    [ordered]@{ id = 'graphicsRunApplyDraft'; externalName = 'Helen_RunCommand'; mode = 'run-command'; command = 'applyBatmanGraphicsDraft' }
 )
 
-if ($ExternalBindings.Count -ne ($ExpectedGetIntConfigKeys.Count + $ExpectedRunCommandBindings.Count)) {
-    throw "Batman graphics-options binding count drifted. Expected $(($ExpectedGetIntConfigKeys.Count + $ExpectedRunCommandBindings.Count)) but found $($ExternalBindings.Count)."
+if ($ExternalBindings.Count -ne ($ExpectedGetIntConfigKeys.Count + $ExpectedSetIntConfigKeys.Count + $ExpectedRunCommandBindings.Count)) {
+    throw "Batman graphics-options binding count drifted. Expected $(($ExpectedGetIntConfigKeys.Count + $ExpectedSetIntConfigKeys.Count + $ExpectedRunCommandBindings.Count)) but found $($ExternalBindings.Count)."
 }
 
 foreach ($ExpectedConfigKey in $ExpectedGetIntConfigKeys) {
@@ -583,8 +584,8 @@ foreach ($ExpectedConfigKey in $ExpectedSetIntConfigKeys) {
         }
     )
 
-    if ($MatchingSetBindings.Count -ne 0) {
-        throw "Batman graphics-options bindings must not expose Helen_SetInt for config key '$ExpectedConfigKey'."
+    if ($MatchingSetBindings.Count -ne 1) {
+        throw "Batman graphics-options bindings are missing expected Helen_SetInt config key '$ExpectedConfigKey'."
     }
 }
 
@@ -605,8 +606,8 @@ foreach ($ExpectedRunCommandBinding in $ExpectedRunCommandBindings) {
 
 $CommandsManifest = Get-Content -LiteralPath $CommandsJsonPath -Raw | ConvertFrom-Json
 $Commands = @($CommandsManifest.commands)
-if ($Commands.Count -ne 2) {
-    throw "Batman graphics-options command count drifted. Expected 2 but found $($Commands.Count)."
+if ($Commands.Count -ne 4) {
+    throw "Batman graphics-options command count drifted. Expected 4 but found $($Commands.Count)."
 }
 
 $LoadDraftCommand = @($Commands | Where-Object { $_.id -eq 'loadBatmanGraphicsDraftIntoConfig' })[0]
@@ -622,15 +623,34 @@ if (@($LoadDraftCommand.steps).Count -ne 1 -or @($LoadDraftCommand.steps)[0].kin
     throw 'Batman graphics-options load command steps drifted.'
 }
 
-foreach ($ForbiddenCommandId in @(
-    'syncBatmanGraphicsPreset',
-    'syncBatmanGraphicsDetailLevel',
-    'graphicsApplyCarrier'
-)) {
-    $MatchingForbiddenCommands = @($Commands | Where-Object { $_.id -eq $ForbiddenCommandId })
-    if ($MatchingForbiddenCommands.Count -ne 0) {
-        throw "Batman graphics-options commands must not include deprecated or synthetic command '$ForbiddenCommandId'."
-    }
+$SyncPresetCommand = @($Commands | Where-Object { $_.id -eq 'syncBatmanGraphicsPreset' })[0]
+if ($null -eq $SyncPresetCommand) {
+    throw 'Batman graphics-options commands are missing syncBatmanGraphicsPreset.'
+}
+
+if ($SyncPresetCommand.name -ne 'Sync Batman Graphics Preset') {
+    throw 'Batman graphics-options sync preset command name drifted.'
+}
+
+if (@($SyncPresetCommand.steps).Count -ne 1 -or @($SyncPresetCommand.steps)[0].kind -ne 'sync-batman-graphics-detail-preset') {
+    throw 'Batman graphics-options sync preset command steps drifted.'
+}
+
+$SyncDetailLevelCommand = @($Commands | Where-Object { $_.id -eq 'syncBatmanGraphicsDetailLevel' })[0]
+if ($null -eq $SyncDetailLevelCommand) {
+    throw 'Batman graphics-options commands are missing syncBatmanGraphicsDetailLevel.'
+}
+
+if ($SyncDetailLevelCommand.name -ne 'Sync Batman Graphics Detail Level') {
+    throw 'Batman graphics-options sync detail-level command name drifted.'
+}
+
+if (@($SyncDetailLevelCommand.steps).Count -ne 1 -or @($SyncDetailLevelCommand.steps)[0].kind -ne 'sync-batman-graphics-detail-level') {
+    throw 'Batman graphics-options sync detail-level command steps drifted.'
+}
+
+if (@($Commands | Where-Object { $_.id -eq 'graphicsApplyCarrier' }).Count -ne 0) {
+    throw "Batman graphics-options commands must not include synthetic command 'graphicsApplyCarrier'."
 }
 
 $ApplyDraftCommand = @($Commands | Where-Object { $_.id -eq 'applyBatmanGraphicsDraft' })[0]
@@ -685,18 +705,17 @@ foreach ($ForbiddenInteractiveScreenToken in $ForbiddenInteractiveScreenTokens) 
 }
 
 $SetDraftRowStateFunction = Get-ActionScriptFunctionText -ScriptText $GraphicsScreenScript -FunctionName 'SetDraftRowState'
-if ($SetDraftRowStateFunction.IndexOf('Helen_SetInt', [System.StringComparison]::Ordinal) -ge 0) {
-    throw 'Batman graphics-options prototype SetDraftRowState must not call Helen_SetInt.'
+if ($SetDraftRowStateFunction.IndexOf('Helen_SetInt', [System.StringComparison]::Ordinal) -lt 0) {
+    throw 'Batman graphics-options prototype SetDraftRowState must call Helen_SetInt.'
 }
 
-if ($SetDraftRowStateFunction.IndexOf('this.LoadDraftValues();', [System.StringComparison]::Ordinal) -ge 0) {
-    throw 'Batman graphics-options prototype SetDraftRowState must not reload draft values from disk.'
+if ($SetDraftRowStateFunction.IndexOf('this.LoadDraftValues();', [System.StringComparison]::Ordinal) -lt 0) {
+    throw 'Batman graphics-options prototype SetDraftRowState must reload draft values after a successful native write.'
 }
 
 $ApplyChangesFunction = Get-ActionScriptFunctionText -ScriptText $GraphicsScreenScript -FunctionName 'ApplyChanges'
 foreach ($RequiredApplyChangesToken in @(
-    'flash.external.ExternalInterface.call("FE_RunCommand",',
-    'gfx_apply:',
+    'flash.external.ExternalInterface.call("Helen_ApplyBatmanGraphicsDraft")',
     'this.LoadDraftValues();',
     'this.LogDraftSnapshot("ApplyChanges after-reload");',
     'this.CaptureInitialState();',
@@ -709,7 +728,8 @@ foreach ($RequiredApplyChangesToken in @(
 }
 
 foreach ($ForbiddenApplyChangesToken in @(
-    'Helen_ApplyBatmanGraphicsDraft',
+    'FE_RunCommand',
+    'gfx_apply:',
     'ReturnFromScreen()'
 )) {
     if ($ApplyChangesFunction.IndexOf($ForbiddenApplyChangesToken, [System.StringComparison]::Ordinal) -ge 0) {
@@ -775,21 +795,13 @@ if (Test-Path -LiteralPath $GraphicsVerificationRoot) {
 New-Item -ItemType Directory -Force -Path $GraphicsVerificationRoot | Out-Null
 
 & dotnet run --project $ToolProjectPath -c Debug -- `
-    decompress `
-    --package $GeneratedFrontendPackagePath `
-    --output $DecompressedGeneratedFrontendPackagePath
-if ($LASTEXITCODE -ne 0) {
-    throw "Batman graphics-options package verification failed to decompress $GeneratedFrontendPackagePath."
-}
-
-& dotnet run --project $ToolProjectPath -c Debug -- `
     extract-gfx `
-    --package $DecompressedGeneratedFrontendPackagePath `
+    --package $GeneratedFrontendPackagePath `
     --owner MainMenu `
     --name MainV2 `
     --output $ExtractedGfxPath
 if ($LASTEXITCODE -ne 0) {
-    throw "Batman graphics-options package verification failed to extract MainV2 from $DecompressedGeneratedFrontendPackagePath."
+    throw "Batman graphics-options package verification failed to extract MainV2 from $GeneratedFrontendPackagePath."
 }
 
 $ExportResult = Invoke-ExternalProcess `

@@ -30,6 +30,11 @@ class rs.ui.ListItem extends MovieClip
       return int(InValue);
    }
 
+   function IsBinarySubtitleToggle()
+   {
+      return this.GameVariable == "Subtitles" && this.Names.length == 2;
+   }
+
    function NormalizeBoolState(InValue, DefaultValue)
    {
       if(InValue == undefined)
@@ -91,11 +96,6 @@ class rs.ui.ListItem extends MovieClip
       return this.MapStoredSubtitleCodeToState(flash.external.ExternalInterface.call("FE_GetControlType"));
    }
 
-   function IsBinarySubtitleToggle()
-   {
-      return this.GameVariable == "Subtitles" && this.Names.length == 2;
-   }
-
    function NormalizeSubtitleToggleState(InValue)
    {
       if(InValue == undefined)
@@ -107,6 +107,7 @@ class rs.ui.ListItem extends MovieClip
 
    function WriteSubtitleSizeState()
    {
+      flash.external.ExternalInterface.call("Helen_SetInt","ui.subtitleSize",this.State);
       flash.external.ExternalInterface.call("FE_SetControlType",this.MapSubtitleStateToStoredCode(this.State),"");
       this.ApplySubtitleSizeRuntime();
    }
@@ -118,6 +119,7 @@ class rs.ui.ListItem extends MovieClip
 
    function ApplySubtitleSizeRuntime()
    {
+      flash.external.ExternalInterface.call("Helen_RunCommand","applySubtitleSize");
       if(!this.UsesSubtitleSizeStorage())
       {
          return undefined;

@@ -9,6 +9,7 @@
 #include <HelenHook/HookDefinition.h>
 #include <HelenHook/MemoryStateObserverDefinition.h>
 #include <HelenHook/RuntimeSlotDefinition.h>
+#include <HelenHook/TextureReplacementDefinition.h>
 #include <HelenHook/VirtualFileDefinition.h>
 
 namespace helen
@@ -23,6 +24,12 @@ namespace helen
         std::string Id;
         /** @brief Executable fingerprint required for this build to activate. */
         BuildMatchDefinition Match;
+        /** @brief Enables the Direct3D 9 texture replacement hook subsystem even when no replacements are declared yet. */
+        bool EnableD3d9TextureReplacementHooks{};
+        /** @brief Enables expensive live D3D9 texture hashing/logging used only for development-time discovery. */
+        bool EnableD3d9TextureHashLogging{};
+        /** @brief Enables development-time dumping of lockable live D3D9 textures to image files. */
+        bool EnableD3d9TextureImageDumping{};
         /** @brief Command identifiers that must run once after the build command surface is registered. */
         std::vector<std::string> StartupCommandIds;
         /** @brief Virtual file declarations served when this build is active. */
@@ -35,6 +42,8 @@ namespace helen
         std::vector<RuntimeSlotDefinition> RuntimeSlots;
         /** @brief Hook and patch declarations resolved against the active executable. */
         std::vector<HookDefinition> Hooks;
+        /** @brief Runtime graphics texture replacement declarations loaded from `textures.json`. */
+        std::vector<TextureReplacementDefinition> TextureReplacements;
         /** @brief Command workflows available to hooks and future runtime entry points. */
         std::vector<CommandDefinition> Commands;
     };
