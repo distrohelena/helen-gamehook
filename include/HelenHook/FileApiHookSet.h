@@ -1,7 +1,11 @@
 #pragma once
 
+#include <filesystem>
+#include <vector>
+
 #include <windows.h>
 
+#include <HelenHook/HiddenPathMatcher.h>
 #include <HelenHook/Hook.h>
 #include <HelenHook/VirtualFileService.h>
 
@@ -26,10 +30,15 @@ namespace helen
         static bool CanVirtualizeOpen(DWORD dwDesiredAccess, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes) noexcept;
 
         /**
-         * @brief Binds the hook set to the virtual file service that should answer matching file requests.
+         * @brief Binds the hook set to the virtual file service and the active hidden-path declarations.
          * @param virtual_files Service that owns the RAM-backed replacement payloads.
+         * @param game_root Absolute game installation root used to relativize hidden absolute paths.
+         * @param hidden_paths Canonical relative paths that should be reported as missing.
          */
-        explicit FileApiHookSet(VirtualFileService& virtual_files);
+        FileApiHookSet(
+            VirtualFileService& virtual_files,
+            std::filesystem::path game_root,
+            std::vector<std::string> hidden_paths);
 
         /**
          * @brief Releases any installed IAT hooks.
@@ -82,6 +91,16 @@ namespace helen
             DWORD dwCreationDisposition,
             DWORD dwFlagsAndAttributes,
             HANDLE hTemplateFile);
+
+        /**
+         * @brief IAT detour for GetFileAttributesW that hides declared missing paths.
+         */
+        static DWORD WINAPI GetFileAttributesWDetour(LPCWSTR lpFileName);
+
+        /**
+         * @brief IAT detour for GetFileAttributesA that hides declared missing paths.
+         */
+        static DWORD WINAPI GetFileAttributesADetour(LPCSTR lpFileName);
 
         /**
          * @brief IAT detour for ReadFile that serves bytes from synthetic virtual handles.
@@ -146,11 +165,20 @@ namespace helen
         /** @brief Virtual file service that supplies matching replacement payloads. */
         VirtualFileService& virtual_files_;
 
+        /** @brief Hidden-path matcher that decides which file requests should be reported as missing. */
+        HiddenPathMatcher hidden_path_matcher_;
+
         /** @brief IAT hook used to replace CreateFileW in the main executable imports when that import is present. */
         IatHook create_file_w_hook_;
 
         /** @brief IAT hook used to replace CreateFileA in the main executable imports when that import is present. */
         IatHook create_file_a_hook_;
+
+        /** @brief IAT hook used to replace GetFileAttributesW in the main executable imports when that import is present. */
+        IatHook get_file_attributes_w_hook_;
+
+        /** @brief IAT hook used to replace GetFileAttributesA in the main executable imports when that import is present. */
+        IatHook get_file_attributes_a_hook_;
 
         /** @brief IAT hook used to replace ReadFile in the main executable imports. */
         IatHook read_file_hook_;

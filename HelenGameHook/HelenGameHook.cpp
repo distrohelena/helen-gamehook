@@ -1,3 +1,5 @@
+#include <HelenHook/ActivePackSet.h>
+#include <HelenHook/ActivePackSetBuilder.h>
 #include <HelenHook/BatmanGraphicsConfigService.h>
 #include <HelenHook/BuildRuntimeCoordinator.h>
 #include <HelenHook/BuildHookInstaller.h>
@@ -9,9 +11,10 @@
 #include <HelenHook/FileApiHookSet.h>
 #include <HelenHook/JsonConfigStore.h>
 #include <HelenHook/LoadedBuildPack.h>
+#include <HelenHook/LoadedBuildPackSet.h>
 #include <HelenHook/Log.h>
-#include <HelenHook/PackAssetResolver.h>
 #include <HelenHook/PackRepository.h>
+#include <HelenHook/PackSelectionConfig.h>
 #include <HelenHook/RuntimeLayout.h>
 #include <HelenHook/RuntimeValueStore.h>
 #include <HelenHook/VirtualFileService.h>
@@ -22,6 +25,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -42,8 +46,8 @@ namespace
     std::unique_ptr<helen::JsonConfigStore> g_runtime_config;
     /** @brief Typed command and config dispatcher bound to the active runtime config store. */
     std::unique_ptr<helen::CommandDispatcher> g_command_dispatcher;
-    /** @brief Active split-pack declaration set matched against the host executable, when available. */
-    std::optional<helen::LoadedBuildPack> g_active_pack;
+    /** @brief Merged active runtime pack set consumed by runtime services after validation succeeds. */
+    std::optional<helen::ActivePackSet> g_active_runtime_pack_set;
     /** @brief Active runtime slot store that exposes Helen-managed writable slot addresses. */
     std::unique_ptr<helen::RuntimeValueStore> g_runtime_values;
     /** @brief Batman-specific graphics config bridge bound to the user `BmEngine.ini` file. */
@@ -54,8 +58,6 @@ namespace
     std::unique_ptr<helen::BuildRuntimeCoordinator> g_build_runtime_coordinator;
     /** @brief External callback bridge exported to patched gameplay assets. */
     std::unique_ptr<helen::ExternalBindingService> g_external_bindings;
-    /** @brief Build-scoped asset resolver rooted at the active pack and build directories. */
-    std::unique_ptr<helen::PackAssetResolver> g_asset_resolver;
     /** @brief RAM-backed virtual file service for declared replacement files. */
     std::unique_ptr<helen::VirtualFileService> g_virtual_files;
     /** @brief Win32 API hook set that redirects declared virtual files into RAM-backed handles. */
@@ -265,6 +267,18 @@ namespace
     }
 
     /**
+     * @brief Wraps one fallback single-pack match in the shared loaded-pack-set shape.
+     * @param loaded_pack Loaded pack/build selection produced by the repository fallback path.
+     * @return One ordered pack set containing only the supplied pack.
+     */
+    helen::LoadedBuildPackSet CreateSinglePackSet(const helen::LoadedBuildPack& loaded_pack)
+    {
+        helen::LoadedBuildPackSet loaded_pack_set;
+        loaded_pack_set.Packs.push_back(loaded_pack);
+        return loaded_pack_set;
+    }
+
+    /**
      * @brief Attempts to load a matching split pack for the host executable using its strict fingerprint.
      * @param layout Resolved runtime directory layout derived from the runtime module path.
      * @return True when repository discovery completed successfully; otherwise false.
@@ -274,44 +288,87 @@ namespace
         try
         {
             const helen::ExecutableFingerprint executable_fingerprint = helen::ExecutableFingerprint::FromPath(GetModulePath(nullptr));
+            helen::LoadedBuildPackSet loaded_pack_set;
 
             helen::PackRepository repository;
-            g_active_pack = repository.LoadForExecutable(
-                layout.PacksDirectory,
-                executable_fingerprint.FileName,
-                executable_fingerprint.FileSize,
-                executable_fingerprint.Sha256);
-            if (g_active_pack)
+            const helen::PackSelectionConfig pack_selection_config(layout.ConfigDirectory / L"packs.json");
+            const std::optional<std::vector<std::string>> enabled_pack_ids = pack_selection_config.TryGetEnabledPacks(executable_fingerprint.FileName);
+            if (enabled_pack_ids.has_value())
             {
+                const std::optional<helen::LoadedBuildPackSet> selected_pack_set = repository.LoadPackSetForExecutable(
+                    layout.PacksDirectory,
+                    executable_fingerprint.FileName,
+                    executable_fingerprint.FileSize,
+                    executable_fingerprint.Sha256,
+                    *enabled_pack_ids);
+                if (!selected_pack_set.has_value())
+                {
+                    helen::Logf(
+                        L"[runtime] enabled pack set failed for executable=%ls",
+                        ToWideString(executable_fingerprint.FileName).c_str());
+                    return false;
+                }
+
+                loaded_pack_set = *selected_pack_set;
                 helen::Logf(
-                    L"[runtime] loaded pack=%ls build=%ls",
-                    ToWideString(g_active_pack->Pack.Id).c_str(),
-                    ToWideString(g_active_pack->Build.Id).c_str());
+                    L"[runtime] loaded explicit pack set executable=%ls count=%zu",
+                    ToWideString(executable_fingerprint.FileName).c_str(),
+                    loaded_pack_set.Packs.size());
             }
             else
             {
-                helen::Logf(
-                    L"[runtime] no matching pack for executable=%ls size=%llu",
-                    ToWideString(executable_fingerprint.FileName).c_str(),
-                    static_cast<unsigned long long>(executable_fingerprint.FileSize));
+                const std::optional<helen::LoadedBuildPack> selected_pack = repository.LoadForExecutable(
+                    layout.PacksDirectory,
+                    executable_fingerprint.FileName,
+                    executable_fingerprint.FileSize,
+                    executable_fingerprint.Sha256);
+                if (!selected_pack.has_value())
+                {
+                    helen::Logf(
+                        L"[runtime] no matching pack for executable=%ls size=%llu",
+                        ToWideString(executable_fingerprint.FileName).c_str(),
+                        static_cast<unsigned long long>(executable_fingerprint.FileSize));
+                    return true;
+                }
+
+                loaded_pack_set = CreateSinglePackSet(*selected_pack);
             }
 
+            helen::ActivePackSet active_pack_set;
+            std::string failure_reason;
+            const helen::ActivePackSetBuilder active_pack_set_builder;
+            if (!active_pack_set_builder.TryBuild(loaded_pack_set, active_pack_set, failure_reason))
+            {
+                helen::Logf(
+                    L"[runtime] active pack-set validation failed executable=%ls reason=%ls",
+                    ToWideString(executable_fingerprint.FileName).c_str(),
+                    ToWideString(failure_reason).c_str());
+                return false;
+            }
+
+            g_active_runtime_pack_set = std::move(active_pack_set);
+            helen::Logf(
+                L"[runtime] active pack set ready executable=%ls count=%zu startup=%zu hidden=%zu",
+                ToWideString(executable_fingerprint.FileName).c_str(),
+                g_active_runtime_pack_set->LoadedPacks.size(),
+                g_active_runtime_pack_set->StartupCommandIds.size(),
+                g_active_runtime_pack_set->MissingPaths.size());
             return true;
         }
         catch (const std::exception& exception)
         {
-            g_active_pack.reset();
+            g_active_runtime_pack_set.reset();
             helen::Logf(L"[runtime] pack repository initialization failed: %ls", ToWideString(exception.what()).c_str());
             return false;
         }
     }
 
     /**
-     * @brief Registers every declared pack config entry in the typed command dispatcher.
-     * @param active_pack Active loaded pack/build declaration set chosen for the host executable.
+     * @brief Registers every merged config entry in the typed command dispatcher.
+     * @param config_entries Unified config entries selected for the host executable.
      * @return True when every declared config entry is an int and registration succeeded; otherwise false.
      */
-    bool RegisterDeclaredConfigEntries(const helen::LoadedBuildPack& active_pack)
+    bool RegisterDeclaredConfigEntries(const std::vector<helen::ConfigEntryDefinition>& config_entries)
     {
         if (g_command_dispatcher == nullptr)
         {
@@ -319,7 +376,7 @@ namespace
             return false;
         }
 
-        for (const helen::ConfigEntryDefinition& entry : active_pack.Pack.ConfigEntries)
+        for (const helen::ConfigEntryDefinition& entry : config_entries)
         {
             if (entry.Type != "int")
             {
@@ -337,11 +394,11 @@ namespace
     }
 
     /**
-     * @brief Registers every declared build runtime slot in the active runtime value store.
-     * @param active_pack Active loaded pack/build declaration set chosen for the host executable.
+     * @brief Registers every merged runtime slot in the active runtime value store.
+     * @param runtime_slots Unified runtime slots selected for the host executable.
      * @return True when every runtime slot registration succeeds; otherwise false.
      */
-    bool RegisterDeclaredRuntimeSlots(const helen::LoadedBuildPack& active_pack)
+    bool RegisterDeclaredRuntimeSlots(const std::vector<helen::RuntimeSlotDefinition>& runtime_slots)
     {
         if (g_runtime_values == nullptr)
         {
@@ -349,7 +406,7 @@ namespace
             return false;
         }
 
-        for (const helen::RuntimeSlotDefinition& slot : active_pack.Build.RuntimeSlots)
+        for (const helen::RuntimeSlotDefinition& slot : runtime_slots)
         {
             if (!g_runtime_values->RegisterSlot(slot))
             {
@@ -365,11 +422,11 @@ namespace
     }
 
     /**
-     * @brief Registers every declared build command in the active command executor.
-     * @param active_pack Active loaded pack/build declaration set chosen for the host executable.
+     * @brief Registers every merged command in the active command executor.
+     * @param commands Unified commands selected for the host executable.
      * @return True when every command registration succeeds; otherwise false.
      */
-    bool RegisterDeclaredCommands(const helen::LoadedBuildPack& active_pack)
+    bool RegisterDeclaredCommands(const std::vector<helen::CommandDefinition>& commands)
     {
         if (g_command_executor == nullptr)
         {
@@ -377,7 +434,7 @@ namespace
             return false;
         }
 
-        for (const helen::CommandDefinition& command : active_pack.Build.Commands)
+        for (const helen::CommandDefinition& command : commands)
         {
             if (!g_command_executor->RegisterCommand(command))
             {
@@ -392,11 +449,11 @@ namespace
     }
 
     /**
-     * @brief Registers every declared external binding in the active external binding service.
-     * @param active_pack Active loaded pack/build declaration set chosen for the host executable.
+     * @brief Registers every merged external binding in the active external binding service.
+     * @param external_bindings Unified external bindings selected for the host executable.
      * @return True when every binding registration succeeds; otherwise false.
      */
-    bool RegisterDeclaredExternalBindings(const helen::LoadedBuildPack& active_pack)
+    bool RegisterDeclaredExternalBindings(const std::vector<helen::ExternalBindingDefinition>& external_bindings)
     {
         if (g_external_bindings == nullptr)
         {
@@ -404,7 +461,7 @@ namespace
             return false;
         }
 
-        for (const helen::ExternalBindingDefinition& binding : active_pack.Build.ExternalBindings)
+        for (const helen::ExternalBindingDefinition& binding : external_bindings)
         {
             try
             {
@@ -425,11 +482,11 @@ namespace
     }
 
     /**
-     * @brief Registers every declared virtual file in the active virtual file service.
-     * @param active_pack Active loaded pack/build declaration set chosen for the host executable.
+     * @brief Registers every merged virtual file declaration in the active virtual file service.
+     * @param virtual_files Pack-scoped virtual files selected for the host executable.
      * @return True when every virtual file registration succeeds; otherwise false.
      */
-    bool RegisterDeclaredVirtualFiles(const helen::LoadedBuildPack& active_pack)
+    bool RegisterDeclaredVirtualFiles(const std::vector<helen::PackScopedVirtualFileRegistration>& virtual_files)
     {
         if (g_virtual_files == nullptr)
         {
@@ -437,15 +494,15 @@ namespace
             return false;
         }
 
-        for (const helen::VirtualFileDefinition& definition : active_pack.Build.VirtualFiles)
+        for (const helen::PackScopedVirtualFileRegistration& registration : virtual_files)
         {
-            if (!g_virtual_files->RegisterVirtualFile(definition))
+            if (!g_virtual_files->RegisterVirtualFile(registration))
             {
                 helen::Logf(
                     L"[runtime] failed to register virtual file id=%ls gamePath=%ls source=%ls",
-                    ToWideString(definition.Id).c_str(),
-                    definition.GamePath.c_str(),
-                    definition.Source.Path.c_str());
+                    ToWideString(registration.Definition.Id).c_str(),
+                    registration.Definition.GamePath.c_str(),
+                    registration.Definition.Source.Path.c_str());
                 return false;
             }
         }
@@ -454,19 +511,22 @@ namespace
     }
 
     /**
-     * @brief Creates and wires every runtime-owned service for one active build pack.
+     * @brief Creates and wires every runtime-owned service for one merged active pack set.
      * @param layout Resolved runtime directory layout that owns writable cache and config directories.
-     * @param active_pack Active loaded pack/build declaration set chosen for the host executable.
+     * @param active_pack_set Merged runtime view chosen for the host executable.
      * @return True when every service initializes successfully; otherwise false.
      */
-bool InitializeActivePackRuntime(const helen::RuntimeLayout& layout, const helen::LoadedBuildPack& active_pack)
+    bool InitializeActivePackRuntime(const helen::RuntimeLayout& layout, const helen::ActivePackSet& active_pack_set)
     {
         helen::Logf(
-            L"[runtime] active-pack init begin pack=%hs build=%hs",
-            active_pack.Pack.Id.c_str(),
-            active_pack.Build.Id.c_str());
+            L"[runtime] active-pack init begin packs=%zu commands=%zu virtualFiles=%zu hooks=%zu textures=%zu",
+            active_pack_set.LoadedPacks.size(),
+            active_pack_set.Commands.size(),
+            active_pack_set.VirtualFiles.size(),
+            active_pack_set.Hooks.size(),
+            active_pack_set.TextureReplacements.size());
 
-        if (!RegisterDeclaredConfigEntries(active_pack))
+        if (!RegisterDeclaredConfigEntries(active_pack_set.ConfigEntries))
         {
             return false;
         }
@@ -475,7 +535,7 @@ bool InitializeActivePackRuntime(const helen::RuntimeLayout& layout, const helen
 
         g_runtime_values = std::make_unique<helen::RuntimeValueStore>();
         helen::Log(L"[runtime] active-pack init runtime value store created.");
-        if (!RegisterDeclaredRuntimeSlots(active_pack))
+        if (!RegisterDeclaredRuntimeSlots(active_pack_set.RuntimeSlots))
         {
             return false;
         }
@@ -500,46 +560,38 @@ bool InitializeActivePackRuntime(const helen::RuntimeLayout& layout, const helen
             *g_runtime_values,
             *g_batman_graphics_config_service);
         helen::Log(L"[runtime] active-pack init command executor created.");
-        if (!RegisterDeclaredCommands(active_pack))
+        if (!RegisterDeclaredCommands(active_pack_set.Commands))
         {
             return false;
         }
 
         g_external_bindings = std::make_unique<helen::ExternalBindingService>(*g_command_dispatcher, *g_command_executor);
         helen::Log(L"[runtime] active-pack init external binding service created.");
-        if (!RegisterDeclaredExternalBindings(active_pack))
+        if (!RegisterDeclaredExternalBindings(active_pack_set.ExternalBindings))
         {
             return false;
         }
 
-        try
-        {
-            g_asset_resolver = std::make_unique<helen::PackAssetResolver>(active_pack.PackDirectory, active_pack.BuildDirectory);
-            helen::Log(L"[runtime] active-pack init pack asset resolver created.");
-        }
-        catch (const std::exception& exception)
-        {
-            helen::Logf(L"[runtime] failed to create pack asset resolver: %ls", ToWideString(exception.what()).c_str());
-            return false;
-        }
-
-        g_virtual_files = std::make_unique<helen::VirtualFileService>(*g_asset_resolver, layout.CacheDirectory);
+        g_virtual_files = std::make_unique<helen::VirtualFileService>(layout.CacheDirectory);
         helen::Log(L"[runtime] active-pack init virtual file service created.");
-        if (!RegisterDeclaredVirtualFiles(active_pack))
+        if (!RegisterDeclaredVirtualFiles(active_pack_set.VirtualFiles))
         {
             return false;
         }
 
-        g_build_hooks = std::make_unique<helen::BuildHookInstaller>(*g_asset_resolver);
+        g_build_hooks = std::make_unique<helen::BuildHookInstaller>();
         helen::Log(L"[runtime] active-pack init build hook installer created.");
-        if (!g_build_hooks->Install(active_pack.Build.Hooks, *g_runtime_values))
+        if (!g_build_hooks->Install(active_pack_set.Hooks, *g_runtime_values))
         {
             helen::Log(L"[runtime] failed to install build hooks.");
             return false;
         }
         helen::Log(L"[runtime] active-pack init build hooks installed.");
 
-        g_file_hooks = std::make_unique<helen::FileApiHookSet>(*g_virtual_files);
+        g_file_hooks = std::make_unique<helen::FileApiHookSet>(
+            *g_virtual_files,
+            layout.GameRoot,
+            active_pack_set.MissingPaths);
         helen::Log(L"[runtime] active-pack init file api hook set created.");
         if (!g_file_hooks->Install())
         {
@@ -549,18 +601,17 @@ bool InitializeActivePackRuntime(const helen::RuntimeLayout& layout, const helen
         helen::Log(L"[runtime] active-pack init file API hooks installed.");
 
         g_d3d9_texture_hooks = std::make_unique<helen::D3d9TextureReplacementHookSet>(
-            *g_asset_resolver,
-            active_pack.Build.EnableD3d9TextureReplacementHooks,
-            active_pack.Build.EnableD3d9TextureHashLogging,
-            active_pack.Build.EnableD3d9TextureImageDumping,
+            active_pack_set.EnableD3d9TextureReplacementHooks,
+            active_pack_set.EnableD3d9TextureHashLogging,
+            active_pack_set.EnableD3d9TextureImageDumping,
             layout.LogsDirectory / L"d3d9-textures",
-            active_pack.Build.TextureReplacements);
+            active_pack_set.TextureReplacements);
         helen::Logf(
             L"[runtime] active-pack init d3d9 hooks created enable=%d hash=%d dump=%d replacements=%zu",
-            static_cast<int>(active_pack.Build.EnableD3d9TextureReplacementHooks),
-            static_cast<int>(active_pack.Build.EnableD3d9TextureHashLogging),
-            static_cast<int>(active_pack.Build.EnableD3d9TextureImageDumping),
-            active_pack.Build.TextureReplacements.size());
+            static_cast<int>(active_pack_set.EnableD3d9TextureReplacementHooks),
+            static_cast<int>(active_pack_set.EnableD3d9TextureHashLogging),
+            static_cast<int>(active_pack_set.EnableD3d9TextureImageDumping),
+            active_pack_set.TextureReplacements.size());
         helen::Log(L"[runtime] active-pack init d3d9 hooks install begin.");
         if (!g_d3d9_texture_hooks->Install())
         {
@@ -571,8 +622,8 @@ bool InitializeActivePackRuntime(const helen::RuntimeLayout& layout, const helen
 
         helen::Log(L"[runtime] active-pack init build runtime coordinator create begin.");
         g_build_runtime_coordinator = std::make_unique<helen::BuildRuntimeCoordinator>(
-            active_pack.Build.StartupCommandIds,
-            active_pack.Build.StateObservers,
+            active_pack_set.StartupCommandIds,
+            active_pack_set.StateObservers,
             *g_command_dispatcher,
             *g_command_executor);
         helen::Log(L"[runtime] active-pack init build runtime coordinator created.");
@@ -598,7 +649,6 @@ bool InitializeActivePackRuntime(const helen::RuntimeLayout& layout, const helen
         g_build_hooks.reset();
         g_file_hooks.reset();
         g_virtual_files.reset();
-        g_asset_resolver.reset();
         g_external_bindings.reset();
         g_command_executor.reset();
         g_batman_graphics_config_service.reset();
@@ -611,7 +661,7 @@ bool InitializeActivePackRuntime(const helen::RuntimeLayout& layout, const helen
     void ResetRuntimeState()
     {
         ResetPackRuntimeState();
-        g_active_pack.reset();
+        g_active_runtime_pack_set.reset();
         g_command_dispatcher.reset();
         g_runtime_config.reset();
         g_layout.reset();
@@ -632,13 +682,12 @@ bool InitializeActivePackRuntime(const helen::RuntimeLayout& layout, const helen
         static_cast<void>(g_build_hooks.release());
         static_cast<void>(g_file_hooks.release());
         static_cast<void>(g_virtual_files.release());
-        static_cast<void>(g_asset_resolver.release());
         static_cast<void>(g_external_bindings.release());
         static_cast<void>(g_command_executor.release());
         static_cast<void>(g_runtime_values.release());
         static_cast<void>(g_command_dispatcher.release());
         static_cast<void>(g_runtime_config.release());
-        g_active_pack.reset();
+        g_active_runtime_pack_set.reset();
         g_layout.reset();
         g_initialized = false;
         g_instance = nullptr;
@@ -693,7 +742,7 @@ extern "C" __declspec(dllexport) BOOL __stdcall HelenInitialize()
     }
     helen::Log(L"[runtime] pack repository initialized.");
 
-    if (g_active_pack && !InitializeActivePackRuntime(layout, *g_active_pack))
+    if (g_active_runtime_pack_set.has_value() && !InitializeActivePackRuntime(layout, *g_active_runtime_pack_set))
     {
         ResetRuntimeState();
         return FALSE;

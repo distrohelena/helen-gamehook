@@ -449,25 +449,21 @@ namespace
 
 namespace helen
 {
-    BuildHookInstaller::BuildHookInstaller(const PackAssetResolver& asset_resolver)
-        : asset_resolver_(asset_resolver)
-    {
-    }
-
     BuildHookInstaller::~BuildHookInstaller()
     {
         Remove();
     }
 
-    bool BuildHookInstaller::Install(const std::vector<HookDefinition>& hooks, const RuntimeValueStore& runtime_values)
+    bool BuildHookInstaller::Install(const std::vector<PackScopedHookDefinition>& hooks, const RuntimeValueStore& runtime_values)
     {
         if (!installed_hooks_.empty() || !executable_blobs_.empty() || !installed_hook_views_.empty())
         {
             return false;
         }
 
-        for (const HookDefinition& hook : hooks)
+        for (const PackScopedHookDefinition& scoped_hook : hooks)
         {
+            const HookDefinition& hook = scoped_hook.Definition;
             if (hook.Action != InlineJumpToPackBlobAction)
             {
                 Remove();
@@ -495,7 +491,7 @@ namespace helen
                 return false;
             }
 
-            const std::optional<std::filesystem::path> blob_path = asset_resolver_.Resolve(hook.Blob.AssetPath);
+            const std::optional<std::filesystem::path> blob_path = scoped_hook.AssetResolver.Resolve(hook.Blob.AssetPath);
             if (!blob_path.has_value())
             {
                 Remove();

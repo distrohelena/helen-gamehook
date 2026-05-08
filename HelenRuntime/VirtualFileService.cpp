@@ -53,13 +53,12 @@ namespace
 
     /**
      * @brief Validates that one delta-backed source asset exists and contains a parseable hgdelta container.
-     * @param resolver Active pack asset resolver that locates the declared hgdelta asset.
-     * @param definition Delta-backed virtual file definition whose declared asset should be validated.
+     * @param registration Pack-scoped virtual file registration whose declared delta asset should be validated.
      * @return True when the asset exists, parses successfully, and matches the declared metadata; otherwise false.
      */
-    bool ValidateDeltaSourceAsset(const helen::PackAssetResolver& resolver, const helen::VirtualFileDefinition& definition)
+    bool ValidateDeltaSourceAsset(const helen::PackScopedVirtualFileRegistration& registration)
     {
-        const std::optional<std::filesystem::path> delta_file_path = resolver.Resolve(definition.Source.Path);
+        const std::optional<std::filesystem::path> delta_file_path = registration.AssetResolver.Resolve(registration.Definition.Source.Path);
         if (!delta_file_path.has_value())
         {
             return false;
@@ -68,7 +67,7 @@ namespace
         try
         {
             const helen::HgdeltaFile delta = helen::HgdeltaFile::Load(*delta_file_path);
-            return MatchesDeclaredDeltaMetadata(delta, definition);
+            return MatchesDeclaredDeltaMetadata(delta, registration.Definition);
         }
         catch (...)
         {
@@ -79,9 +78,8 @@ namespace
 
 namespace helen
 {
-    VirtualFileService::VirtualFileService(const PackAssetResolver& resolver, const std::filesystem::path& cache_directory)
-        : resolver_(resolver),
-          cache_directory_(cache_directory)
+    VirtualFileService::VirtualFileService(const std::filesystem::path& cache_directory)
+        : cache_directory_(cache_directory)
     {
     }
 
@@ -152,9 +150,12 @@ namespace helen
         return normalized_lookup_path[suffix_offset - 1] == L'/';
     }
 
-    bool VirtualFileService::LoadReplacementBytes(const std::filesystem::path& asset_path, std::vector<std::uint8_t>& bytes) const
+    bool VirtualFileService::LoadReplacementBytes(
+        const PackScopedVirtualFileRegistration& registration,
+        const std::filesystem::path& asset_path,
+        std::vector<std::uint8_t>& bytes) const
     {
-        const std::optional<std::filesystem::path> resolved_path = resolver_.Resolve(asset_path);
+        const std::optional<std::filesystem::path> resolved_path = registration.AssetResolver.Resolve(asset_path);
         if (!resolved_path.has_value())
         {
             return false;
@@ -197,31 +198,32 @@ namespace helen
         return true;
     }
 
-    bool VirtualFileService::RegisterVirtualFile(const VirtualFileDefinition& definition)
+    bool VirtualFileService::RegisterVirtualFile(const PackScopedVirtualFileRegistration& registration)
     {
         std::wstring normalized_game_path;
-        if (!NormalizeDeclaredPath(definition.GamePath, normalized_game_path))
+        if (!NormalizeDeclaredPath(registration.Definition.GamePath, normalized_game_path))
         {
             return false;
         }
 
-        RegisteredVirtualFile registered_virtual_file;
-        registered_virtual_file.Definition = definition;
-        if (definition.Mode == "replace-on-read")
+        std::shared_ptr<VirtualFileSource> shared_source;
+        if (registration.Definition.Mode == "replace-on-read")
         {
-            if (!CreateSource(definition, std::filesystem::path(), registered_virtual_file.SharedSource))
+            if (!CreateSource(registration, std::filesystem::path(), shared_source))
             {
                 return false;
             }
         }
-        else if (definition.Mode != "delta-on-read" || definition.Source.Kind != VirtualFileSourceKind::DeltaFile)
+        else if (registration.Definition.Mode != "delta-on-read" || registration.Definition.Source.Kind != VirtualFileSourceKind::DeltaFile)
         {
             return false;
         }
-        else if (!ValidateDeltaSourceAsset(resolver_, definition))
+        else if (!ValidateDeltaSourceAsset(registration))
         {
             return false;
         }
+
+        RegisteredVirtualFile registered_virtual_file(registration, std::move(shared_source));
 
         std::lock_guard<std::mutex> lock(mutex_);
         const auto inserted = virtual_files_.emplace(normalized_game_path, std::move(registered_virtual_file));
@@ -230,13 +232,15 @@ namespace helen
             const RegisteredVirtualFile& inserted_virtual_file = inserted.first->second;
             const std::uint64_t registered_size = inserted_virtual_file.SharedSource != nullptr ?
                 inserted_virtual_file.SharedSource->GetSize() :
-                inserted_virtual_file.Definition.Source.Target.FileSize;
+                inserted_virtual_file.Registration.Definition.Source.Target.FileSize;
             Logf(
-                L"[runtime] registered virtual file id=%hs mode=%hs path=%ls source=%ls bytes=%llu",
-                inserted_virtual_file.Definition.Id.c_str(),
-                inserted_virtual_file.Definition.Mode.c_str(),
+                L"[runtime] registered virtual file pack=%hs build=%hs id=%hs mode=%hs path=%ls source=%ls bytes=%llu",
+                inserted_virtual_file.Registration.PackId.c_str(),
+                inserted_virtual_file.Registration.BuildId.c_str(),
+                inserted_virtual_file.Registration.Definition.Id.c_str(),
+                inserted_virtual_file.Registration.Definition.Mode.c_str(),
                 normalized_game_path.c_str(),
-                inserted_virtual_file.Definition.Source.Path.c_str(),
+                inserted_virtual_file.Registration.Definition.Source.Path.c_str(),
                 static_cast<unsigned long long>(registered_size));
         }
 
@@ -244,11 +248,12 @@ namespace helen
     }
 
     bool VirtualFileService::CreateSource(
-        const VirtualFileDefinition& definition,
+        const PackScopedVirtualFileRegistration& registration,
         const std::filesystem::path& opened_game_path,
         std::shared_ptr<VirtualFileSource>& source) const
     {
         source.reset();
+        const VirtualFileDefinition& definition = registration.Definition;
         if (definition.Mode == "replace-on-read")
         {
             if (definition.Source.Kind != VirtualFileSourceKind::FullFile)
@@ -257,7 +262,7 @@ namespace helen
             }
 
             std::vector<std::uint8_t> replacement_bytes;
-            if (!LoadReplacementBytes(definition.Source.Path, replacement_bytes))
+            if (!LoadReplacementBytes(registration, definition.Source.Path, replacement_bytes))
             {
                 return false;
             }
@@ -273,7 +278,7 @@ namespace helen
 
         try
         {
-            source = std::make_shared<DeltaVirtualFileSource>(resolver_, cache_directory_, opened_game_path, definition);
+            source = std::make_shared<DeltaVirtualFileSource>(registration.AssetResolver, cache_directory_, opened_game_path, definition);
             return true;
         }
         catch (...)
@@ -331,13 +336,14 @@ namespace helen
 
         std::shared_ptr<VirtualFileSource> source = registered_virtual_file->SharedSource;
         if (source == nullptr &&
-            !CreateSource(registered_virtual_file->Definition, game_relative_path, source))
+            !CreateSource(registered_virtual_file->Registration, game_relative_path, source))
         {
             Logf(
-                L"[runtime] virtual file source creation failed path=%ls id=%hs mode=%hs",
+                L"[runtime] virtual file source creation failed path=%ls pack=%hs id=%hs mode=%hs",
                 normalized_game_path.c_str(),
-                registered_virtual_file->Definition.Id.c_str(),
-                registered_virtual_file->Definition.Mode.c_str());
+                registered_virtual_file->Registration.PackId.c_str(),
+                registered_virtual_file->Registration.Definition.Id.c_str(),
+                registered_virtual_file->Registration.Definition.Mode.c_str());
             CloseHandle(handle);
             return std::nullopt;
         }
@@ -359,12 +365,13 @@ namespace helen
         }
 
         Logf(
-            L"[runtime] virtual file open matched handle=0x%p id=%hs mode=%hs path=%ls source=%ls",
+            L"[runtime] virtual file open matched handle=0x%p pack=%hs id=%hs mode=%hs path=%ls source=%ls",
             handle,
-            registered_virtual_file->Definition.Id.c_str(),
-            registered_virtual_file->Definition.Mode.c_str(),
+            registered_virtual_file->Registration.PackId.c_str(),
+            registered_virtual_file->Registration.Definition.Id.c_str(),
+            registered_virtual_file->Registration.Definition.Mode.c_str(),
             normalized_game_path.c_str(),
-            registered_virtual_file->Definition.Source.Path.c_str());
+            registered_virtual_file->Registration.Definition.Source.Path.c_str());
         return handle;
     }
 

@@ -1,4 +1,5 @@
 #include <HelenHook/FullFileVirtualFileSource.h>
+#include <HelenHook/PackScopedVirtualFileRegistration.h>
 #include <HelenHook/PackAssetResolver.h>
 #include <HelenHook/VirtualFileDefinition.h>
 #include <HelenHook/VirtualFileService.h>
@@ -65,6 +66,23 @@ namespace
     }
 
     /**
+     * @brief Builds one pack-scoped virtual-file registration for the supplied resolver and declaration.
+     * @param pack_id Stable synthetic pack identifier used by diagnostics.
+     * @param build_id Stable synthetic build identifier used by diagnostics.
+     * @param resolver Pack-local asset resolver that owns the declared source asset.
+     * @param definition Virtual-file declaration that should be registered.
+     * @return Fully populated pack-scoped registration.
+     */
+    helen::PackScopedVirtualFileRegistration CreatePackScopedRegistration(
+        const char* pack_id,
+        const char* build_id,
+        const helen::PackAssetResolver& resolver,
+        const helen::VirtualFileDefinition& definition)
+    {
+        return helen::PackScopedVirtualFileRegistration(pack_id, build_id, resolver, definition);
+    }
+
+    /**
      * @brief Builds one delta-on-read virtual-file definition for registration validation scenarios.
      * @param game_path Game-relative path that should be virtualized.
      * @param asset_path Build-relative hgdelta asset path declared by the virtual file.
@@ -100,28 +118,49 @@ void RunVirtualFileServiceTests()
     {
         const std::filesystem::path pack_root = root / "pack";
         const std::filesystem::path build_root = pack_root / "builds" / "steam-goty-1.0";
+        const std::filesystem::path second_pack_root = root / "pack-b";
+        const std::filesystem::path second_build_root = second_pack_root / "builds" / "steam-goty-1.0";
         const std::filesystem::path cache_directory = root / "helengamehook" / "cache";
         const std::filesystem::path asset_path = build_root / "assets" / "packages" / "BmGame-subtitle-signal.u";
+        const std::filesystem::path second_asset_path = second_build_root / "assets" / "packages" / "Frontend.umap";
         std::filesystem::create_directories(asset_path.parent_path());
+        std::filesystem::create_directories(second_asset_path.parent_path());
         WriteAllBytes(asset_path, "ABCDE");
+        WriteAllBytes(second_asset_path, "VWXYZ");
 
         const helen::PackAssetResolver resolver(pack_root, build_root);
-        helen::VirtualFileService service(resolver, cache_directory);
+        const helen::PackAssetResolver second_resolver(second_pack_root, second_build_root);
+        helen::VirtualFileService service(cache_directory);
 
         const helen::VirtualFileDefinition definition = CreateVirtualFileDefinition(
             "BmGame/CookedPC/BmGame.u",
             "assets/packages/BmGame-subtitle-signal.u");
-        Expect(service.RegisterVirtualFile(definition), "Expected the virtual gameplay package to register.");
-        Expect(!service.RegisterVirtualFile(definition), "Duplicate virtual file registration unexpectedly succeeded.");
+        const helen::PackScopedVirtualFileRegistration registration = CreatePackScopedRegistration(
+            "pack",
+            "steam-goty-1.0",
+            resolver,
+            definition);
+        Expect(service.RegisterVirtualFile(registration), "Expected the virtual gameplay package to register.");
+        Expect(!service.RegisterVirtualFile(registration), "Duplicate virtual file registration unexpectedly succeeded.");
 
         helen::VirtualFileDefinition invalid_definition = definition;
         invalid_definition.GamePath = "../escape.u";
-        Expect(!service.RegisterVirtualFile(invalid_definition), "Escaping virtual file path unexpectedly registered.");
+        const helen::PackScopedVirtualFileRegistration invalid_registration = CreatePackScopedRegistration(
+            "pack",
+            "steam-goty-1.0",
+            resolver,
+            invalid_definition);
+        Expect(!service.RegisterVirtualFile(invalid_registration), "Escaping virtual file path unexpectedly registered.");
 
         const helen::VirtualFileDefinition missing_delta_definition = CreateDeltaVirtualFileDefinition(
             "BmGame/CookedPC/BmGame-Delta-Missing.u",
             "assets/deltas/Missing.hgdelta");
-        Expect(!service.RegisterVirtualFile(missing_delta_definition), "Missing delta asset unexpectedly registered as a virtual file.");
+        const helen::PackScopedVirtualFileRegistration missing_delta_registration = CreatePackScopedRegistration(
+            "pack",
+            "steam-goty-1.0",
+            resolver,
+            missing_delta_definition);
+        Expect(!service.RegisterVirtualFile(missing_delta_registration), "Missing delta asset unexpectedly registered as a virtual file.");
 
         const std::filesystem::path malformed_delta_path = build_root / "assets" / "deltas" / "Malformed.hgdelta";
         std::filesystem::create_directories(malformed_delta_path.parent_path());
@@ -129,7 +168,22 @@ void RunVirtualFileServiceTests()
         const helen::VirtualFileDefinition malformed_delta_definition = CreateDeltaVirtualFileDefinition(
             "BmGame/CookedPC/BmGame-Delta-Malformed.u",
             "assets/deltas/Malformed.hgdelta");
-        Expect(!service.RegisterVirtualFile(malformed_delta_definition), "Malformed delta asset unexpectedly registered as a virtual file.");
+        const helen::PackScopedVirtualFileRegistration malformed_delta_registration = CreatePackScopedRegistration(
+            "pack",
+            "steam-goty-1.0",
+            resolver,
+            malformed_delta_definition);
+        Expect(!service.RegisterVirtualFile(malformed_delta_registration), "Malformed delta asset unexpectedly registered as a virtual file.");
+
+        const helen::VirtualFileDefinition second_definition = CreateVirtualFileDefinition(
+            "BmGame/CookedPC/Maps/Frontend/Frontend.umap",
+            "assets/packages/Frontend.umap");
+        const helen::PackScopedVirtualFileRegistration second_registration = CreatePackScopedRegistration(
+            "pack-b",
+            "steam-goty-1.0",
+            second_resolver,
+            second_definition);
+        Expect(service.RegisterVirtualFile(second_registration), "Expected the second pack-owned virtual file to register.");
 
         const std::optional<HANDLE> missing_handle = service.OpenVirtualFile("BmGame/CookedPC/Missing.u");
         Expect(!missing_handle.has_value(), "Missing virtual file path unexpectedly opened.");
@@ -137,6 +191,15 @@ void RunVirtualFileServiceTests()
         const std::optional<HANDLE> handle = service.OpenVirtualFile(R"(C:\Games\Batman Arkham Asylum GOTY\BmGame\CookedPC\BmGame.u)");
         Expect(handle.has_value(), "Expected the absolute gameplay package path to match the registered suffix.");
         Expect(service.IsVirtualHandle(*handle), "Expected the returned gameplay package handle to be virtual.");
+
+        const std::optional<HANDLE> second_handle = service.OpenVirtualFile("BmGame/CookedPC/Maps/Frontend/Frontend.umap");
+        Expect(second_handle.has_value(), "Expected the second pack-owned virtual file to open.");
+
+        std::array<char, 6> second_pack_read{};
+        DWORD second_pack_bytes_read = 0;
+        Expect(service.Read(*second_handle, second_pack_read.data(), 5, &second_pack_bytes_read), "Expected the second pack-owned virtual file read to succeed.");
+        Expect(second_pack_bytes_read == 5, "Second pack-owned virtual file read byte count mismatch.");
+        Expect(std::string_view(second_pack_read.data(), 5) == "VWXYZ", "Second pack-owned virtual file payload mismatch.");
 
         LARGE_INTEGER size{};
         Expect(service.GetSize(*handle, &size), "Expected GetSize to succeed for the virtual gameplay package.");
@@ -188,6 +251,7 @@ void RunVirtualFileServiceTests()
         Expect(service.Close(*handle), "Expected Close to succeed for the virtual gameplay package.");
         Expect(!service.IsVirtualHandle(*handle), "Closed gameplay package handle is still tracked as virtual.");
         Expect(!service.Close(*handle), "Closing the same virtual gameplay package handle twice unexpectedly succeeded.");
+        Expect(service.Close(*second_handle), "Expected Close to succeed for the second pack-owned virtual file.");
     }
     catch (...)
     {

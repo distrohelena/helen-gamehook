@@ -11,9 +11,8 @@
 
 #include <windows.h>
 
-#include <HelenHook/PackAssetResolver.h>
+#include <HelenHook/PackScopedVirtualFileRegistration.h>
 #include <HelenHook/RegisteredVirtualFile.h>
-#include <HelenHook/VirtualFileDefinition.h>
 #include <HelenHook/VirtualFileHandle.h>
 
 namespace helen
@@ -23,25 +22,24 @@ namespace helen
     /**
      * @brief Owns virtual-file sources for exact game-relative file paths.
      *
-     * Each registered virtual file resolves its declared source through the active pack asset resolver and exposes a
+     * Each registered virtual file resolves its declared source through the pack/build context that declared it and exposes a
      * synthetic handle whose read cursor is tracked independently from all other opens.
      */
     class VirtualFileService
     {
     public:
         /**
-         * @brief Creates a virtual file service bound to the active pack asset resolver.
-         * @param resolver Resolver that translates declared asset paths into normalized filesystem locations.
+         * @brief Creates a virtual file service bound only to the writable Helen cache directory.
          * @param cache_directory Writable helengamehook cache directory used by source implementations that materialize files.
          */
-        VirtualFileService(const PackAssetResolver& resolver, const std::filesystem::path& cache_directory);
+        explicit VirtualFileService(const std::filesystem::path& cache_directory);
 
         /**
-         * @brief Registers one declared virtual file and creates its backing source object.
-         * @param definition Virtual file declaration loaded from the active build.
+         * @brief Registers one pack-scoped virtual file and creates any reusable backing source object.
+         * @param registration Pack-scoped virtual file registration loaded from one enabled build.
          * @return True when the file path is valid and the backing source could be created.
          */
-        bool RegisterVirtualFile(const VirtualFileDefinition& definition);
+        bool RegisterVirtualFile(const PackScopedVirtualFileRegistration& registration);
 
         /**
          * @brief Opens a synthetic handle for one matching game-relative path.
@@ -134,22 +132,26 @@ namespace helen
             const std::wstring& normalized_declared_path);
 
         /**
-         * @brief Loads one full replacement payload through the active pack asset resolver.
+         * @brief Loads one full replacement payload through the registration-specific pack asset resolver.
+         * @param registration Pack-scoped virtual file registration that owns the asset path.
          * @param asset_path Resolver-relative source path declared by the virtual file definition.
          * @param bytes Receives the replacement bytes when the file can be read.
          * @return True when the asset exists and the bytes were loaded completely.
          */
-        bool LoadReplacementBytes(const std::filesystem::path& asset_path, std::vector<std::uint8_t>& bytes) const;
+        bool LoadReplacementBytes(
+            const PackScopedVirtualFileRegistration& registration,
+            const std::filesystem::path& asset_path,
+            std::vector<std::uint8_t>& bytes) const;
 
         /**
-         * @brief Creates one backing source object for the supplied virtual file definition and opened game path.
-         * @param definition Virtual file definition that should be converted into a source object.
+         * @brief Creates one backing source object for the supplied pack-scoped registration and opened game path.
+         * @param registration Pack-scoped virtual file registration that should be converted into a source object.
          * @param opened_game_path Actual game file path being opened when a source needs per-open context.
          * @param source Receives the created source object on success.
-         * @return True when the definition is supported and the source could be created.
+         * @return True when the registration is supported and the source could be created.
          */
         bool CreateSource(
-            const VirtualFileDefinition& definition,
+            const PackScopedVirtualFileRegistration& registration,
             const std::filesystem::path& opened_game_path,
             std::shared_ptr<VirtualFileSource>& source) const;
 
@@ -160,9 +162,6 @@ namespace helen
          */
         std::optional<RegisteredVirtualFile> FindRegisteredVirtualFile(
             const std::wstring& normalized_lookup_path) const;
-
-        /** @brief Resolver used to map declared replacement asset paths into validated filesystem paths. */
-        PackAssetResolver resolver_;
 
         /** @brief Writable helengamehook cache directory used by source implementations that materialize files. */
         std::filesystem::path cache_directory_;

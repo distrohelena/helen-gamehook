@@ -1,5 +1,6 @@
 #include <HelenHook/BuildHookInstaller.h>
 #include <HelenHook/Memory.h>
+#include <HelenHook/PackScopedHookDefinition.h>
 #include <HelenHook/PackAssetResolver.h>
 
 #include <array>
@@ -154,6 +155,23 @@ namespace
         hook.Blob.EntryOffset = 0;
         return hook;
     }
+
+    /**
+     * @brief Wraps one hook definition with explicit pack/build ownership and asset resolution context.
+     * @param pack_id Stable synthetic pack identifier used by diagnostics.
+     * @param build_id Stable synthetic build identifier used by diagnostics.
+     * @param resolver Pack-local asset resolver that owns the hook blob asset.
+     * @param hook Hook definition that should be installed through the shared installer.
+     * @return Fully populated pack-scoped hook definition.
+     */
+    helen::PackScopedHookDefinition CreatePackScopedHookDefinition(
+        const char* pack_id,
+        const char* build_id,
+        const helen::PackAssetResolver& resolver,
+        const helen::HookDefinition& hook)
+    {
+        return helen::PackScopedHookDefinition(pack_id, build_id, resolver, hook);
+    }
 }
 
 /**
@@ -169,11 +187,17 @@ void RunBuildHookInstallerTests()
     {
         const std::filesystem::path pack_root = root / "pack";
         const std::filesystem::path build_root = pack_root / "builds" / "steam-goty-1.0";
+        const std::filesystem::path second_pack_root = root / "pack-b";
+        const std::filesystem::path second_build_root = second_pack_root / "builds" / "steam-goty-1.0";
         const std::filesystem::path blob_path = build_root / "assets" / "native" / "test-hook.bin";
+        const std::filesystem::path second_blob_path = second_build_root / "assets" / "native" / "test-hook.bin";
         std::filesystem::create_directories(blob_path.parent_path());
+        std::filesystem::create_directories(second_blob_path.parent_path());
         WriteAllBytes(blob_path, { 0x90, 0xC3 });
+        WriteAllBytes(second_blob_path, { 0x90, 0xC3 });
 
         const helen::PackAssetResolver resolver(pack_root, build_root);
+        const helen::PackAssetResolver second_resolver(second_pack_root, second_build_root);
         const helen::RuntimeValueStore runtime_values;
 
         const std::uintptr_t primary_address = reinterpret_cast<std::uintptr_t>(&BuildHookInstallerPrimaryTarget);
@@ -186,25 +210,47 @@ void RunBuildHookInstallerTests()
             GetFunctionRva(primary_address),
             ToCompactHexText(primary_original_bytes),
             "assets/native/test-hook.bin");
+        const helen::HookDefinition second_hook = CreateInlineJumpHook(
+            "second-hook",
+            GetFunctionRva(rollback_address),
+            ToCompactHexText(rollback_original_bytes),
+            "assets/native/test-hook.bin");
 
-        helen::BuildHookInstaller installer(resolver);
-        Expect(installer.Install({ primary_hook }, runtime_values), "Expected the primary blob-backed hook to install.");
+        const helen::PackScopedHookDefinition primary_scoped_hook = CreatePackScopedHookDefinition(
+            "pack",
+            "steam-goty-1.0",
+            resolver,
+            primary_hook);
+        const helen::PackScopedHookDefinition second_scoped_hook = CreatePackScopedHookDefinition(
+            "pack-b",
+            "steam-goty-1.0",
+            second_resolver,
+            second_hook);
+
+        helen::BuildHookInstaller installer;
+        Expect(installer.Install({ primary_scoped_hook, second_scoped_hook }, runtime_values), "Expected pack-scoped blob-backed hooks to install.");
 
         const std::vector<std::uint8_t> primary_patched_bytes = ReadBytes(primary_address, 5);
         Expect(primary_patched_bytes[0] == 0xE9, "Expected the primary hook target to start with an inline detour after installation.");
+        const std::vector<std::uint8_t> second_patched_bytes = ReadBytes(rollback_address, 5);
+        Expect(second_patched_bytes[0] == 0xE9, "Expected the second hook target to start with an inline detour after installation.");
 
         const std::vector<helen::BuildHookInstaller::InstalledHookDebugView> installed_hooks = installer.GetInstalledHooks();
-        Expect(installed_hooks.size() == 1, "Installed hook debug view count mismatch.");
+        Expect(installed_hooks.size() == 2, "Installed hook debug view count mismatch.");
         Expect(installed_hooks[0].Id == "primary-hook", "Installed hook identifier mismatch.");
         Expect(installed_hooks[0].TargetAddress == primary_address, "Installed hook target address mismatch.");
         Expect(installed_hooks[0].BlobAddress != 0, "Installed hook blob address was not recorded.");
         Expect(installed_hooks[0].EntryAddress != 0, "Installed hook entry address was not recorded.");
         Expect(installed_hooks[0].ResumeAddress == primary_address + 5, "Installed hook resume address mismatch.");
         Expect(installed_hooks[0].Relocations.empty(), "Unexpected relocation debug state was captured for a relocation-free blob.");
+        Expect(installed_hooks[1].Id == "second-hook", "Second installed hook identifier mismatch.");
+        Expect(installed_hooks[1].TargetAddress == rollback_address, "Second installed hook target address mismatch.");
 
         installer.Remove();
         Expect(ReadBytes(primary_address, 5) == primary_original_bytes, "Primary hook bytes were not restored after Remove.");
+        Expect(ReadBytes(rollback_address, 5) == rollback_original_bytes, "Second hook bytes were not restored after Remove.");
         Expect(BuildHookInstallerPrimaryTarget(5) == 12, "Primary hook target no longer behaved correctly after Remove.");
+        Expect(BuildHookInstallerRollbackTarget(5) == 18, "Second hook target no longer behaved correctly after Remove.");
 
         const helen::HookDefinition rollback_hook = CreateInlineJumpHook(
             "rollback-hook",
@@ -212,8 +258,14 @@ void RunBuildHookInstallerTests()
             ToCompactHexText(rollback_original_bytes),
             "assets/native/missing-hook.bin");
 
-        helen::BuildHookInstaller failing_installer(resolver);
-        Expect(!failing_installer.Install({ primary_hook, rollback_hook }, runtime_values), "Installer unexpectedly succeeded when a later hook blob was missing.");
+        const helen::PackScopedHookDefinition rollback_scoped_hook = CreatePackScopedHookDefinition(
+            "pack-b",
+            "steam-goty-1.0",
+            second_resolver,
+            rollback_hook);
+
+        helen::BuildHookInstaller failing_installer;
+        Expect(!failing_installer.Install({ primary_scoped_hook, rollback_scoped_hook }, runtime_values), "Installer unexpectedly succeeded when a later hook blob was missing.");
         Expect(failing_installer.GetInstalledHooks().empty(), "Rollback installer retained debug state after a failed installation.");
         Expect(ReadBytes(primary_address, 5) == primary_original_bytes, "Rollback installer failed to restore the primary hook bytes after the later hook failed.");
         Expect(ReadBytes(rollback_address, 5) == rollback_original_bytes, "Rollback installer changed the secondary hook bytes even though the hook never installed.");

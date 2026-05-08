@@ -1948,10 +1948,9 @@ namespace
      * @return True when the replacement texture is cached successfully or already exists.
      */
     bool TryCacheReplacementTexture(
-        const helen::PackAssetResolver& asset_resolver,
         IDirect3DTexture9* tracked_texture,
         const D3DSURFACE_DESC& description,
-        const helen::TextureReplacementDefinition& replacement_definition,
+        const helen::PackScopedTextureReplacementDefinition& replacement_definition,
         HRESULT& failure_result)
     {
         failure_result = S_OK;
@@ -1973,7 +1972,8 @@ namespace
             return false;
         }
 
-        const std::optional<std::filesystem::path> resolved_path = asset_resolver.Resolve(replacement_definition.ReplacementPath);
+        const std::optional<std::filesystem::path> resolved_path =
+            replacement_definition.AssetResolver.Resolve(replacement_definition.Definition.ReplacementPath);
         if (!resolved_path.has_value())
         {
             failure_result = E_FAIL;
@@ -2002,7 +2002,13 @@ namespace
         }
 
         IDirect3DTexture9* replacement_texture = nullptr;
-        if (!TryCreateReplacementTexture(record->OwningDevice, description, asset, replacement_definition, replacement_texture, failure_result))
+        if (!TryCreateReplacementTexture(
+                record->OwningDevice,
+                description,
+                asset,
+                replacement_definition.Definition,
+                replacement_texture,
+                failure_result))
         {
             Logf(
                 L"[d3d9] failed to cache declared replacement texture ptr=0x%p path=%ls hr=0x%08lX",
@@ -2305,18 +2311,16 @@ namespace helen
     D3d9TextureReplacementHookSet* D3d9TextureReplacementHookSet::active_instance_ = nullptr;
 
     D3d9TextureReplacementHookSet::D3d9TextureReplacementHookSet(
-        const PackAssetResolver& asset_resolver,
         bool enable_hooking,
         bool enable_hash_logging,
         bool enable_image_dumping,
         std::filesystem::path texture_dump_directory,
-        const std::vector<TextureReplacementDefinition>& replacements)
-        : asset_resolver_(asset_resolver)
-        , enable_hooking_(enable_hooking)
+        std::vector<PackScopedTextureReplacementDefinition> replacements)
+        : enable_hooking_(enable_hooking)
         , enable_hash_logging_(enable_hash_logging)
         , enable_image_dumping_(enable_image_dumping)
         , texture_dump_directory_(std::move(texture_dump_directory))
-        , replacements_(replacements)
+        , replacements_(std::move(replacements))
     {
     }
 
@@ -3748,7 +3752,7 @@ namespace helen
             record->Fingerprint.Hash = digest;
         }
 
-        const TextureReplacementDefinition* const matched_replacement = active->FindDeclaredReplacement(description, digest);
+        const PackScopedTextureReplacementDefinition* const matched_replacement = active->FindDeclaredReplacement(description, digest);
         const bool matches_declared_replacement = matched_replacement != nullptr;
         if (matches_declared_replacement)
         {
@@ -3775,14 +3779,14 @@ namespace helen
                     Logf(
                         L"[d3d9] cached declared replacement texture ptr=0x%p path=%ls",
                         self,
-                        matched_replacement->ReplacementPath.c_str());
+                        matched_replacement->Definition.ReplacementPath.c_str());
                 }
                 else
                 {
                     Logf(
                         L"[d3d9] failed to cache declared replacement texture ptr=0x%p path=%ls hr=0x%08lX",
                         self,
-                        matched_replacement->ReplacementPath.c_str(),
+                        matched_replacement->Definition.ReplacementPath.c_str(),
                         static_cast<unsigned long>(replacement_result));
                 }
             }
@@ -4243,7 +4247,7 @@ namespace helen
             record->Fingerprint.Hash = digest;
         }
 
-        const TextureReplacementDefinition* const matched_replacement = active->FindDeclaredReplacement(description, digest);
+        const PackScopedTextureReplacementDefinition* const matched_replacement = active->FindDeclaredReplacement(description, digest);
         const bool matches_declared_replacement = matched_replacement != nullptr;
         if (matches_declared_replacement)
         {
@@ -4270,14 +4274,14 @@ namespace helen
                     Logf(
                         L"[d3d9] cached surface replacement texture ptr=0x%p path=%ls",
                         self,
-                        matched_replacement->ReplacementPath.c_str());
+                        matched_replacement->Definition.ReplacementPath.c_str());
                 }
                 else
                 {
                     Logf(
                         L"[d3d9] failed to cache surface replacement texture ptr=0x%p path=%ls hr=0x%08lX",
                         self,
-                        matched_replacement->ReplacementPath.c_str(),
+                        matched_replacement->Definition.ReplacementPath.c_str(),
                         static_cast<unsigned long>(replacement_result));
                 }
             }
@@ -4427,45 +4431,46 @@ namespace helen
     {
         d3d9_replacement_count = 0;
 
-        for (const TextureReplacementDefinition& replacement : replacements_)
+        for (const PackScopedTextureReplacementDefinition& replacement : replacements_)
         {
-            if (replacement.Id.empty() || replacement.Api.empty())
+            if (replacement.Definition.Id.empty() || replacement.Definition.Api.empty())
             {
                 Log(L"[d3d9] texture replacement validation failed: id/api must be non-empty.");
                 return false;
             }
 
-            if (!EqualsAsciiIgnoreCase(replacement.Api, "d3d9"))
+            if (!EqualsAsciiIgnoreCase(replacement.Definition.Api, "d3d9"))
             {
                 Logf(
                     L"[d3d9] texture replacement validation failed for id=%hs: unsupported api=%hs.",
-                    replacement.Id.c_str(),
-                    replacement.Api.c_str());
+                    replacement.Definition.Id.c_str(),
+                    replacement.Definition.Api.c_str());
                 return false;
             }
 
-            if (replacement.Width == 0 || replacement.Height == 0 || replacement.Format.empty() || replacement.Hash.empty())
+            if (replacement.Definition.Width == 0 || replacement.Definition.Height == 0 || replacement.Definition.Format.empty() || replacement.Definition.Hash.empty())
             {
                 Logf(
                     L"[d3d9] texture replacement validation failed for id=%hs: match fields must be populated.",
-                    replacement.Id.c_str());
+                    replacement.Definition.Id.c_str());
                 return false;
             }
 
-            if (replacement.ReplacementPath.empty())
+            if (replacement.Definition.ReplacementPath.empty())
             {
                 Logf(
                     L"[d3d9] texture replacement validation failed for id=%hs: replacement path must be non-empty.",
-                    replacement.Id.c_str());
+                    replacement.Definition.Id.c_str());
                 return false;
             }
 
-            const std::optional<std::filesystem::path> resolved_path = asset_resolver_.Resolve(replacement.ReplacementPath);
+            const std::optional<std::filesystem::path> resolved_path =
+                replacement.AssetResolver.Resolve(replacement.Definition.ReplacementPath);
             if (!resolved_path.has_value())
             {
                 Logf(
                     L"[d3d9] texture replacement validation failed for id=%hs: replacement path escaped pack root.",
-                    replacement.Id.c_str());
+                    replacement.Definition.Id.c_str());
                 return false;
             }
 
@@ -4473,7 +4478,7 @@ namespace helen
             {
                 Logf(
                     L"[d3d9] texture replacement validation failed for id=%hs: replacement asset is missing (%ls).",
-                    replacement.Id.c_str(),
+                    replacement.Definition.Id.c_str(),
                     resolved_path->c_str());
                 return false;
             }
@@ -4639,10 +4644,10 @@ namespace helen
     bool D3d9TextureReplacementHookSet::TryCacheReplacementTexture(
         IDirect3DTexture9* tracked_texture,
         const D3DSURFACE_DESC& description,
-        const TextureReplacementDefinition& replacement_definition,
+        const PackScopedTextureReplacementDefinition& replacement_definition,
         HRESULT& failure_result) const
     {
-        return ::TryCacheReplacementTexture(asset_resolver_, tracked_texture, description, replacement_definition, failure_result);
+        return ::TryCacheReplacementTexture(tracked_texture, description, replacement_definition, failure_result);
     }
 
     bool D3d9TextureReplacementHookSet::ShouldTrackTextures() const noexcept
@@ -4660,7 +4665,7 @@ namespace helen
         return FindDeclaredReplacement(description, digest) != nullptr;
     }
 
-    const TextureReplacementDefinition* D3d9TextureReplacementHookSet::FindDeclaredReplacement(
+    const PackScopedTextureReplacementDefinition* D3d9TextureReplacementHookSet::FindDeclaredReplacement(
         const D3DSURFACE_DESC& description,
         std::string_view digest) const
     {
@@ -4670,24 +4675,25 @@ namespace helen
         }
 
         const std::string_view format_token = GetD3d9FormatToken(description.Format);
-        for (const TextureReplacementDefinition& replacement : replacements_)
+        for (const PackScopedTextureReplacementDefinition& replacement : replacements_)
         {
-            if (!EqualsAsciiIgnoreCase(replacement.Api, "d3d9"))
+            const TextureReplacementDefinition& definition = replacement.Definition;
+            if (!EqualsAsciiIgnoreCase(definition.Api, "d3d9"))
             {
                 continue;
             }
 
-            if (replacement.Width != description.Width || replacement.Height != description.Height)
+            if (definition.Width != description.Width || definition.Height != description.Height)
             {
                 continue;
             }
 
-            if (!EqualsAsciiIgnoreCase(replacement.Format, format_token))
+            if (!EqualsAsciiIgnoreCase(definition.Format, format_token))
             {
                 continue;
             }
 
-            if (!EqualsAsciiIgnoreCase(replacement.Hash, digest))
+            if (!EqualsAsciiIgnoreCase(definition.Hash, digest))
             {
                 continue;
             }

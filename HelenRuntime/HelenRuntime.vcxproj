@@ -71,6 +71,7 @@
     <Lib />
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="ActivePackSetBuilder.cpp" />
     <ClCompile Include="BatmanGraphicsConfigService.cpp" />
     <ClCompile Include="BuildRuntimeCoordinator.cpp" />
     <ClCompile Include="BuildHookInstaller.cpp" />
@@ -84,10 +85,12 @@
     <ClCompile Include="ExternalBindingService.cpp" />
     <ClCompile Include="FileFingerprint.cpp" />
     <ClCompile Include="FileApiHookSet.cpp" />
+    <ClCompile Include="HiddenPathMatcher.cpp" />
     <ClCompile Include="FullFileVirtualFileSource.cpp" />
     <ClCompile Include="Hook.cpp" />
     <ClCompile Include="HookBlobRelocator.cpp" />
     <ClCompile Include="JsonConfigStore.cpp" />
+    <ClCompile Include="PackSelectionConfig.cpp" />
     <ClCompile Include="JsonParser.cpp" />
     <ClCompile Include="JsonValue.cpp" />
     <ClCompile Include="Log.cpp" />
@@ -125,11 +128,13 @@
     <ClInclude Include="..\include\HelenHook\FileFingerprint.h" />
     <ClInclude Include="..\include\HelenHook\FeatureDefinition.h" />
     <ClInclude Include="..\include\HelenHook\FileApiHookSet.h" />
+    <ClInclude Include="..\include\HelenHook\HiddenPathMatcher.h" />
     <ClInclude Include="..\include\HelenHook\FullFileVirtualFileSource.h" />
     <ClInclude Include="..\include\HelenHook\Hook.h" />
     <ClInclude Include="..\include\HelenHook\HookBlobRelocator.h" />
     <ClInclude Include="..\include\HelenHook\HookDefinition.h" />
     <ClInclude Include="..\include\HelenHook\JsonConfigStore.h" />
+    <ClInclude Include="..\include\HelenHook\LoadedBuildPackSet.h" />
     <ClInclude Include="..\include\HelenHook\JsonParser.h" />
     <ClInclude Include="..\include\HelenHook\JsonValue.h" />
     <ClInclude Include="..\include\HelenHook\LoadedBuildPack.h" />
@@ -144,6 +149,7 @@
     <ClInclude Include="..\include\HelenHook\PackAssetResolver.h" />
     <ClInclude Include="..\include\HelenHook\PackDefinition.h" />
     <ClInclude Include="..\include\HelenHook\PackRepository.h" />
+    <ClInclude Include="..\include\HelenHook\PackSelectionConfig.h" />
     <ClInclude Include="..\include\HelenHook\Pattern.h" />
     <ClInclude Include="..\include\HelenHook\RegisteredVirtualFile.h" />
     <ClInclude Include="..\include\HelenHook\HgdeltaChunkDefinition.h" />

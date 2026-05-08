@@ -76,20 +76,24 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="ActivePackSetBuilderTests.cpp" />
     <ClCompile Include="BuildHookInstallerTests.cpp" />
     <ClCompile Include="BuildRuntimeCoordinatorTests.cpp" />
     <ClCompile Include="CommandExecutorTests.cpp" />
     <ClCompile Include="CommandDispatcherTests.cpp" />
     <ClCompile Include="DebugTraceServiceTests.cpp" />
     <ClCompile Include="DeltaVirtualFileSourceTests.cpp" />
+    <ClCompile Include="FileApiHookSetTests.cpp" />
     <ClCompile Include="FileFingerprintTests.cpp" />
     <ClCompile Include="ExecutableFingerprintTests.cpp" />
     <ClCompile Include="ExternalBindingServiceTests.cpp" />
     <ClCompile Include="HelenGameHookExportTests.cpp" />
+    <ClCompile Include="HiddenPathMatcherTests.cpp" />
     <ClCompile Include="HookBlobRelocatorTests.cpp" />
     <ClCompile Include="JsonConfigStoreTests.cpp" />
     <ClCompile Include="MemoryStateObserverServiceTests.cpp" />
     <ClCompile Include="PackAssetResolverTests.cpp" />
+    <ClCompile Include="PackSelectionConfigTests.cpp" />
     <ClCompile Include="PackRepositoryTests.cpp" />
     <ClCompile Include="ProxyBootstrapCoordinatorTests.cpp" />
     <ClCompile Include="RuntimeValueStoreTests.cpp" />

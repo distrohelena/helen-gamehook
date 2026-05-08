@@ -4,9 +4,14 @@
 #include <filesystem>
 #include <fstream>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <HelenHook/PackAssetResolver.h>
+#include <HelenHook/PackScopedTextureReplacementDefinition.h>
+#include <HelenHook/TextureReplacementDefinition.h>
 
 namespace helen
 {
@@ -125,4 +130,51 @@ void RunTextureReplacementAssetLoaderTests()
     Expect(asset.Height == 1024u, "Replacement asset height mismatch.");
     Expect(asset.Format == D3DFMT_DXT5, "Replacement asset format mismatch.");
     Expect(asset.Level0Bytes.size() == 1024u * 1024u, "Replacement asset payload size mismatch.");
+
+    const std::filesystem::path pack_a_root = test_directory / "pack-a";
+    const std::filesystem::path pack_a_build_root = pack_a_root / "builds" / "test-build";
+    const std::filesystem::path pack_b_root = test_directory / "pack-b";
+    const std::filesystem::path pack_b_build_root = pack_b_root / "builds" / "test-build";
+    const std::filesystem::path pack_a_dds_path = pack_a_build_root / "assets" / "replacement.dds";
+    const std::filesystem::path pack_b_dds_path = pack_b_build_root / "assets" / "replacement.dds";
+    WriteTestDds(pack_a_dds_path);
+    WriteTestDds(pack_b_dds_path);
+
+    helen::TextureReplacementDefinition replacement_a_definition{};
+    replacement_a_definition.Id = "replace-a";
+    replacement_a_definition.Api = "d3d9";
+    replacement_a_definition.Width = 256u;
+    replacement_a_definition.Height = 256u;
+    replacement_a_definition.Format = "DXT5";
+    replacement_a_definition.Hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    replacement_a_definition.ReplacementPath = "assets/replacement.dds";
+
+    helen::TextureReplacementDefinition replacement_b_definition{};
+    replacement_b_definition.Id = "replace-b";
+    replacement_b_definition.Api = "d3d9";
+    replacement_b_definition.Width = 512u;
+    replacement_b_definition.Height = 512u;
+    replacement_b_definition.Format = "DXT5";
+    replacement_b_definition.Hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    replacement_b_definition.ReplacementPath = "assets/replacement.dds";
+
+    const helen::PackScopedTextureReplacementDefinition replacement_a(
+        "pack-a",
+        "test-build",
+        helen::PackAssetResolver(pack_a_root, pack_a_build_root),
+        replacement_a_definition);
+    const helen::PackScopedTextureReplacementDefinition replacement_b(
+        "pack-b",
+        "test-build",
+        helen::PackAssetResolver(pack_b_root, pack_b_build_root),
+        replacement_b_definition);
+
+    const std::optional<std::filesystem::path> resolved_a =
+        replacement_a.AssetResolver.Resolve(replacement_a.Definition.ReplacementPath);
+    const std::optional<std::filesystem::path> resolved_b =
+        replacement_b.AssetResolver.Resolve(replacement_b.Definition.ReplacementPath);
+    Expect(resolved_a.has_value(), "Expected the first pack-scoped texture replacement asset to resolve.");
+    Expect(resolved_b.has_value(), "Expected the second pack-scoped texture replacement asset to resolve.");
+    Expect(*resolved_a == pack_a_dds_path, "First pack-scoped texture replacement resolved the wrong asset path.");
+    Expect(*resolved_b == pack_b_dds_path, "Second pack-scoped texture replacement resolved the wrong asset path.");
 }

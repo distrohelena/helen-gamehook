@@ -2,6 +2,11 @@
 #include <iostream>
 
 /**
+ * @brief Runs merge-validation coverage for the active multi-pack runtime builder.
+ */
+void RunActivePackSetBuilderTests();
+
+/**
  * @brief Runs the build runtime coordinator coverage for startup commands and state-observer driven command dispatch.
  */
 void RunBuildRuntimeCoordinatorTests();
@@ -42,6 +47,11 @@ void RunExecutableFingerprintTests();
 void RunFileFingerprintTests();
 
 /**
+ * @brief Runs the hidden-path matcher coverage for normalized absolute and relative game paths.
+ */
+void RunHiddenPathMatcherTests();
+
+/**
  * @brief Runs the external binding service test coverage for patched gameplay callback resolution.
  */
 void RunExternalBindingServiceTests();
@@ -72,9 +82,19 @@ void RunPackAssetResolverTests();
 void RunPackRepositoryTests();
 
 /**
+ * @brief Runs the explicit pack-selection config coverage for ordered enabled-pack lists.
+ */
+void RunPackSelectionConfigTests();
+
+/**
  * @brief Runs the proxy bootstrap coordinator coverage for early asynchronous Helen startup.
  */
 void RunProxyBootstrapCoordinatorTests();
+
+/**
+ * @brief Runs the file API hidden-path helper coverage for common game path forms.
+ */
+void RunFileApiHookSetTests();
 
 /**
  * @brief Runs the runtime layout test coverage for the filesystem paths used by the runtime.
@@ -118,6 +138,7 @@ int main()
 {
     try
     {
+        RunActivePackSetBuilderTests();
         RunBuildHookInstallerTests();
         RunRuntimeLayoutTests();
         RunJsonConfigStoreTests();
@@ -128,14 +149,17 @@ int main()
         RunExternalBindingServiceTests();
         RunHelenGameHookExportTests();
         RunFileFingerprintTests();
+        RunHiddenPathMatcherTests();
         RunExecutableFingerprintTests();
         RunHgdeltaFileTests();
         RunTextureDumpSerializerTests();
         RunTextureReplacementAssetLoaderTests();
         RunDeltaVirtualFileSourceTests();
         RunPackAssetResolverTests();
+        RunPackSelectionConfigTests();
         RunPackRepositoryTests();
         RunProxyBootstrapCoordinatorTests();
+        RunFileApiHookSetTests();
         RunHookBlobRelocatorTests();
         RunMemoryStateObserverServiceTests();
         RunVirtualFileServiceTests();

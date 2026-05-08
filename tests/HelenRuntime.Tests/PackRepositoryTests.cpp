@@ -1,4 +1,7 @@
+#include <HelenHook/ActivePackSet.h>
+#include <HelenHook/ActivePackSetBuilder.h>
 #include <HelenHook/LoadedBuildPack.h>
+#include <HelenHook/LoadedBuildPackSet.h>
 #include <HelenHook/PackRepository.h>
 #include <HelenHook/VirtualFileSourceKind.h>
 
@@ -71,16 +74,25 @@ void RunPackRepositoryTests()
         const std::filesystem::path packs_root = root / "packs";
         const std::filesystem::path valid_pack_root = packs_root / "batman-aa-subtitles";
         const std::filesystem::path valid_build_root = valid_pack_root / "builds" / "steam-goty-1.0";
+        const std::filesystem::path packset_subtitles_pack_root = packs_root / "packset-subtitles";
+        const std::filesystem::path packset_subtitles_build_root = packset_subtitles_pack_root / "builds" / "packset-build";
+        const std::filesystem::path skip_videos_pack_root = packs_root / "packset-skip-videos";
+        const std::filesystem::path skip_videos_build_root = skip_videos_pack_root / "builds" / "steam-goty-1.0";
         const std::filesystem::path pack_root = packs_root / "broken-pack";
         const std::filesystem::path build_root = pack_root / "builds" / "broken-build";
         const std::filesystem::path mode_mismatch_pack_root = packs_root / "mode-mismatch-pack";
         const std::filesystem::path mode_mismatch_build_root = mode_mismatch_pack_root / "builds" / "mode-mismatch-build";
         const std::filesystem::path malformed_delta_hash_pack_root = packs_root / "malformed-delta-hash-pack";
         const std::filesystem::path malformed_delta_hash_build_root = malformed_delta_hash_pack_root / "builds" / "malformed-delta-hash-build";
+        const std::filesystem::path duplicate_missing_path_pack_root = packs_root / "duplicate-missing-path-pack";
+        const std::filesystem::path duplicate_missing_path_build_root = duplicate_missing_path_pack_root / "builds" / "duplicate-missing-path-build";
         std::filesystem::create_directories(valid_build_root);
+        std::filesystem::create_directories(packset_subtitles_build_root);
+        std::filesystem::create_directories(skip_videos_build_root);
         std::filesystem::create_directories(build_root);
         std::filesystem::create_directories(mode_mismatch_build_root);
         std::filesystem::create_directories(malformed_delta_hash_build_root);
+        std::filesystem::create_directories(duplicate_missing_path_build_root);
 
         WriteAllText(
             valid_pack_root / "pack.json",
@@ -127,11 +139,85 @@ void RunPackRepositoryTests()
   "startupCommands": [
     "applySavedSubtitleSize"
   ],
+  "missingPaths": [
+    "BmGame/Movies/Legal.bik",
+    "bmgame\\movies\\nvidia.bik"
+  ],
   "match": {
     "fileSize": 38758728,
     "sha256": "4DAC1F5E2AC6710B7378FDCE74601F616F4753E3756CB5FDA63C7519CC2EB028"
   }
 })");
+
+        WriteAllText(
+            packset_subtitles_pack_root / "pack.json",
+            R"({
+  "schemaVersion": 1,
+  "id": "packset-subtitles",
+  "name": "Pack-Set Subtitles",
+  "targets": [
+    {
+      "executables": [
+        "PackSetGame.exe"
+      ]
+    }
+  ],
+  "builds": [
+    "packset-build"
+  ]
+})");
+
+        WriteAllText(
+            packset_subtitles_build_root / "build.json",
+            R"({
+  "id": "packset-build",
+  "executable": "PackSetGame.exe",
+  "match": {
+    "fileSize": 1111,
+    "sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+})");
+
+        WriteAllText(packset_subtitles_build_root / "files.json", R"({ "virtualFiles": [] })");
+        WriteAllText(packset_subtitles_build_root / "bindings.json", R"({ "bindings": [] })");
+        WriteAllText(packset_subtitles_build_root / "hooks.json", "{}");
+        WriteAllText(packset_subtitles_build_root / "textures.json", R"({ "replacements": [] })");
+        WriteAllText(packset_subtitles_build_root / "commands.json", R"({ "commands": [] })");
+
+        WriteAllText(
+            skip_videos_pack_root / "pack.json",
+            R"({
+  "schemaVersion": 1,
+  "id": "packset-skip-videos",
+  "name": "Pack-Set Skip Videos",
+  "targets": [
+    {
+      "executables": [
+        "PackSetGame.exe"
+      ]
+    }
+  ],
+  "builds": [
+    "steam-goty-1.0"
+  ]
+})");
+
+        WriteAllText(
+            skip_videos_build_root / "build.json",
+            R"({
+  "id": "steam-goty-1.0",
+  "executable": "PackSetGame.exe",
+  "match": {
+    "fileSize": 1111,
+    "sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+})");
+
+        WriteAllText(skip_videos_build_root / "files.json", R"({ "virtualFiles": [] })");
+        WriteAllText(skip_videos_build_root / "bindings.json", R"({ "bindings": [] })");
+        WriteAllText(skip_videos_build_root / "hooks.json", "{}");
+        WriteAllText(skip_videos_build_root / "textures.json", R"({ "replacements": [] })");
+        WriteAllText(skip_videos_build_root / "commands.json", R"({ "commands": [] })");
 
         WriteAllText(
             valid_build_root / "files.json",
@@ -478,6 +564,45 @@ void RunPackRepositoryTests()
 
         WriteAllText(malformed_delta_hash_build_root / "hooks.json", "{}");
 
+        WriteAllText(
+            duplicate_missing_path_pack_root / "pack.json",
+            R"({
+  "schemaVersion": 1,
+  "id": "duplicate-missing-path-pack",
+  "name": "Duplicate Missing Path Pack",
+  "targets": [
+    {
+      "executables": [
+        "DuplicateMissingPathGame.exe"
+      ]
+    }
+  ],
+  "builds": [
+    "duplicate-missing-path-build"
+  ]
+})");
+
+        WriteAllText(
+            duplicate_missing_path_build_root / "build.json",
+            R"({
+  "id": "duplicate-missing-path-build",
+  "executable": "DuplicateMissingPathGame.exe",
+  "missingPaths": [
+    "BmGame/Movies/Legal.bik",
+    "bmgame\\movies\\legal.bik"
+  ],
+  "match": {
+    "fileSize": 9999,
+    "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  }
+})");
+
+        WriteAllText(duplicate_missing_path_build_root / "files.json", R"({ "virtualFiles": [] })");
+        WriteAllText(duplicate_missing_path_build_root / "bindings.json", R"({ "bindings": [] })");
+        WriteAllText(duplicate_missing_path_build_root / "hooks.json", "{}");
+        WriteAllText(duplicate_missing_path_build_root / "textures.json", R"({ "replacements": [] })");
+        WriteAllText(duplicate_missing_path_build_root / "commands.json", R"({ "commands": [] })");
+
         const std::optional<helen::LoadedBuildPack> loaded_valid_pack = repository.LoadForExecutable(
             packs_root,
             "ShippingPC-BmGame.exe",
@@ -491,7 +616,21 @@ void RunPackRepositoryTests()
         Expect(loaded_valid_pack->Build.EnableD3d9TextureImageDumping, "Loaded build should enable D3D9 texture image dumping.");
         Expect(loaded_valid_pack->Build.StartupCommandIds.size() == 1, "Loaded startup command count mismatch.");
         Expect(loaded_valid_pack->Build.StartupCommandIds[0] == "applySavedSubtitleSize", "Loaded startup command identifier mismatch.");
+        Expect(loaded_valid_pack->Build.MissingPaths.size() == 2, "Loaded missing-path count mismatch.");
+        Expect(loaded_valid_pack->Build.MissingPaths[0] == "bmgame/movies/legal.bik", "Loaded missing path normalization mismatch for Legal.bik.");
+        Expect(loaded_valid_pack->Build.MissingPaths[1] == "bmgame/movies/nvidia.bik", "Loaded missing path normalization mismatch for nvidia.bik.");
         Expect(loaded_valid_pack->Build.VirtualFiles.size() == 2, "Loaded virtual file count mismatch.");
+
+        const std::optional<helen::LoadedBuildPackSet> loaded_pack_set = repository.LoadPackSetForExecutable(
+            packs_root,
+            "PackSetGame.exe",
+            1111,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            { "packset-subtitles", "packset-skip-videos" });
+        Expect(loaded_pack_set.has_value(), "Expected an ordered pack set to load for the matching executable fingerprint.");
+        Expect(loaded_pack_set->Packs.size() == 2, "Loaded pack-set size mismatch.");
+        Expect(loaded_pack_set->Packs[0].Pack.Id == "packset-subtitles", "Loaded pack-set order mismatch for subtitles.");
+        Expect(loaded_pack_set->Packs[1].Pack.Id == "packset-skip-videos", "Loaded pack-set order mismatch for skip videos.");
 
         const helen::VirtualFileDefinition* valid_gameplay_file = nullptr;
         const helen::VirtualFileDefinition* valid_frontend_file = nullptr;
@@ -576,6 +715,13 @@ void RunPackRepositoryTests()
             8765,
             "2222222222222222222222222222222222222222222222222222222222222222");
         Expect(!malformed_delta_hash_pack.has_value(), "Pack repository unexpectedly loaded a delta-backed virtual file with malformed SHA-256 metadata.");
+
+        const std::optional<helen::LoadedBuildPack> duplicate_missing_path_pack = repository.LoadForExecutable(
+            packs_root,
+            "DuplicateMissingPathGame.exe",
+            9999,
+            "3333333333333333333333333333333333333333333333333333333333333333");
+        Expect(!duplicate_missing_path_pack.has_value(), "Pack repository unexpectedly loaded a build with duplicate normalized missing paths.");
 
         const std::optional<helen::LoadedBuildPack> loaded_batman_pack = repository.LoadForExecutable(
             GetBatmanPackRoot(),
@@ -696,6 +842,38 @@ void RunPackRepositoryTests()
         Expect(checked_in_graphics_frontend_file->Source.Target.FileSize == 12416760, "Checked-in Batman graphics frontend package target size mismatch.");
         Expect(checked_in_graphics_frontend_file->Source.Target.Sha256 == "3e010c701fec4fd1f81baec21d66be65e0f09c0ba4112702eedbb4e57869c3cb", "Checked-in Batman graphics frontend package target hash mismatch.");
         Expect(checked_in_graphics_frontend_file->Source.ChunkSize == 65536, "Checked-in Batman graphics frontend chunk size mismatch.");
+
+        const std::optional<helen::LoadedBuildPackSet> checked_in_batman_pack_set = repository.LoadPackSetForExecutable(
+            GetBatmanPackRoot(),
+            "ShippingPC-BmGame.exe",
+            38758728,
+            "4dac1f5e2ac6710b7378fdce74601f616f4753e3756cb5fda63c7519cc2eb028",
+            { "batman-aa-subtitles", "batman-aa-skip-videos" });
+        Expect(checked_in_batman_pack_set.has_value(), "Expected the checked-in Batman subtitles plus skip-videos pack set to load.");
+        Expect(checked_in_batman_pack_set->Packs.size() == 2, "Checked-in Batman pack-set size mismatch.");
+        Expect(checked_in_batman_pack_set->Packs[0].Pack.Id == "batman-aa-subtitles", "Checked-in Batman pack-set order mismatch for subtitles.");
+        Expect(checked_in_batman_pack_set->Packs[1].Pack.Id == "batman-aa-skip-videos", "Checked-in Batman pack-set order mismatch for skip videos.");
+
+        helen::ActivePackSet checked_in_active_pack_set;
+        std::string checked_in_failure_reason;
+        const helen::ActivePackSetBuilder active_pack_set_builder;
+        Expect(
+            active_pack_set_builder.TryBuild(*checked_in_batman_pack_set, checked_in_active_pack_set, checked_in_failure_reason),
+            "Expected the checked-in Batman subtitles plus skip-videos pack set to merge into an active pack set.");
+        Expect(checked_in_active_pack_set.LoadedPacks.size() == 2, "Checked-in Batman active pack-set loaded-pack count mismatch.");
+        Expect(checked_in_active_pack_set.StartupCommandIds.size() == 1, "Checked-in Batman active pack-set startup-command count mismatch.");
+        Expect(checked_in_active_pack_set.StartupCommandIds[0] == "applySavedSubtitleSize", "Checked-in Batman active pack-set startup command mismatch.");
+        Expect(checked_in_active_pack_set.MissingPaths.size() == 5, "Checked-in Batman active pack-set missing-path count mismatch.");
+        Expect(checked_in_active_pack_set.VirtualFiles.size() == 1, "Checked-in Batman active pack-set virtual-file count mismatch.");
+        Expect(checked_in_active_pack_set.Hooks.size() == 1, "Checked-in Batman active pack-set hook count mismatch.");
+        Expect(checked_in_active_pack_set.TextureReplacements.size() == 1, "Checked-in Batman active pack-set texture replacement count mismatch.");
+        Expect(checked_in_active_pack_set.Commands.size() == 2, "Checked-in Batman active pack-set command count mismatch.");
+        Expect(checked_in_active_pack_set.ExternalBindings.size() == 3, "Checked-in Batman active pack-set external-binding count mismatch.");
+        Expect(checked_in_active_pack_set.StateObservers.size() == 1, "Checked-in Batman active pack-set state-observer count mismatch.");
+        Expect(checked_in_active_pack_set.RuntimeSlots.size() == 1, "Checked-in Batman active pack-set runtime-slot count mismatch.");
+        Expect(checked_in_active_pack_set.EnableD3d9TextureReplacementHooks, "Checked-in Batman active pack-set should enable D3D9 texture replacement hooks.");
+        Expect(!checked_in_active_pack_set.EnableD3d9TextureHashLogging, "Checked-in Batman active pack-set should leave D3D9 texture hash logging disabled.");
+        Expect(!checked_in_active_pack_set.EnableD3d9TextureImageDumping, "Checked-in Batman active pack-set should leave D3D9 texture image dumping disabled.");
     }
     catch (...)
     {

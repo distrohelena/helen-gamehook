@@ -1,8 +1,9 @@
 #pragma once
 
 #include <memory>
+#include <utility>
 
-#include <HelenHook/VirtualFileDefinition.h>
+#include <HelenHook/PackScopedVirtualFileRegistration.h>
 
 namespace helen
 {
@@ -17,10 +18,23 @@ namespace helen
     class RegisteredVirtualFile
     {
     public:
-        /** @brief Original build declaration used to create sources for this registered virtual file. */
-        VirtualFileDefinition Definition;
+        /**
+         * @brief Creates one registered virtual-file record from one pack-scoped registration and optional shared source.
+         * @param registration Pack-scoped registration that owns the declaration and asset resolver.
+         * @param shared_source Optional reusable shared source for registrations that can be materialized once.
+         */
+        RegisteredVirtualFile(
+            PackScopedVirtualFileRegistration registration,
+            std::shared_ptr<VirtualFileSource> shared_source)
+            : Registration(std::move(registration))
+            , SharedSource(std::move(shared_source))
+        {
+        }
 
-        /** @brief Optional reusable shared source for definitions that can be materialized once at registration time. */
+        /** @brief Pack-scoped registration used to create sources for this registered virtual file. */
+        PackScopedVirtualFileRegistration Registration;
+
+        /** @brief Optional reusable shared source for registrations that can be materialized once at registration time. */
         std::shared_ptr<VirtualFileSource> SharedSource;
     };
 }

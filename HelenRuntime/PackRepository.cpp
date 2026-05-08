@@ -25,6 +25,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -496,6 +497,74 @@ namespace
     }
 
     /**
+     * @brief Normalizes one manifest-declared game path for case-insensitive path comparisons.
+     * @param path Relative game path text declared in manifest JSON.
+     * @return Lowercased slash-normalized path without a leading slash.
+     */
+    std::string NormalizeManifestGamePath(std::string_view path)
+    {
+        std::string normalized;
+        normalized.reserve(path.size());
+        for (const char character : path)
+        {
+            const char folded = character == '\\'
+                ? '/'
+                : static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+            normalized.push_back(folded);
+        }
+
+        while (!normalized.empty() && normalized.front() == '/')
+        {
+            normalized.erase(normalized.begin());
+        }
+
+        return normalized;
+    }
+
+    /**
+     * @brief Parses one optional build-level hidden-path list from `build.json`.
+     * @param root JSON root object loaded from the build manifest.
+     * @param definition Receives the normalized hidden-path list on success.
+     * @return True when the field is absent or valid; otherwise false.
+     */
+    bool ParseMissingPaths(const helen::JsonValue& root, helen::BuildDefinition& definition)
+    {
+        const helen::JsonValue* missing_paths_value = FindObjectMember(root, "missingPaths");
+        if (missing_paths_value == nullptr)
+        {
+            definition.MissingPaths.clear();
+            return true;
+        }
+
+        const helen::JsonValue::Array* missing_paths = missing_paths_value->AsArray();
+        if (missing_paths == nullptr)
+        {
+            return false;
+        }
+
+        std::set<std::string> normalized_paths;
+        definition.MissingPaths.clear();
+        for (const helen::JsonValue& entry : *missing_paths)
+        {
+            const std::optional<std::string> path = TryGetString(&entry);
+            if (!path.has_value())
+            {
+                return false;
+            }
+
+            const std::string normalized = NormalizeManifestGamePath(*path);
+            if (normalized.empty() || !normalized_paths.insert(normalized).second)
+            {
+                return false;
+            }
+
+            definition.MissingPaths.push_back(normalized);
+        }
+
+        return true;
+    }
+
+    /**
      * @brief Parses one top-level pack manifest.
      * @param root JSON root object loaded from `pack.json`.
      * @param definition Receives the parsed pack definition on success.
@@ -685,6 +754,11 @@ namespace
 
                 definition.StartupCommandIds.push_back(*command_id);
             }
+        }
+
+        if (!ParseMissingPaths(root, definition))
+        {
+            return false;
         }
 
         return true;
@@ -1655,6 +1729,80 @@ namespace
             definition.Match.FileSize == executable_size &&
             definition.Match.Sha256 == ToLowerAscii(std::string(executable_sha256));
     }
+
+    /**
+     * @brief Attempts to load one matching pack/build pair from a specific pack directory.
+     * @param pack_directory Pack directory that should contain one `pack.json` and build subdirectories.
+     * @param executable_name Executable file name requested by the caller.
+     * @param executable_size Exact executable file size requested by the caller.
+     * @param executable_sha256 Lowercase SHA-256 digest requested by the caller.
+     * @param loaded_pack Receives the fully loaded pack/build pair when a match is found.
+     * @return True when the pack directory contains a matching pack/build pair; otherwise false.
+     */
+    bool TryLoadMatchingPack(
+        const std::filesystem::path& pack_directory,
+        const std::string& executable_name,
+        std::uintmax_t executable_size,
+        const std::string& executable_sha256,
+        helen::LoadedBuildPack& loaded_pack)
+    {
+        helen::JsonValue pack_root;
+        if (!TryReadJsonFile(pack_directory / "pack.json", pack_root))
+        {
+            helen::Logf(L"[pack] skipped: pack.json missing or invalid");
+            return false;
+        }
+
+        helen::PackDefinition pack_definition;
+        if (!ParsePackDefinition(pack_root, pack_definition))
+        {
+            helen::Logf(L"[pack] skipped: failed to parse pack definition");
+            return false;
+        }
+
+        helen::Logf(L"[pack] loaded pack executables count=%zu", pack_definition.Executables.size());
+
+        if (!SupportsExecutable(pack_definition, executable_name))
+        {
+            helen::Logf(L"[pack] does not support this executable");
+            return false;
+        }
+
+        helen::Logf(L"[pack] supports executable, checking %zu builds", pack_definition.BuildIds.size());
+
+        for (const std::string& build_id : pack_definition.BuildIds)
+        {
+            const std::filesystem::path build_directory = pack_directory / "builds" / build_id;
+            helen::Logf(L"[pack] checking build");
+            helen::BuildDefinition build_definition;
+            if (!LoadBuildDefinition(build_directory, build_id, build_definition))
+            {
+                helen::Logf(L"[pack] build failed to load");
+                continue;
+            }
+
+            helen::Logf(L"[pack] build loaded: size=%llu",
+                static_cast<unsigned long long>(build_definition.Match.FileSize));
+
+            helen::Logf(L"[pack] fingerprint compare: expected_size=%llu actual_size=%llu",
+                static_cast<unsigned long long>(build_definition.Match.FileSize),
+                static_cast<unsigned long long>(executable_size));
+
+            if (!MatchesFingerprint(build_definition, executable_name, executable_size, executable_sha256))
+            {
+                helen::Logf(L"[pack] fingerprint mismatch");
+                continue;
+            }
+
+            loaded_pack.PackDirectory = pack_directory;
+            loaded_pack.BuildDirectory = build_directory;
+            loaded_pack.Pack = std::move(pack_definition);
+            loaded_pack.Build = std::move(build_definition);
+            return true;
+        }
+
+        return false;
+    }
 }
 
 namespace helen
@@ -1682,63 +1830,52 @@ namespace helen
         for (const std::filesystem::path& pack_directory : ListChildDirectoriesSorted(packs_directory))
         {
             helen::Logf(L"[pack] inspecting pack directory");
-            JsonValue pack_root;
-            if (!TryReadJsonFile(pack_directory / "pack.json", pack_root))
+            LoadedBuildPack loaded_pack;
+            if (TryLoadMatchingPack(pack_directory, executable_name, executable_size, executable_sha256, loaded_pack))
             {
-                helen::Logf(L"[pack] skipped: pack.json missing or invalid");
-                continue;
-            }
-
-            PackDefinition pack_definition;
-            if (!ParsePackDefinition(pack_root, pack_definition))
-            {
-                helen::Logf(L"[pack] skipped: failed to parse pack definition");
-                continue;
-            }
-
-            helen::Logf(L"[pack] loaded pack executables count=%zu", pack_definition.Executables.size());
-
-            if (!SupportsExecutable(pack_definition, executable_name))
-            {
-                helen::Logf(L"[pack] does not support this executable");
-                continue;
-            }
-
-            helen::Logf(L"[pack] supports executable, checking %zu builds", pack_definition.BuildIds.size());
-
-            for (const std::string& build_id : pack_definition.BuildIds)
-            {
-                const std::filesystem::path build_directory = pack_directory / "builds" / build_id;
-                helen::Logf(L"[pack] checking build");
-                BuildDefinition build_definition;
-                if (!LoadBuildDefinition(build_directory, build_id, build_definition))
-                {
-                    helen::Logf(L"[pack] build failed to load");
-                    continue;
-                }
-
-                helen::Logf(L"[pack] build loaded: size=%llu",
-                    static_cast<unsigned long long>(build_definition.Match.FileSize));
-
-                helen::Logf(L"[pack] fingerprint compare: expected_size=%llu actual_size=%llu",
-                    static_cast<unsigned long long>(build_definition.Match.FileSize),
-                    static_cast<unsigned long long>(executable_size));
-
-                if (!MatchesFingerprint(build_definition, executable_name, executable_size, executable_sha256))
-                {
-                    helen::Logf(L"[pack] fingerprint mismatch");
-                    continue;
-                }
-
-                LoadedBuildPack loaded_pack;
-                loaded_pack.PackDirectory = pack_directory;
-                loaded_pack.BuildDirectory = build_directory;
-                loaded_pack.Pack = std::move(pack_definition);
-                loaded_pack.Build = std::move(build_definition);
                 return loaded_pack;
             }
         }
 
         return std::nullopt;
+    }
+
+    std::optional<LoadedBuildPackSet> PackRepository::LoadPackSetForExecutable(
+        const std::filesystem::path& packs_directory,
+        const std::string& executable_name,
+        std::uintmax_t executable_size,
+        const std::string& executable_sha256,
+        const std::vector<std::string>& enabled_pack_ids) const
+    {
+        if (packs_directory.empty() || executable_name.empty() || executable_sha256.empty() || enabled_pack_ids.empty())
+        {
+            return std::nullopt;
+        }
+
+        std::map<std::string, LoadedBuildPack> candidates_by_id;
+        for (const std::filesystem::path& pack_directory : ListChildDirectoriesSorted(packs_directory))
+        {
+            LoadedBuildPack loaded_pack;
+            if (!TryLoadMatchingPack(pack_directory, executable_name, executable_size, executable_sha256, loaded_pack))
+            {
+                continue;
+            }
+
+            candidates_by_id.emplace(loaded_pack.Pack.Id, std::move(loaded_pack));
+        }
+
+        LoadedBuildPackSet loaded_pack_set;
+        for (const std::string& enabled_pack_id : enabled_pack_ids)
+        {
+            const auto found = candidates_by_id.find(enabled_pack_id);
+            if (found == candidates_by_id.end())
+            {
+                return std::nullopt;
+            }
+
+            loaded_pack_set.Packs.push_back(found->second);
+        }
+
+        return loaded_pack_set;
     }
 }

@@ -209,6 +209,36 @@ namespace
     }
 
     /**
+     * @brief Calls the real GetFileAttributesW export without using the main executable import table.
+     */
+    DWORD WINAPI CallRealGetFileAttributesW(LPCWSTR lpFileName)
+    {
+        const auto get_file_attributes_w = ResolveKernel32Export<decltype(&GetFileAttributesW)>("GetFileAttributesW");
+        if (get_file_attributes_w == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return INVALID_FILE_ATTRIBUTES;
+        }
+
+        return get_file_attributes_w(lpFileName);
+    }
+
+    /**
+     * @brief Calls the real GetFileAttributesA export without using the main executable import table.
+     */
+    DWORD WINAPI CallRealGetFileAttributesA(LPCSTR lpFileName)
+    {
+        const auto get_file_attributes_a = ResolveKernel32Export<decltype(&GetFileAttributesA)>("GetFileAttributesA");
+        if (get_file_attributes_a == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return INVALID_FILE_ATTRIBUTES;
+        }
+
+        return get_file_attributes_a(lpFileName);
+    }
+
+    /**
      * @brief Calls the real CreateFileMappingA export without using the main executable import table.
      */
     HANDLE WINAPI CallRealCreateFileMappingA(
@@ -341,14 +371,19 @@ namespace
 
         return hook.Install(module, imported_dll, imported_name, replacement);
     }
+
 }
 
 namespace helen
 {
     FileApiHookSet* FileApiHookSet::active_instance_ = nullptr;
 
-    FileApiHookSet::FileApiHookSet(VirtualFileService& virtual_files)
+    FileApiHookSet::FileApiHookSet(
+        VirtualFileService& virtual_files,
+        std::filesystem::path game_root,
+        std::vector<std::string> hidden_paths)
         : virtual_files_(virtual_files)
+        , hidden_path_matcher_(std::move(game_root), std::move(hidden_paths))
     {
     }
 
@@ -402,6 +437,18 @@ namespace helen
             return false;
         }
         has_create_file_hook = has_create_file_hook || import_present;
+
+        if (!InstallOptionalHook(get_file_attributes_w_hook_, *main_module, "kernel32.dll", "GetFileAttributesW", reinterpret_cast<void*>(&GetFileAttributesWDetour), import_present))
+        {
+            Remove();
+            return false;
+        }
+
+        if (!InstallOptionalHook(get_file_attributes_a_hook_, *main_module, "kernel32.dll", "GetFileAttributesA", reinterpret_cast<void*>(&GetFileAttributesADetour), import_present))
+        {
+            Remove();
+            return false;
+        }
 
         if (!has_create_file_hook)
         {
@@ -462,6 +509,8 @@ namespace helen
     {
         close_handle_hook_.Remove();
         create_file_mapping_a_hook_.Remove();
+        get_file_attributes_a_hook_.Remove();
+        get_file_attributes_w_hook_.Remove();
         get_file_size_ex_hook_.Remove();
         get_file_size_hook_.Remove();
         set_file_pointer_hook_.Remove();
@@ -498,6 +547,12 @@ namespace helen
         if (active == nullptr)
         {
             SetLastError(ERROR_INVALID_HANDLE);
+            return INVALID_HANDLE_VALUE;
+        }
+
+        if (lpFileName != nullptr && active->hidden_path_matcher_.ShouldHidePath(std::filesystem::path(lpFileName)))
+        {
+            SetLastError(ERROR_FILE_NOT_FOUND);
             return INVALID_HANDLE_VALUE;
         }
 
@@ -548,6 +603,16 @@ namespace helen
             return INVALID_HANDLE_VALUE;
         }
 
+        if (lpFileName != nullptr)
+        {
+            const std::optional<std::filesystem::path> hidden_path = TryConvertAnsiPath(lpFileName);
+            if (hidden_path.has_value() && active->hidden_path_matcher_.ShouldHidePath(*hidden_path))
+            {
+                SetLastError(ERROR_FILE_NOT_FOUND);
+                return INVALID_HANDLE_VALUE;
+            }
+        }
+
         if (!CanVirtualizeOpen(dwDesiredAccess, dwCreationDisposition, dwFlagsAndAttributes))
         {
             return CallRealCreateFileA(
@@ -581,6 +646,46 @@ namespace helen
             dwCreationDisposition,
             dwFlagsAndAttributes,
             hTemplateFile);
+    }
+
+    DWORD WINAPI FileApiHookSet::GetFileAttributesWDetour(LPCWSTR lpFileName)
+    {
+        FileApiHookSet* const active = Current();
+        if (active == nullptr)
+        {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return INVALID_FILE_ATTRIBUTES;
+        }
+
+        if (lpFileName != nullptr && active->hidden_path_matcher_.ShouldHidePath(std::filesystem::path(lpFileName)))
+        {
+            SetLastError(ERROR_FILE_NOT_FOUND);
+            return INVALID_FILE_ATTRIBUTES;
+        }
+
+        return CallRealGetFileAttributesW(lpFileName);
+    }
+
+    DWORD WINAPI FileApiHookSet::GetFileAttributesADetour(LPCSTR lpFileName)
+    {
+        FileApiHookSet* const active = Current();
+        if (active == nullptr)
+        {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return INVALID_FILE_ATTRIBUTES;
+        }
+
+        if (lpFileName != nullptr)
+        {
+            const std::optional<std::filesystem::path> hidden_path = TryConvertAnsiPath(lpFileName);
+            if (hidden_path.has_value() && active->hidden_path_matcher_.ShouldHidePath(*hidden_path))
+            {
+                SetLastError(ERROR_FILE_NOT_FOUND);
+                return INVALID_FILE_ATTRIBUTES;
+            }
+        }
+
+        return CallRealGetFileAttributesA(lpFileName);
     }
 
     BOOL WINAPI FileApiHookSet::ReadFileDetour(

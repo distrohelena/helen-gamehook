@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "batman-aa-skip-videos",
+  "name": "Batman Arkham Asylum Skip Videos",
+  "description": "Hides Batman startup movie files so the game skips the intro videos without touching the real .bik files.",
+  "targets": [
+    {
+      "gameId": "batman-arkham-asylum",
+      "executables": [
+        "ShippingPC-BmGame.exe"
+      ]
+    }
+  ],
+  "builds": [
+    "steam-goty-1.0"
+  ]
+}

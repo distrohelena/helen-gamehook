@@ -8,7 +8,7 @@
 #include <vector>
 
 #include <HelenHook/Hook.h>
-#include <HelenHook/PackAssetResolver.h>
+#include <HelenHook/PackScopedTextureReplacementDefinition.h>
 #include <HelenHook/TextureReplacementDefinition.h>
 
 namespace helen
@@ -25,17 +25,15 @@ namespace helen
     {
     public:
         /**
-         * @brief Binds the hook set to the active pack asset resolver and declared replacement rules.
-         * @param asset_resolver Resolver that validates declared replacement asset paths.
-         * @param replacements Build-scoped replacement rules that should activate the subsystem.
+         * @brief Binds the hook set to the declared pack-scoped replacement rules.
+         * @param replacements Pack-scoped replacement rules that should activate the subsystem.
          */
         D3d9TextureReplacementHookSet(
-            const PackAssetResolver& asset_resolver,
             bool enable_hooking,
             bool enable_hash_logging,
             bool enable_image_dumping,
             std::filesystem::path texture_dump_directory,
-            const std::vector<TextureReplacementDefinition>& replacements);
+            std::vector<PackScopedTextureReplacementDefinition> replacements);
 
         /**
          * @brief Removes any installed `D3D9` import hook.
@@ -271,14 +269,14 @@ namespace helen
          * @brief Loads and caches one higher-resolution replacement texture for a matched tracked texture.
          * @param record Tracked texture record that should receive the created replacement texture.
          * @param description Matched source texture description used to preserve usage and pool settings.
-         * @param replacement_definition Declared replacement rule that names the replacement asset.
+         * @param replacement_definition Pack-scoped replacement rule that names the replacement asset.
          * @param failure_result Receives the HRESULT-style failure reason when loading or creation fails.
          * @return True when the replacement texture is cached successfully or already exists.
          */
         bool TryCacheReplacementTexture(
             IDirect3DTexture9* tracked_texture,
             const D3DSURFACE_DESC& description,
-            const TextureReplacementDefinition& replacement_definition,
+            const PackScopedTextureReplacementDefinition& replacement_definition,
             HRESULT& failure_result) const;
 
         /**
@@ -293,9 +291,9 @@ namespace helen
          * @brief Returns the first declared replacement that matches one tracked texture fingerprint.
          * @param description Level-0 texture description for the tracked texture.
          * @param digest Lowercase SHA-256 digest computed from the tracked texture bytes.
-         * @return Pointer to the matching replacement definition, or nullptr when no replacement matches.
+         * @return Pointer to the matching pack-scoped replacement definition, or nullptr when no replacement matches.
          */
-        const TextureReplacementDefinition* FindDeclaredReplacement(
+        const PackScopedTextureReplacementDefinition* FindDeclaredReplacement(
             const D3DSURFACE_DESC& description,
             std::string_view digest) const;
 
@@ -321,8 +319,6 @@ namespace helen
          */
         bool ShouldInstallDeviceHooks() const noexcept;
 
-        /** @brief Active pack asset resolver used to validate replacement asset paths. */
-        const PackAssetResolver& asset_resolver_;
         /** @brief Enables the D3D9 hook subsystem even when no replacement entries are declared yet. */
         bool enable_hooking_;
         /** @brief Enables expensive development-time texture hashing/logging for live rule discovery. */
@@ -331,8 +327,8 @@ namespace helen
         bool enable_image_dumping_;
         /** @brief Output directory used for development-time texture dumps when image dumping is enabled. */
         std::filesystem::path texture_dump_directory_;
-        /** @brief Build-scoped replacement entries declared through `textures.json`. */
-        const std::vector<TextureReplacementDefinition>& replacements_;
+        /** @brief Pack-scoped replacement entries declared through merged `textures.json` manifests. */
+        std::vector<PackScopedTextureReplacementDefinition> replacements_;
         /** @brief Import-table hook that replaces `d3d9.dll!Direct3DCreate9` in the main executable. */
         IatHook direct3d_create9_hook_;
         /** @brief Singleton-style active hook set used by the static detour function. */

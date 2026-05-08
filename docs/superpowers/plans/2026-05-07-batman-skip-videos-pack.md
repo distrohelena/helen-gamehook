@@ -1,14 +1,18 @@
-# Batman Skip Videos Pack Implementation Plan
+# Batman Multi-Pack Skip Videos Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a standalone `batman-aa-skip-videos` pack plus reusable runtime support that makes declared game paths appear missing without touching real files on disk.
+**Goal:** Add explicit multi-pack support plus a `batman-aa-skip-videos` pack so Batman can enable subtitles and skip-videos together while declared game paths appear missing without touching real files on disk.
 
 **Architecture:** Extend build metadata with a generic `missingPaths` list, parse it into `BuildDefinition`, and add one focused hidden-path matcher used by `FileApiHookSet`. The runtime will return synthetic “file not found” results for opens, attribute probes, and directory enumeration, while the Batman pack contributes only metadata declaring the five startup `.bik` files.
 
-**Tech Stack:** C++, Win32 file APIs, existing Helen runtime pack manifests, PowerShell pack scripts, `HelenRuntimeTests.exe`
+**Tech Stack:** C++, Win32 file APIs, JSON manifest/config parsing, existing Helen runtime pack manifests, PowerShell pack scripts, `HelenRuntimeTests.exe`
 
 ---
+
+## Scope Update
+
+This plan now includes explicit ordered pack selection and pack-set runtime loading before the hidden-path work. The hidden-path and pack-manifest tasks below still apply, but they now depend on multi-pack runtime support.
 
 ## File Structure
 

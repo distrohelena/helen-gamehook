@@ -32,6 +32,8 @@ namespace helen
         bool EnableD3d9TextureImageDumping{};
         /** @brief Command identifiers that must run once after the build command surface is registered. */
         std::vector<std::string> StartupCommandIds;
+        /** @brief Canonical relative game paths that the runtime should report as missing when this build is active. */
+        std::vector<std::string> MissingPaths;
         /** @brief Virtual file declarations served when this build is active. */
         std::vector<VirtualFileDefinition> VirtualFiles;
         /** @brief External callback bindings available to patched gameplay assets. */
