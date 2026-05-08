@@ -97,6 +97,16 @@ void RunProxyBootstrapCoordinatorTests();
 void RunFileApiHookSetTests();
 
 /**
+ * @brief Runs the module-load routing service coverage for Bink alias normalization and redirect validation.
+ */
+void RunModuleLoadRoutingServiceTests();
+
+/**
+ * @brief Runs the module-load routing hook coverage for IAT installation and Bink request logging.
+ */
+void RunModuleLoadRoutingHookSetTests();
+
+/**
  * @brief Runs the runtime layout test coverage for the filesystem paths used by the runtime.
  */
 void RunRuntimeLayoutTests();
@@ -160,6 +170,8 @@ int main()
         RunPackRepositoryTests();
         RunProxyBootstrapCoordinatorTests();
         RunFileApiHookSetTests();
+        RunModuleLoadRoutingServiceTests();
+        RunModuleLoadRoutingHookSetTests();
         RunHookBlobRelocatorTests();
         RunMemoryStateObserverServiceTests();
         RunVirtualFileServiceTests();

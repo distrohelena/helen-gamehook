@@ -15,6 +15,8 @@
 #include <HelenHook/Log.h>
 #include <HelenHook/PackRepository.h>
 #include <HelenHook/PackSelectionConfig.h>
+#include <HelenHook/ModuleLoadRoutingHookSet.h>
+#include <HelenHook/ModuleLoadRoutingService.h>
 #include <HelenHook/RuntimeLayout.h>
 #include <HelenHook/RuntimeValueStore.h>
 #include <HelenHook/VirtualFileService.h>
@@ -56,6 +58,10 @@ namespace
     std::unique_ptr<helen::CommandExecutor> g_command_executor;
     /** @brief Generic coordinator that runs build startup commands and hosts declared live state observers. */
     std::unique_ptr<helen::BuildRuntimeCoordinator> g_build_runtime_coordinator;
+    /** @brief Pure loader-routing service that classifies intercepted module-load requests. */
+    std::unique_ptr<helen::ModuleLoadRoutingService> g_module_load_routing_service;
+    /** @brief IAT hook set that logs Batman Bink loader requests through the routing service. */
+    std::unique_ptr<helen::ModuleLoadRoutingHookSet> g_module_load_routing_hooks;
     /** @brief External callback bridge exported to patched gameplay assets. */
     std::unique_ptr<helen::ExternalBindingService> g_external_bindings;
     /** @brief RAM-backed virtual file service for declared replacement files. */
@@ -588,6 +594,18 @@ namespace
         }
         helen::Log(L"[runtime] active-pack init build hooks installed.");
 
+        g_module_load_routing_service = std::make_unique<helen::ModuleLoadRoutingService>();
+        helen::Log(L"[runtime] active-pack init module load routing service created.");
+        g_module_load_routing_hooks = std::make_unique<helen::ModuleLoadRoutingHookSet>(*g_module_load_routing_service);
+        helen::Log(L"[runtime] active-pack init module load routing hook set created.");
+        helen::Log(L"[runtime] active-pack init module load routing hooks install begin.");
+        if (!g_module_load_routing_hooks->Install())
+        {
+            helen::Log(L"[runtime] failed to install module load routing hooks.");
+            return false;
+        }
+        helen::Log(L"[runtime] active-pack init module load routing hooks installed.");
+
         g_file_hooks = std::make_unique<helen::FileApiHookSet>(
             *g_virtual_files,
             layout.GameRoot,
@@ -646,8 +664,10 @@ namespace
     {
         g_build_runtime_coordinator.reset();
         g_d3d9_texture_hooks.reset();
-        g_build_hooks.reset();
         g_file_hooks.reset();
+        g_module_load_routing_hooks.reset();
+        g_module_load_routing_service.reset();
+        g_build_hooks.reset();
         g_virtual_files.reset();
         g_external_bindings.reset();
         g_command_executor.reset();
