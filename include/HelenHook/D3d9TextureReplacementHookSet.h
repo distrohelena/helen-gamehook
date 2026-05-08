@@ -16,9 +16,10 @@ namespace helen
     /**
      * @brief Installs the first Direct3D 9 interception layer used by texture replacements.
      *
-     * This initial implementation validates declared replacement assets and hooks the main
-     * executable import for `Direct3DCreate9`. The detour currently logs live `D3D9` activation
-     * and calls through to the original API so later COM wrappers can be layered in safely.
+     * The hook set installs a `Direct3DCreate9` import detour and wraps the live `IDirect3DDevice9`
+     * and `IDirect3DTexture9` objects that matter for 2D texture observation. Texture-derived
+     * `IDirect3DSurface9` objects are also wrapped so uploads that flow through `GetSurfaceLevel`
+     * are visible without touching cube, volume, or swap-chain paths.
      */
     class D3d9TextureReplacementHookSet
     {
@@ -122,6 +123,15 @@ namespace helen
             IDirect3DBaseTexture9* destination_texture);
 
         /**
+         * @brief Per-instance `IDirect3DDevice9::SetTexture` detour that substitutes a higher-resolution replacement texture when one is cached.
+         * @return Result of the original `SetTexture` call.
+         */
+        static HRESULT WINAPI SetTextureDetour(
+            IDirect3DDevice9* self,
+            DWORD stage,
+            IDirect3DBaseTexture9* texture);
+
+        /**
          * @brief Per-instance `IDirect3DDevice9::Reset` detour that clears invalidated texture tracking state.
          * @return Result of the original `Reset` call.
          */
@@ -147,6 +157,15 @@ namespace helen
         static HRESULT WINAPI TextureUnlockRectDetour(IDirect3DTexture9* self, UINT level);
 
         /**
+         * @brief Per-instance `IDirect3DTexture9::GetSurfaceLevel` detour that wraps texture-owned level surfaces.
+         * @return Result of the original `GetSurfaceLevel` call.
+         */
+        static HRESULT WINAPI TextureGetSurfaceLevelDetour(
+            IDirect3DTexture9* self,
+            UINT level,
+            IDirect3DSurface9** returned_surface);
+
+        /**
          * @brief Per-instance `IDirect3DDevice9::Release` detour that removes the wrapped proxy on final release.
          * @param self Live `IDirect3DDevice9` instance whose reference count is being decremented.
          * @return Updated COM reference count returned by the original `Release`.
@@ -159,6 +178,39 @@ namespace helen
          * @return Updated COM reference count returned by the original `Release`.
          */
         static ULONG WINAPI TextureReleaseDetour(IDirect3DTexture9* self);
+
+        /**
+         * @brief Per-instance `IDirect3DSurface9::Release` detour that removes tracked texture-surface state on final release.
+         * @param self Live `IDirect3DSurface9` instance whose reference count is being decremented.
+         * @return Updated COM reference count returned by the original `Release`.
+         */
+        static ULONG WINAPI SurfaceReleaseDetour(IDirect3DSurface9* self);
+
+        /**
+         * @brief Per-instance `IDirect3DSurface9::GetDevice` detour that preserves the wrapped device identity.
+         * @param self Live `IDirect3DSurface9` instance whose owning device is being queried.
+         * @param returned_device Receives the live device pointer returned by the runtime.
+         * @return Result of the original `GetDevice` call.
+         */
+        static HRESULT WINAPI SurfaceGetDeviceDetour(
+            IDirect3DSurface9* self,
+            IDirect3DDevice9** returned_device);
+
+        /**
+         * @brief Per-instance `IDirect3DSurface9::LockRect` detour that marks a texture-owned surface as dirty.
+         * @return Result of the original `LockRect` call.
+         */
+        static HRESULT WINAPI SurfaceLockRectDetour(
+            IDirect3DSurface9* self,
+            D3DLOCKED_RECT* locked_rect,
+            const RECT* rect,
+            DWORD flags);
+
+        /**
+         * @brief Per-instance `IDirect3DSurface9::UnlockRect` detour that fingerprints texture-owned uploads.
+         * @return Result of the original `UnlockRect` call.
+         */
+        static HRESULT WINAPI SurfaceUnlockRectDetour(IDirect3DSurface9* self);
 
         /**
          * @brief Validates declared replacement entries and counts the subset that targets `D3D9`.
@@ -190,16 +242,16 @@ namespace helen
         bool InstallDeviceInstanceHooks(IDirect3DDevice9* device);
 
         /**
-         * @brief Observes a live `IDirect3DSurface9` return without installing surface-level wrapping.
+         * @brief Installs a wrapped `IDirect3DSurface9` proxy for texture-owned level-0 surfaces.
          *
-         * The current D3D9 replacement path keeps surface and swap-chain wrapping disabled so the
-         * subsystem can focus on device and texture lifecycle tracking without mutating additional
-         * COM tables. Returning `false` tells the caller to use the original surface directly.
+         * Only texture-owned level-0 surfaces are wrapped in this build. Back buffers, render
+         * targets, and other device-owned surfaces continue to pass through untouched so the
+         * 2D texture path can be observed without widening the interception surface area.
          *
          * @param surface Live `IDirect3DSurface9` interface returned by the device or swap chain.
          * @param owner_texture Owning texture when the surface came from a texture level.
          * @param owner_swap_chain Owning swap chain when the surface came from a back buffer.
-         * @return False so callers keep the original surface without proxy wrapping.
+         * @return True when a texture-owned surface proxy is installed; otherwise false.
          */
         bool InstallSurfaceInstanceHooks(IDirect3DSurface9* surface, IDirect3DTexture9* owner_texture, IDirect3DSwapChain9* owner_swap_chain);
 
@@ -216,12 +268,36 @@ namespace helen
         bool InstallSwapChainInstanceHooks(IDirect3DSwapChain9* swap_chain, IDirect3DDevice9* owner_device);
 
         /**
+         * @brief Loads and caches one higher-resolution replacement texture for a matched tracked texture.
+         * @param record Tracked texture record that should receive the created replacement texture.
+         * @param description Matched source texture description used to preserve usage and pool settings.
+         * @param replacement_definition Declared replacement rule that names the replacement asset.
+         * @param failure_result Receives the HRESULT-style failure reason when loading or creation fails.
+         * @return True when the replacement texture is cached successfully or already exists.
+         */
+        bool TryCacheReplacementTexture(
+            IDirect3DTexture9* tracked_texture,
+            const D3DSURFACE_DESC& description,
+            const TextureReplacementDefinition& replacement_definition,
+            HRESULT& failure_result) const;
+
+        /**
          * @brief Returns whether one tracked texture fingerprint matches any declared `D3D9` replacement rule.
          * @param description Level-0 texture description for the tracked texture.
          * @param digest Lowercase SHA-256 digest computed from the tracked texture bytes.
          * @return True when at least one declared replacement matches the tracked texture.
          */
         bool MatchesDeclaredTexture(const D3DSURFACE_DESC& description, std::string_view digest) const;
+
+        /**
+         * @brief Returns the first declared replacement that matches one tracked texture fingerprint.
+         * @param description Level-0 texture description for the tracked texture.
+         * @param digest Lowercase SHA-256 digest computed from the tracked texture bytes.
+         * @return Pointer to the matching replacement definition, or nullptr when no replacement matches.
+         */
+        const TextureReplacementDefinition* FindDeclaredReplacement(
+            const D3DSURFACE_DESC& description,
+            std::string_view digest) const;
 
         /**
          * @brief Returns whether the subsystem should attach lifecycle hooks to live `D3D9` textures.

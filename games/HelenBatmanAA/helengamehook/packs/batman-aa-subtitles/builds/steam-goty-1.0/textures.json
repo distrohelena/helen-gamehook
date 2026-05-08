@@ -1,0 +1,17 @@
+{
+  "replacements": [
+    {
+      "id": "subtitle-scaled-dxt5-256",
+      "api": "d3d9",
+      "match": {
+        "width": 256,
+        "height": 256,
+        "format": "DXT5",
+        "hash": "1066350ebf66bdc41f114c71e22248a878c15c846bec792545415f18b21ff583"
+      },
+      "replacement": {
+        "path": "assets/textures/subtitle_scaled.dds"
+      }
+    }
+  ]
+}

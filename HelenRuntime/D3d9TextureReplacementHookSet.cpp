@@ -2,6 +2,7 @@
 
 #include <HelenHook/Log.h>
 #include <HelenHook/Memory.h>
+#include <HelenHook/TextureReplacementAssetLoader.h>
 #include <HelenHook/TextureDumpSerializer.h>
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -22,6 +24,9 @@
 #include <wincrypt.h>
 
 #pragma comment(lib, "advapi32.lib")
+
+using helen::Log;
+using helen::Logf;
 
 namespace
 {
@@ -71,6 +76,12 @@ namespace
 
     /** @brief Vtable index of `IDirect3DDevice9::UpdateTexture`. */
     constexpr std::size_t Direct3d9UpdateTextureVtableIndex = 31;
+
+    /** @brief Vtable index of `IDirect3DDevice9::GetTexture`. */
+    constexpr std::size_t Direct3d9GetTextureVtableIndex = 64;
+
+    /** @brief Vtable index of `IDirect3DDevice9::SetTexture`. */
+    constexpr std::size_t Direct3d9SetTextureVtableIndex = 65;
 
     /** @brief Vtable index of `IDirect3DDevice9::GetRenderTargetData`. */
     constexpr std::size_t Direct3d9GetRenderTargetDataVtableIndex = 32;
@@ -189,6 +200,12 @@ namespace
     /** @brief Raw function pointer type for one live `IDirect3DDevice9::UpdateTexture` implementation. */
     using Direct3d9UpdateTextureFunction = HRESULT(WINAPI*)(IDirect3DDevice9*, IDirect3DBaseTexture9*, IDirect3DBaseTexture9*);
 
+    /** @brief Raw function pointer type for one live `IDirect3DDevice9::GetTexture` implementation. */
+    using Direct3d9GetTextureFunction = HRESULT(WINAPI*)(IDirect3DDevice9*, DWORD, IDirect3DBaseTexture9**);
+
+    /** @brief Raw function pointer type for one live `IDirect3DDevice9::SetTexture` implementation. */
+    using Direct3d9SetTextureFunction = HRESULT(WINAPI*)(IDirect3DDevice9*, DWORD, IDirect3DBaseTexture9*);
+
     /** @brief Raw function pointer type for one live `IDirect3DDevice9::GetRenderTargetData` implementation. */
     using Direct3d9GetRenderTargetDataFunction = HRESULT(WINAPI*)(IDirect3DDevice9*, IDirect3DSurface9*, IDirect3DSurface9*);
 
@@ -280,7 +297,7 @@ namespace
      */
     struct TrackedTextureRecord
     {
-        /** @brief Device that created the tracked texture and owns reset invalidation for it. */
+        /** @brief Proxy device pointer that created the tracked texture and owns reset invalidation for it. */
         IDirect3DDevice9* OwningDevice{};
         /** @brief Last level-0 description observed for the tracked texture. */
         D3DSURFACE_DESC Description{};
@@ -294,6 +311,12 @@ namespace
         bool FingerprintLogged{};
         /** @brief Tracks whether a declared replacement rule already matched this fingerprint. */
         bool ReplacementMatched{};
+        /** @brief Replacement texture object created from the declared higher-resolution asset. */
+        IDirect3DTexture9* ReplacementTexture{};
+        /** @brief Tracks whether the texture has a last-seen `SetTexture` stage that can be rebound after caching. */
+        bool HasLastSetTextureStage{};
+        /** @brief Last texture stage that observed this texture in `SetTexture`. */
+        DWORD LastSetTextureStage{};
         /** @brief Stable fingerprint produced from the latest writable upload. */
         TextureFingerprint Fingerprint;
         /** @brief Tracks whether the current writable lock captured a snapshot that can be fingerprinted before unlock. */
@@ -335,6 +358,8 @@ namespace
         IDirect3DDevice9* Real{};
         /** @brief Set of wrapped textures created by this device and tracked through lifecycle hooks. */
         std::unordered_set<IDirect3DTexture9*> TrackedTextures;
+        /** @brief Last texture pointer observed for each texture stage on this device. */
+        std::unordered_map<DWORD, IDirect3DBaseTexture9*> BoundTextures;
     };
 
     /**
@@ -402,6 +427,16 @@ namespace
      * @brief Reverse lookup from real `IDirect3DTexture9` pointers to their proxy pointer.
      */
     std::unordered_map<IDirect3DTexture9*, IDirect3DTexture9*> g_direct3d9_texture_hook_by_real;
+
+    /**
+     * @brief Live wrapped `IDirect3DSurface9` proxies keyed by proxy pointer.
+     */
+    std::unordered_map<IDirect3DSurface9*, std::unique_ptr<Direct3d9SurfaceHookContext>> g_direct3d9_surface_hook_contexts;
+
+    /**
+     * @brief Reverse lookup from real `IDirect3DSurface9` pointers to their proxy pointer.
+     */
+    std::unordered_map<IDirect3DSurface9*, IDirect3DSurface9*> g_direct3d9_surface_hook_by_real;
 
     /**
      * @brief Live texture lifecycle records used to track upload, hash, and match state.
@@ -525,6 +560,755 @@ namespace
 
         stream.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         return static_cast<bool>(stream);
+    }
+
+    /**
+     * @brief DDS header bit flags used by the replacement loader.
+     */
+    constexpr std::uint32_t DdsdCaps = 0x00000001u;
+    constexpr std::uint32_t DdsdHeight = 0x00000002u;
+    constexpr std::uint32_t DdsdWidth = 0x00000004u;
+    constexpr std::uint32_t DdsdPixelFormat = 0x00001000u;
+    constexpr std::uint32_t DdsdLinearSize = 0x00080000u;
+    constexpr std::uint32_t DdsCapsTexture = 0x00001000u;
+
+    /**
+     * @brief DDS pixel-format flags used by the replacement loader.
+     */
+    constexpr std::uint32_t DdpfFourCc = 0x00000004u;
+
+    /**
+     * @brief DDS capability flags required for texture files.
+     */
+    /**
+     * @brief FourCC value for DDS-compressed DXT1 payloads.
+     */
+    constexpr std::uint32_t FourCcDxt1 = 0x31545844u;
+
+    /**
+     * @brief FourCC value for DDS-compressed DXT3 payloads.
+     */
+    constexpr std::uint32_t FourCcDxt3 = 0x33545844u;
+
+    /**
+     * @brief FourCC value for DDS-compressed DXT5 payloads.
+     */
+    constexpr std::uint32_t FourCcDxt5 = 0x35545844u;
+
+#pragma pack(push, 1)
+    /**
+     * @brief Raw DDS pixel-format header block used for replacement validation.
+     */
+    struct DdsPixelFormat
+    {
+        std::uint32_t Size;
+        std::uint32_t Flags;
+        std::uint32_t FourCc;
+        std::uint32_t RgbBitCount;
+        std::uint32_t RedMask;
+        std::uint32_t GreenMask;
+        std::uint32_t BlueMask;
+        std::uint32_t AlphaMask;
+    };
+
+    /**
+     * @brief Raw DDS header block used for replacement validation.
+     */
+    struct DdsHeader
+    {
+        std::uint32_t Size;
+        std::uint32_t Flags;
+        std::uint32_t Height;
+        std::uint32_t Width;
+        std::uint32_t PitchOrLinearSize;
+        std::uint32_t Depth;
+        std::uint32_t MipMapCount;
+        std::uint32_t Reserved1[11];
+        DdsPixelFormat PixelFormat;
+        std::uint32_t Caps;
+        std::uint32_t Caps2;
+        std::uint32_t Caps3;
+        std::uint32_t Caps4;
+        std::uint32_t Reserved2;
+    };
+#pragma pack(pop)
+
+    /**
+     * @brief Returns the DDS FourCC used by one supported compressed D3D9 format.
+     * @param format Source texture format that should be loaded from a DDS replacement asset.
+     * @return Expected FourCC token for the compressed format or zero when unsupported.
+     */
+    std::uint32_t GetReplacementDdsFourCc(D3DFORMAT format)
+    {
+        switch (format)
+        {
+        case D3DFMT_DXT1:
+            return FourCcDxt1;
+        case D3DFMT_DXT3:
+            return FourCcDxt3;
+        case D3DFMT_DXT5:
+            return FourCcDxt5;
+        default:
+            return 0;
+        }
+    }
+
+    /**
+     * @brief Reconstructs one DDS file image from a loaded replacement payload.
+     * @param asset Replacement asset whose DDS header should be recreated.
+     * @param dds_bytes Receives the full DDS file image on success.
+     * @param failure_result Receives the HRESULT-style failure reason when reconstruction fails.
+     * @return True when the payload can be represented as one valid DDS file.
+     */
+    bool TryBuildDdsFileBytes(
+        const helen::TextureReplacementAsset& asset,
+        std::vector<std::uint8_t>& dds_bytes,
+        HRESULT& failure_result)
+    {
+        failure_result = S_OK;
+        dds_bytes.clear();
+
+        if (asset.Format != D3DFMT_DXT5 || asset.Width == 0u || asset.Height == 0u || asset.Level0Bytes.empty())
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        const std::uint32_t blocks_wide = (std::max)(1u, (asset.Width + 3u) / 4u);
+        const std::uint32_t blocks_high = (std::max)(1u, (asset.Height + 3u) / 4u);
+        const std::size_t expected_size = static_cast<std::size_t>(blocks_wide) * static_cast<std::size_t>(blocks_high) * 16u;
+        if (asset.Level0Bytes.size() != expected_size)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        dds_bytes.resize(4u + sizeof(DdsHeader) + asset.Level0Bytes.size(), 0u);
+        std::memcpy(dds_bytes.data(), "DDS ", 4u);
+
+        DdsHeader header{};
+        header.Size = 124u;
+        header.Flags = DdsdCaps | DdsdHeight | DdsdWidth | DdsdPixelFormat | DdsdLinearSize;
+        header.Height = asset.Height;
+        header.Width = asset.Width;
+        header.PitchOrLinearSize = static_cast<std::uint32_t>(asset.Level0Bytes.size());
+        header.Depth = 0u;
+        header.MipMapCount = 1u;
+        header.PixelFormat.Size = 32u;
+        header.PixelFormat.Flags = DdpfFourCc;
+        header.PixelFormat.FourCc = FourCcDxt5;
+        header.Caps = DdsCapsTexture;
+        header.Caps2 = 0u;
+        header.Caps3 = 0u;
+        header.Caps4 = 0u;
+        header.Reserved2 = 0u;
+
+        std::memcpy(dds_bytes.data() + 4u, &header, sizeof(header));
+        std::memcpy(dds_bytes.data() + 4u + sizeof(header), asset.Level0Bytes.data(), asset.Level0Bytes.size());
+        return true;
+    }
+
+    /**
+     * @brief Raw D3DX texture loader function signature used to avoid a permanent SDK dependency.
+     */
+    using D3dxCreateTextureFromFileInMemoryExFunction = HRESULT(WINAPI*)(
+        LPDIRECT3DDEVICE9,
+        LPCVOID,
+        UINT,
+        UINT,
+        UINT,
+        UINT,
+        DWORD,
+        D3DFORMAT,
+        D3DPOOL,
+        DWORD,
+        DWORD,
+        D3DCOLOR,
+        void*,
+        void*,
+        LPDIRECT3DTEXTURE9*);
+
+    /**
+     * @brief Loads one replacement texture through the local D3DX runtime into a bindable texture object.
+     * @param device Real `IDirect3DDevice9` instance that owns the texture replacement.
+     * @param asset Replacement DDS payload that should be turned into a live texture object.
+     * @param replacement_texture Receives the created replacement texture on success.
+     * @param failure_result Receives the HRESULT-style failure reason when loading fails.
+     * @return True when D3DX creates the replacement texture successfully.
+     */
+    bool TryLoadReplacementTextureViaD3dx(
+        IDirect3DDevice9* device,
+        const helen::TextureReplacementAsset& asset,
+        IDirect3DTexture9*& replacement_texture,
+        HRESULT& failure_result)
+    {
+        failure_result = S_OK;
+        replacement_texture = nullptr;
+
+        if (device == nullptr)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        Logf(
+            L"[d3d9] d3dx replacement loader begin device=0x%p asset=%ux%u format=0x%08lX bytes=%zu",
+            device,
+            static_cast<unsigned int>(asset.Width),
+            static_cast<unsigned int>(asset.Height),
+            static_cast<unsigned long>(asset.Format),
+            asset.Level0Bytes.size());
+
+        HMODULE module = LoadLibraryW(L"d3dx9_43.dll");
+        if (module == nullptr)
+        {
+            failure_result = HRESULT_FROM_WIN32(GetLastError());
+            Logf(
+                L"[d3d9] d3dx replacement loader failed to load d3dx9_43.dll hr=0x%08lX",
+                static_cast<unsigned long>(failure_result));
+            return false;
+        }
+
+        Logf(L"[d3d9] d3dx replacement loader loaded module handle=0x%p", module);
+
+        const auto create_texture = reinterpret_cast<D3dxCreateTextureFromFileInMemoryExFunction>(
+            GetProcAddress(module, "D3DXCreateTextureFromFileInMemoryEx"));
+        if (create_texture == nullptr)
+        {
+            failure_result = HRESULT_FROM_WIN32(GetLastError());
+            Logf(
+                L"[d3d9] d3dx replacement loader failed to resolve D3DXCreateTextureFromFileInMemoryEx hr=0x%08lX",
+                static_cast<unsigned long>(failure_result));
+            FreeLibrary(module);
+            return false;
+        }
+
+        Logf(L"[d3d9] d3dx replacement loader resolved D3DXCreateTextureFromFileInMemoryEx");
+
+        std::vector<std::uint8_t> dds_bytes;
+        if (!TryBuildDdsFileBytes(asset, dds_bytes, failure_result))
+        {
+            Logf(
+                L"[d3d9] d3dx replacement loader failed to reconstruct DDS file image hr=0x%08lX",
+                static_cast<unsigned long>(failure_result));
+            FreeLibrary(module);
+            return false;
+        }
+
+        Logf(
+            L"[d3d9] d3dx replacement loader reconstructed DDS file image bytes=%zu",
+            dds_bytes.size());
+
+        IDirect3DTexture9* texture = nullptr;
+        Logf(L"[d3d9] d3dx replacement loader invoking D3DXCreateTextureFromFileInMemoryEx");
+        const HRESULT create_result = create_texture(
+            device,
+            dds_bytes.data(),
+            static_cast<UINT>(dds_bytes.size()),
+            asset.Width,
+            asset.Height,
+            1u,
+            0u,
+            D3DFMT_A8R8G8B8,
+            D3DPOOL_MANAGED,
+            0xFFFFFFFFu,
+            0xFFFFFFFFu,
+            0u,
+            nullptr,
+            nullptr,
+            &texture);
+        Logf(
+            L"[d3d9] d3dx replacement loader returned hr=0x%08lX texture=0x%p",
+            static_cast<unsigned long>(create_result),
+            texture);
+        FreeLibrary(module);
+
+        if (FAILED(create_result) || texture == nullptr)
+        {
+            failure_result = create_result;
+            return false;
+        }
+
+        replacement_texture = texture;
+        return true;
+    }
+
+    /**
+     * @brief Expands one packed `RGB565` color into 8-bit channel values.
+     * @param packed_color Packed `RGB565` color value from a DXT color block.
+     * @param red Receives the expanded red channel.
+     * @param green Receives the expanded green channel.
+     * @param blue Receives the expanded blue channel.
+     */
+    void DecodeRgb565(std::uint16_t packed_color, std::uint8_t& red, std::uint8_t& green, std::uint8_t& blue)
+    {
+        const std::uint8_t red_5 = static_cast<std::uint8_t>((packed_color >> 11u) & 0x1Fu);
+        const std::uint8_t green_6 = static_cast<std::uint8_t>((packed_color >> 5u) & 0x3Fu);
+        const std::uint8_t blue_5 = static_cast<std::uint8_t>(packed_color & 0x1Fu);
+        red = static_cast<std::uint8_t>((red_5 << 3u) | (red_5 >> 2u));
+        green = static_cast<std::uint8_t>((green_6 << 2u) | (green_6 >> 4u));
+        blue = static_cast<std::uint8_t>((blue_5 << 3u) | (blue_5 >> 2u));
+    }
+
+    /**
+     * @brief Decodes one DXT5 replacement payload into a lockable `A8R8G8B8` image buffer.
+     * @param asset Replacement asset whose compressed bytes should be expanded.
+     * @param decoded_bytes Receives the decoded `A8R8G8B8` pixels on success.
+     * @param failure_result Receives the HRESULT-style failure reason when decoding fails.
+     * @return True when the payload is a valid DXT5 image and the decoded buffer is produced successfully.
+     */
+    bool TryDecodeDxt5ReplacementToA8R8G8B8(
+        const helen::TextureReplacementAsset& asset,
+        std::vector<std::uint8_t>& decoded_bytes,
+        HRESULT& failure_result)
+    {
+        failure_result = S_OK;
+        decoded_bytes.clear();
+
+        if (asset.Format != D3DFMT_DXT5 || asset.Width == 0u || asset.Height == 0u)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        const std::uint32_t blocks_wide = (std::max)(1u, (asset.Width + 3u) / 4u);
+        const std::uint32_t blocks_high = (std::max)(1u, (asset.Height + 3u) / 4u);
+        const std::size_t expected_size = static_cast<std::size_t>(blocks_wide) * static_cast<std::size_t>(blocks_high) * 16u;
+        if (asset.Level0Bytes.size() != expected_size)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        const std::size_t decoded_size = static_cast<std::size_t>(asset.Width) * static_cast<std::size_t>(asset.Height) * 4u;
+        decoded_bytes.resize(decoded_size, 0u);
+
+        const std::uint8_t* const source_bytes = asset.Level0Bytes.data();
+        for (std::uint32_t block_y = 0; block_y < blocks_high; ++block_y)
+        {
+            for (std::uint32_t block_x = 0; block_x < blocks_wide; ++block_x)
+            {
+                const std::size_t block_index = static_cast<std::size_t>(block_y) * static_cast<std::size_t>(blocks_wide) + static_cast<std::size_t>(block_x);
+                const std::uint8_t* const block = source_bytes + (block_index * 16u);
+
+                const std::uint8_t alpha_0 = block[0];
+                const std::uint8_t alpha_1 = block[1];
+
+                std::uint8_t alpha_palette[8]{};
+                alpha_palette[0] = alpha_0;
+                alpha_palette[1] = alpha_1;
+                if (alpha_0 > alpha_1)
+                {
+                    alpha_palette[2] = static_cast<std::uint8_t>((6u * alpha_0 + 1u * alpha_1) / 7u);
+                    alpha_palette[3] = static_cast<std::uint8_t>((5u * alpha_0 + 2u * alpha_1) / 7u);
+                    alpha_palette[4] = static_cast<std::uint8_t>((4u * alpha_0 + 3u * alpha_1) / 7u);
+                    alpha_palette[5] = static_cast<std::uint8_t>((3u * alpha_0 + 4u * alpha_1) / 7u);
+                    alpha_palette[6] = static_cast<std::uint8_t>((2u * alpha_0 + 5u * alpha_1) / 7u);
+                    alpha_palette[7] = static_cast<std::uint8_t>((1u * alpha_0 + 6u * alpha_1) / 7u);
+                }
+                else
+                {
+                    alpha_palette[2] = static_cast<std::uint8_t>((4u * alpha_0 + 1u * alpha_1) / 5u);
+                    alpha_palette[3] = static_cast<std::uint8_t>((3u * alpha_0 + 2u * alpha_1) / 5u);
+                    alpha_palette[4] = static_cast<std::uint8_t>((2u * alpha_0 + 3u * alpha_1) / 5u);
+                    alpha_palette[5] = static_cast<std::uint8_t>((1u * alpha_0 + 4u * alpha_1) / 5u);
+                    alpha_palette[6] = 0u;
+                    alpha_palette[7] = 255u;
+                }
+
+                std::uint64_t alpha_indices = 0u;
+                for (std::size_t index = 0; index < 6u; ++index)
+                {
+                    alpha_indices |= static_cast<std::uint64_t>(block[2u + index]) << (8u * index);
+                }
+
+                const std::uint16_t color_0 = static_cast<std::uint16_t>(block[8]) | (static_cast<std::uint16_t>(block[9]) << 8u);
+                const std::uint16_t color_1 = static_cast<std::uint16_t>(block[10]) | (static_cast<std::uint16_t>(block[11]) << 8u);
+
+                std::uint8_t color_palette_red[4]{};
+                std::uint8_t color_palette_green[4]{};
+                std::uint8_t color_palette_blue[4]{};
+                DecodeRgb565(color_0, color_palette_red[0], color_palette_green[0], color_palette_blue[0]);
+                DecodeRgb565(color_1, color_palette_red[1], color_palette_green[1], color_palette_blue[1]);
+
+                if (color_0 > color_1)
+                {
+                    color_palette_red[2] = static_cast<std::uint8_t>((2u * color_palette_red[0] + 1u * color_palette_red[1]) / 3u);
+                    color_palette_green[2] = static_cast<std::uint8_t>((2u * color_palette_green[0] + 1u * color_palette_green[1]) / 3u);
+                    color_palette_blue[2] = static_cast<std::uint8_t>((2u * color_palette_blue[0] + 1u * color_palette_blue[1]) / 3u);
+
+                    color_palette_red[3] = static_cast<std::uint8_t>((1u * color_palette_red[0] + 2u * color_palette_red[1]) / 3u);
+                    color_palette_green[3] = static_cast<std::uint8_t>((1u * color_palette_green[0] + 2u * color_palette_green[1]) / 3u);
+                    color_palette_blue[3] = static_cast<std::uint8_t>((1u * color_palette_blue[0] + 2u * color_palette_blue[1]) / 3u);
+                }
+                else
+                {
+                    color_palette_red[2] = static_cast<std::uint8_t>((color_palette_red[0] + color_palette_red[1]) / 2u);
+                    color_palette_green[2] = static_cast<std::uint8_t>((color_palette_green[0] + color_palette_green[1]) / 2u);
+                    color_palette_blue[2] = static_cast<std::uint8_t>((color_palette_blue[0] + color_palette_blue[1]) / 2u);
+
+                    color_palette_red[3] = 0u;
+                    color_palette_green[3] = 0u;
+                    color_palette_blue[3] = 0u;
+                }
+
+                const std::uint32_t color_indices =
+                    static_cast<std::uint32_t>(block[12]) |
+                    (static_cast<std::uint32_t>(block[13]) << 8u) |
+                    (static_cast<std::uint32_t>(block[14]) << 16u) |
+                    (static_cast<std::uint32_t>(block[15]) << 24u);
+
+                for (std::uint32_t pixel_index = 0; pixel_index < 16u; ++pixel_index)
+                {
+                    const std::uint32_t local_x = pixel_index % 4u;
+                    const std::uint32_t local_y = pixel_index / 4u;
+                    const std::uint32_t absolute_x = block_x * 4u + local_x;
+                    const std::uint32_t absolute_y = block_y * 4u + local_y;
+                    if (absolute_x >= asset.Width || absolute_y >= asset.Height)
+                    {
+                        continue;
+                    }
+
+                    const std::uint32_t color_index = (color_indices >> (pixel_index * 2u)) & 0x3u;
+                    const std::uint32_t alpha_index = static_cast<std::uint32_t>((alpha_indices >> (pixel_index * 3u)) & 0x7u);
+                    const std::uint32_t pixel =
+                        (static_cast<std::uint32_t>(alpha_palette[alpha_index]) << 24u) |
+                        (static_cast<std::uint32_t>(color_palette_red[color_index]) << 16u) |
+                        (static_cast<std::uint32_t>(color_palette_green[color_index]) << 8u) |
+                        static_cast<std::uint32_t>(color_palette_blue[color_index]);
+
+                    const std::size_t destination_offset =
+                        (static_cast<std::size_t>(absolute_y) * static_cast<std::size_t>(asset.Width) + static_cast<std::size_t>(absolute_x)) * 4u;
+                    std::memcpy(decoded_bytes.data() + destination_offset, &pixel, sizeof(pixel));
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @brief Declares the helper that reads a shadow-patched vtable snapshot for one COM instance.
+     * @param instance Live COM object whose current vtable may already be patched in place.
+     * @param slot_index Zero-based vtable slot index.
+     * @return Original raw function pointer stored in the requested slot or `nullptr` when the snapshot is unavailable.
+     */
+    void* GetOriginalVtableSlot(void* instance, std::size_t slot_index);
+
+    /**
+     * @brief Declares the helper that unwraps one proxy pointer back to its real COM interface.
+     * @tparam TInterface COM interface pointer type used by the proxy registry.
+     * @tparam TContext Proxy context type stored in the registry.
+     * @param contexts_by_proxy Registry keyed by proxy pointer.
+     * @param proxy_pointer Proxy pointer that may already refer to the wrapped interface.
+     * @return Real interface pointer when the proxy is known; otherwise the original pointer.
+     */
+    template <typename TInterface, typename TContext>
+    TInterface* UnwrapProxyPointer(
+        std::unordered_map<TInterface*, std::unique_ptr<TContext>>& contexts_by_proxy,
+        TInterface* proxy_pointer);
+
+    /**
+     * @brief Creates one lockable `A8R8G8B8` replacement texture from a decoded DXT5 payload.
+     * @param device Real `IDirect3DDevice9` instance that owns the texture replacement.
+     * @param asset Replacement DDS payload whose compressed pixels should be expanded.
+     * @param replacement_texture Receives the created replacement texture on success.
+     * @param failure_result Receives the HRESULT-style failure reason when creation or upload fails.
+     * @return True when the replacement texture object is created and populated successfully.
+     */
+    bool TryCreateDecodedReplacementTexture(
+        Direct3d9DeviceHookContext* device_context,
+        const helen::TextureReplacementAsset& asset,
+        IDirect3DTexture9*& replacement_texture,
+        HRESULT& failure_result)
+    {
+        failure_result = S_OK;
+        replacement_texture = nullptr;
+
+        if (device_context == nullptr || device_context->Real == nullptr || device_context->OriginalVtable == nullptr)
+        {
+            failure_result = D3DERR_INVALIDCALL;
+            return false;
+        }
+
+        std::vector<std::uint8_t> decoded_bytes;
+        if (!TryDecodeDxt5ReplacementToA8R8G8B8(asset, decoded_bytes, failure_result))
+        {
+            return false;
+        }
+
+        Logf(
+            L"[d3d9] decoded replacement texture bytes=%zu size=%ux%u source=0x%08lX",
+            decoded_bytes.size(),
+            static_cast<unsigned int>(asset.Width),
+            static_cast<unsigned int>(asset.Height),
+            static_cast<unsigned long>(asset.Format));
+
+        const auto original_create_texture = reinterpret_cast<Direct3d9CreateTextureFunction>(
+            device_context->OriginalVtable[Direct3d9CreateTextureVtableIndex]);
+        if (original_create_texture == nullptr)
+        {
+            failure_result = D3DERR_INVALIDCALL;
+            return false;
+        }
+
+        IDirect3DTexture9* texture = nullptr;
+        Logf(L"[d3d9] creating decoded replacement texture object");
+        const HRESULT create_result = original_create_texture(
+            device_context->Real,
+            asset.Width,
+            asset.Height,
+            1u,
+            D3DUSAGE_DYNAMIC,
+            D3DFMT_A8R8G8B8,
+            D3DPOOL_DEFAULT,
+            &texture,
+            nullptr);
+        Logf(
+            L"[d3d9] create decoded replacement texture returned hr=0x%08lX texture=0x%p",
+            static_cast<unsigned long>(create_result),
+            texture);
+        if (FAILED(create_result) || texture == nullptr)
+        {
+            failure_result = create_result;
+            return false;
+        }
+
+        const auto original_release = reinterpret_cast<Direct3d9TextureReleaseFunction>(
+            GetOriginalVtableSlot(texture, ReleaseVtableIndex));
+        if (original_release == nullptr)
+        {
+            texture->Release();
+            failure_result = D3DERR_INVALIDCALL;
+            return false;
+        }
+
+        const auto original_lock_rect = reinterpret_cast<Direct3d9TextureLockRectFunction>(
+            GetOriginalVtableSlot(texture, Direct3d9TextureLockRectVtableIndex));
+        if (original_lock_rect == nullptr)
+        {
+            original_release(texture);
+            failure_result = D3DERR_INVALIDCALL;
+            return false;
+        }
+
+        D3DLOCKED_RECT locked_rect{};
+        Logf(L"[d3d9] locking decoded replacement texture through original vtable");
+        const HRESULT lock_result = original_lock_rect(texture, 0u, &locked_rect, nullptr, D3DLOCK_DISCARD);
+        Logf(
+            L"[d3d9] lock decoded replacement texture returned hr=0x%08lX pitch=%ld bits=0x%p",
+            static_cast<unsigned long>(lock_result),
+            static_cast<long>(locked_rect.Pitch),
+            locked_rect.pBits);
+        if (FAILED(lock_result) || locked_rect.pBits == nullptr || locked_rect.Pitch <= 0)
+        {
+            original_release(texture);
+            failure_result = lock_result;
+            return false;
+        }
+
+        const std::size_t row_bytes = static_cast<std::size_t>(asset.Width) * 4u;
+        const std::uint8_t* const source_bytes = decoded_bytes.data();
+        std::uint8_t* const destination_bytes = static_cast<std::uint8_t*>(locked_rect.pBits);
+        Logf(L"[d3d9] copying decoded replacement texture rows row_bytes=%zu", row_bytes);
+        for (std::uint32_t y = 0; y < asset.Height; ++y)
+        {
+            std::memcpy(
+                destination_bytes + (static_cast<std::size_t>(y) * static_cast<std::size_t>(locked_rect.Pitch)),
+                source_bytes + (static_cast<std::size_t>(y) * row_bytes),
+                row_bytes);
+        }
+
+        const auto original_unlock_rect = reinterpret_cast<Direct3d9TextureUnlockRectFunction>(
+            GetOriginalVtableSlot(texture, Direct3d9TextureUnlockRectVtableIndex));
+        if (original_unlock_rect == nullptr)
+        {
+            original_release(texture);
+            failure_result = D3DERR_INVALIDCALL;
+            return false;
+        }
+
+        Logf(L"[d3d9] unlocking decoded replacement texture through original vtable");
+        const HRESULT unlock_result = original_unlock_rect(texture, 0u);
+        Logf(
+            L"[d3d9] unlock decoded replacement texture returned hr=0x%08lX",
+            static_cast<unsigned long>(unlock_result));
+        if (FAILED(unlock_result))
+        {
+            original_release(texture);
+            failure_result = unlock_result;
+            return false;
+        }
+
+        replacement_texture = texture;
+        return true;
+    }
+
+    /**
+     * @brief Loads one complete binary file into memory for replacement validation.
+     * @param file_path Path of the replacement asset that should be read.
+     * @param bytes Receives the complete file contents on success.
+     * @param failure_result Receives the HRESULT-style failure reason when the file cannot be loaded.
+     * @return True when the file is readable and copied into memory; otherwise false.
+     */
+    bool TryReadAllBytes(const std::filesystem::path& file_path, std::vector<std::uint8_t>& bytes, HRESULT& failure_result)
+    {
+        failure_result = S_OK;
+        bytes.clear();
+
+        std::error_code error_code;
+        const std::uintmax_t file_size = std::filesystem::file_size(file_path, error_code);
+        if (error_code)
+        {
+            failure_result = HRESULT_FROM_WIN32(error_code.value());
+            return false;
+        }
+
+        if (file_size > static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max()) ||
+            file_size > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max()))
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        std::ifstream stream(file_path, std::ios::binary);
+        if (!stream)
+        {
+            failure_result = HRESULT_FROM_WIN32(GetLastError());
+            return false;
+        }
+
+        bytes.resize(static_cast<std::size_t>(file_size), 0);
+        if (!bytes.empty())
+        {
+            stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            if (stream.gcount() != static_cast<std::streamsize>(bytes.size()) || stream.bad())
+            {
+                failure_result = E_FAIL;
+                bytes.clear();
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @brief Loads one DDS-compressed replacement payload and validates it against the source texture description.
+     * @param file_path Build-relative replacement asset that should be used for the live overwrite.
+     * @param description Source texture description that the replacement must match.
+     * @param replacement_bytes Receives the raw compressed level-0 bytes on success.
+     * @param failure_result Receives the HRESULT-style failure reason when the asset is not usable.
+     * @return True when the asset is a valid DDS file for the requested texture; otherwise false.
+     */
+    bool TryLoadReplacementDdsBytes(
+        const std::filesystem::path& file_path,
+        const D3DSURFACE_DESC& description,
+        std::vector<std::uint8_t>& replacement_bytes,
+        HRESULT& failure_result)
+    {
+        failure_result = S_OK;
+        replacement_bytes.clear();
+
+        std::vector<std::uint8_t> file_bytes;
+        if (!TryReadAllBytes(file_path, file_bytes, failure_result))
+        {
+            return false;
+        }
+
+        if (file_bytes.size() < 4u + sizeof(DdsHeader) || std::memcmp(file_bytes.data(), "DDS ", 4) != 0)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        DdsHeader header{};
+        std::memcpy(&header, file_bytes.data() + 4u, sizeof(header));
+        if (header.Size != 124u ||
+            header.PixelFormat.Size != 32u ||
+            header.PixelFormat.Flags != DdpfFourCc ||
+            header.Width != description.Width ||
+            header.Height != description.Height)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        const std::uint32_t expected_four_cc = GetReplacementDdsFourCc(description.Format);
+        if (expected_four_cc == 0 || header.PixelFormat.FourCc != expected_four_cc)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        std::uint32_t row_count = 0;
+        std::uint32_t bytes_per_row = 0;
+        if (!TryGetTextureRowLayout(description, row_count, bytes_per_row))
+        {
+            failure_result = E_NOTIMPL;
+            return false;
+        }
+
+        const std::size_t expected_payload_size = static_cast<std::size_t>(row_count) * static_cast<std::size_t>(bytes_per_row);
+        const std::size_t payload_offset = 4u + sizeof(DdsHeader);
+        const std::size_t payload_size = file_bytes.size() - payload_offset;
+        if (payload_size != expected_payload_size)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        replacement_bytes.assign(file_bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset), file_bytes.end());
+        return true;
+    }
+
+    /**
+     * @brief Overwrites one writable level-0 texture buffer with replacement bytes.
+     * @param description Source texture description used to validate the replacement payload.
+     * @param writable_bytes Start of the live writable buffer.
+     * @param writable_pitch Pitch in bytes of the writable buffer.
+     * @param replacement_bytes Raw replacement bytes loaded from the DDS asset.
+     * @param failure_result Receives the HRESULT-style failure reason when the overwrite cannot be performed.
+     * @return True when the writable buffer receives the replacement payload; otherwise false.
+     */
+    bool TryOverwriteTextureBytes(
+        const D3DSURFACE_DESC& description,
+        std::uint8_t* writable_bytes,
+        LONG writable_pitch,
+        const std::vector<std::uint8_t>& replacement_bytes,
+        HRESULT& failure_result)
+    {
+        failure_result = S_OK;
+        if (writable_bytes == nullptr || writable_pitch <= 0)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        std::uint32_t row_count = 0;
+        std::uint32_t bytes_per_row = 0;
+        if (!TryGetTextureRowLayout(description, row_count, bytes_per_row))
+        {
+            failure_result = E_NOTIMPL;
+            return false;
+        }
+
+        const std::size_t expected_payload_size = static_cast<std::size_t>(row_count) * static_cast<std::size_t>(bytes_per_row);
+        if (replacement_bytes.size() != expected_payload_size)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        for (std::uint32_t row_index = 0; row_index < row_count; ++row_index)
+        {
+            std::uint8_t* const destination_row = writable_bytes + (static_cast<std::size_t>(row_index) * static_cast<std::size_t>(writable_pitch));
+            const std::uint8_t* const source_row =
+                replacement_bytes.data() + (static_cast<std::size_t>(row_index) * static_cast<std::size_t>(bytes_per_row));
+            std::memcpy(destination_row, source_row, bytes_per_row);
+        }
+
+        return true;
     }
 
     /**
@@ -933,6 +1717,43 @@ namespace
     }
 
     /**
+     * @brief Declares the helper that reads a shadow-patched vtable snapshot.
+     * @param instance Live COM object whose current vtable may already be patched in place.
+     * @param slot_index Zero-based vtable slot index.
+     * @return Original raw function pointer stored in the requested slot or `nullptr` when the snapshot is unavailable.
+     */
+    void* GetOriginalVtableSlot(void* instance, std::size_t slot_index);
+
+    /**
+     * @brief Returns the original function pointer stored at one shadow-patched COM vtable slot.
+     * @param instance Live COM object whose current vtable may already be patched in place.
+     * @param slot_index Zero-based vtable slot index.
+     * @return Original raw function pointer stored in the requested slot or `nullptr` when the snapshot is unavailable.
+     */
+    void* GetOriginalVtableSlot(void* instance, std::size_t slot_index)
+    {
+        void** const vtable = GetComVtable(instance);
+        if (vtable == nullptr)
+        {
+            return nullptr;
+        }
+
+        const auto snapshot_iterator = g_original_vtable_snapshots.find(vtable);
+        if (snapshot_iterator == g_original_vtable_snapshots.end())
+        {
+            return nullptr;
+        }
+
+        const std::vector<void*>& original_vtable_storage = snapshot_iterator->second;
+        if (slot_index >= original_vtable_storage.size())
+        {
+            return nullptr;
+        }
+
+        return original_vtable_storage[slot_index];
+    }
+
+    /**
      * @brief Reads the level-0 description for one tracked `IDirect3DTexture9` instance.
      * @param texture Texture whose level-0 description should be queried.
      * @param description Receives the queried description on success.
@@ -986,6 +1807,27 @@ namespace
     }
 
     /**
+     * @brief Returns the live surface hook context for one tracked `IDirect3DSurface9` instance.
+     * @param surface Surface whose hook state should be queried.
+     * @return Pointer to the tracked context when the surface is installed; otherwise nullptr.
+     */
+    Direct3d9SurfaceHookContext* FindSurfaceHookContext(IDirect3DSurface9* surface)
+    {
+        if (surface == nullptr)
+        {
+            return nullptr;
+        }
+
+        const auto iterator = g_direct3d9_surface_hook_contexts.find(surface);
+        if (iterator == g_direct3d9_surface_hook_contexts.end())
+        {
+            return nullptr;
+        }
+
+        return iterator->second.get();
+    }
+
+    /**
      * @brief Returns the live wrapped `IDirect3D9` proxy for one tracked proxy pointer.
      * @param direct3d Proxy pointer whose hook state should be queried.
      * @return Pointer to the wrapped proxy context when the object is known; otherwise nullptr.
@@ -1025,6 +1867,260 @@ namespace
         }
 
         return &iterator->second;
+    }
+
+    /**
+     * @brief Creates one higher-resolution replacement texture object from a loaded DDS asset.
+     * @param device Real `IDirect3DDevice9` instance that owns the original tracked texture.
+     * @param source_description Description of the source texture used to preserve compatibility diagnostics.
+     * @param asset Loaded replacement DDS payload that should be uploaded into the new texture object.
+     * @param replacement_texture Receives the created replacement texture on success.
+     * @param failure_result Receives the HRESULT-style failure reason when creation or upload fails.
+     * @return True when the replacement texture object is created and populated successfully.
+     */
+    bool TryCreateReplacementTexture(
+        IDirect3DDevice9* device,
+        const D3DSURFACE_DESC& source_description,
+        const helen::TextureReplacementAsset& asset,
+        const helen::TextureReplacementDefinition& replacement_definition,
+        IDirect3DTexture9*& replacement_texture,
+        HRESULT& failure_result)
+    {
+        failure_result = S_OK;
+        replacement_texture = nullptr;
+
+        if (device == nullptr || asset.Width == 0u || asset.Height == 0u || asset.Level0Bytes.empty())
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        Direct3d9DeviceHookContext* const device_context = FindDeviceHookContext(device);
+        if (device_context == nullptr || device_context->Real == nullptr)
+        {
+            failure_result = D3DERR_INVALIDCALL;
+            return false;
+        }
+
+        Logf(
+            L"[d3d9] create replacement texture begin device=0x%p source=%ux%u %hs pool=%hs usage=0x%08lX asset=%ux%u %hs path=%ls",
+            device,
+            static_cast<unsigned int>(source_description.Width),
+            static_cast<unsigned int>(source_description.Height),
+            GetD3d9FormatToken(source_description.Format).data(),
+            GetD3d9PoolToken(source_description.Pool).data(),
+            static_cast<unsigned long>(source_description.Usage),
+            static_cast<unsigned int>(asset.Width),
+            static_cast<unsigned int>(asset.Height),
+            GetD3d9FormatToken(asset.Format).data(),
+            replacement_definition.ReplacementPath.c_str());
+
+        IDirect3DTexture9* final_texture = nullptr;
+        if (!TryCreateDecodedReplacementTexture(device_context, asset, final_texture, failure_result))
+        {
+            Logf(
+                L"[d3d9] failed to cache declared replacement texture ptr=0x%p path=%ls hr=0x%08lX",
+                device,
+                replacement_definition.ReplacementPath.c_str(),
+                static_cast<unsigned long>(failure_result));
+            return false;
+        }
+
+        Logf(
+            L"[d3d9] create replacement texture complete texture=0x%p size=%ux%u format=%hs source=%hs via=CPU-DECODE",
+            final_texture,
+            static_cast<unsigned int>(asset.Width),
+            static_cast<unsigned int>(asset.Height),
+            GetD3d9FormatToken(D3DFMT_A8R8G8B8).data(),
+            GetD3d9FormatToken(asset.Format).data());
+
+        replacement_texture = final_texture;
+        return true;
+    }
+
+    /**
+     * @brief Loads and caches one higher-resolution replacement texture for a matched tracked texture.
+     * @param active Active hook set that owns the asset resolver.
+     * @param record Tracked texture record that should receive the created replacement texture.
+     * @param description Matched source texture description used to preserve usage and pool settings.
+     * @param replacement_definition Declared replacement rule that names the replacement asset.
+     * @param failure_result Receives the HRESULT-style failure reason when loading or creation fails.
+     * @return True when the replacement texture is cached successfully or already exists.
+     */
+    bool TryCacheReplacementTexture(
+        const helen::PackAssetResolver& asset_resolver,
+        IDirect3DTexture9* tracked_texture,
+        const D3DSURFACE_DESC& description,
+        const helen::TextureReplacementDefinition& replacement_definition,
+        HRESULT& failure_result)
+    {
+        failure_result = S_OK;
+        TrackedTextureRecord* const record = FindTrackedTextureRecord(tracked_texture);
+        if (record == nullptr)
+        {
+            failure_result = D3DERR_INVALIDCALL;
+            return false;
+        }
+
+        if (record->ReplacementTexture != nullptr)
+        {
+            return true;
+        }
+
+        if (record->OwningDevice == nullptr)
+        {
+            failure_result = D3DERR_INVALIDCALL;
+            return false;
+        }
+
+        const std::optional<std::filesystem::path> resolved_path = asset_resolver.Resolve(replacement_definition.ReplacementPath);
+        if (!resolved_path.has_value())
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        helen::TextureReplacementAsset asset{};
+        if (!helen::TextureReplacementAssetLoader::TryLoadDds(*resolved_path, asset, failure_result))
+        {
+            Logf(
+                L"[d3d9] failed to load replacement asset path=%ls hr=0x%08lX",
+                resolved_path->c_str(),
+                static_cast<unsigned long>(failure_result));
+            return false;
+        }
+
+        if (asset.Format != description.Format)
+        {
+            failure_result = E_FAIL;
+            Logf(
+                L"[d3d9] replacement asset format mismatch path=%ls source=%hs asset=%hs",
+                resolved_path->c_str(),
+                GetD3d9FormatToken(description.Format).data(),
+                GetD3d9FormatToken(asset.Format).data());
+            return false;
+        }
+
+        IDirect3DTexture9* replacement_texture = nullptr;
+        if (!TryCreateReplacementTexture(record->OwningDevice, description, asset, replacement_definition, replacement_texture, failure_result))
+        {
+            Logf(
+                L"[d3d9] failed to cache declared replacement texture ptr=0x%p path=%ls hr=0x%08lX",
+                tracked_texture,
+                resolved_path->c_str(),
+                static_cast<unsigned long>(failure_result));
+            return false;
+        }
+
+        record->ReplacementTexture = replacement_texture;
+
+        Direct3d9DeviceHookContext* const device_context = FindDeviceHookContext(record->OwningDevice);
+        if (device_context != nullptr && device_context->Real != nullptr)
+        {
+            const IDirect3DTexture9* const tracked_real_texture = UnwrapProxyPointer(
+                g_direct3d9_texture_hook_contexts,
+                tracked_texture);
+            const auto original_get_texture = reinterpret_cast<Direct3d9GetTextureFunction>(
+                GetVtableSlot(device_context->OriginalVtable, Direct3d9GetTextureVtableIndex));
+            const auto original_set_texture = reinterpret_cast<Direct3d9SetTextureFunction>(
+                GetVtableSlot(device_context->OriginalVtable, Direct3d9SetTextureVtableIndex));
+            bool rebound_any_stage = false;
+            if (original_get_texture != nullptr && original_set_texture != nullptr && tracked_real_texture != nullptr)
+            {
+                for (DWORD stage = 0u; stage < 16u; ++stage)
+                {
+                    IDirect3DBaseTexture9* bound_texture = nullptr;
+                    if (FAILED(original_get_texture(device_context->Real, stage, &bound_texture)) || bound_texture == nullptr)
+                    {
+                        continue;
+                    }
+
+                    IDirect3DTexture9* bound_real_texture =
+                        (bound_texture->GetType() == D3DRTYPE_TEXTURE)
+                            ? UnwrapProxyPointer(
+                                g_direct3d9_texture_hook_contexts,
+                                reinterpret_cast<IDirect3DTexture9*>(bound_texture))
+                            : nullptr;
+                    if (bound_real_texture != tracked_real_texture)
+                    {
+                        continue;
+                    }
+
+                    const HRESULT rebind_result = original_set_texture(
+                        device_context->Real,
+                        stage,
+                        reinterpret_cast<IDirect3DBaseTexture9*>(replacement_texture));
+                    rebound_any_stage = true;
+                    Logf(
+                        L"[d3d9] rebound cached replacement texture stage=%lu source=0x%p replacement=0x%p hr=0x%08lX",
+                        static_cast<unsigned long>(stage),
+                        tracked_texture,
+                        replacement_texture,
+                        static_cast<unsigned long>(rebind_result));
+                }
+            }
+
+            if (!rebound_any_stage && original_set_texture != nullptr)
+            {
+                if (device_context->BoundTextures.empty())
+                {
+                    Logf(
+                        L"[d3d9] cached replacement had no stage map to inspect source=0x%p replacement=0x%p",
+                        tracked_texture,
+                        replacement_texture);
+                }
+                for (const auto& bound_stage : device_context->BoundTextures)
+                {
+                    const DWORD stage = bound_stage.first;
+                    IDirect3DTexture9* const bound_proxy_texture =
+                        reinterpret_cast<IDirect3DTexture9*>(bound_stage.second);
+                    if (bound_proxy_texture != tracked_texture)
+                    {
+                        continue;
+                    }
+
+                    const HRESULT rebind_result = original_set_texture(
+                        device_context->Real,
+                        stage,
+                        reinterpret_cast<IDirect3DBaseTexture9*>(replacement_texture));
+                    rebound_any_stage = true;
+                    Logf(
+                        L"[d3d9] rebound cached replacement texture stageMap=%lu source=0x%p replacement=0x%p hr=0x%08lX",
+                        static_cast<unsigned long>(stage),
+                        tracked_texture,
+                        replacement_texture,
+                        static_cast<unsigned long>(rebind_result));
+                }
+            }
+
+            if (!rebound_any_stage && original_set_texture != nullptr)
+            {
+                const TrackedTextureRecord* const current_record = FindTrackedTextureRecord(tracked_texture);
+                if (current_record != nullptr && current_record->HasLastSetTextureStage)
+                {
+                    const HRESULT rebind_result = original_set_texture(
+                        device_context->Real,
+                        current_record->LastSetTextureStage,
+                        reinterpret_cast<IDirect3DBaseTexture9*>(replacement_texture));
+                    Logf(
+                        L"[d3d9] rebound cached replacement texture lastStage=%lu source=0x%p replacement=0x%p hr=0x%08lX",
+                        static_cast<unsigned long>(current_record->LastSetTextureStage),
+                        tracked_texture,
+                        replacement_texture,
+                        static_cast<unsigned long>(rebind_result));
+                }
+            }
+        }
+
+        Logf(
+            L"[d3d9] cached declared replacement texture ptr=0x%p replacement=0x%p path=%ls size=%ux%u format=%hs",
+            tracked_texture,
+            replacement_texture,
+            resolved_path->c_str(),
+            static_cast<unsigned int>(asset.Width),
+            static_cast<unsigned int>(asset.Height),
+            GetD3d9FormatToken(asset.Format).data());
+        return true;
     }
 
     /**
@@ -2262,6 +3358,84 @@ namespace helen
         return result;
     }
 
+    HRESULT WINAPI D3d9TextureReplacementHookSet::SetTextureDetour(
+        IDirect3DDevice9* self,
+        DWORD stage,
+        IDirect3DBaseTexture9* texture)
+    {
+        D3d9TextureReplacementHookSet* const active = Current();
+        if (active == nullptr)
+        {
+            return D3DERR_INVALIDCALL;
+        }
+
+        Direct3d9DeviceHookContext* const context = FindDeviceHookContext(self);
+        if (context == nullptr || context->Real == nullptr)
+        {
+            return D3DERR_INVALIDCALL;
+        }
+
+        const auto original = reinterpret_cast<Direct3d9SetTextureFunction>(
+            GetVtableSlot(context->OriginalVtable, Direct3d9SetTextureVtableIndex));
+        if (original == nullptr)
+        {
+            return D3DERR_INVALIDCALL;
+        }
+
+        IDirect3DBaseTexture9* effective_texture = texture;
+        IDirect3DTexture9* proxy_texture = nullptr;
+        IDirect3DTexture9* replacement_texture = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+            if (texture != nullptr && texture->GetType() == D3DRTYPE_TEXTURE)
+            {
+                proxy_texture = reinterpret_cast<IDirect3DTexture9*>(texture);
+                TrackedTextureRecord* const record = FindTrackedTextureRecord(proxy_texture);
+                if (record != nullptr && record->ReplacementTexture != nullptr)
+                {
+                    replacement_texture = record->ReplacementTexture;
+                    effective_texture = reinterpret_cast<IDirect3DBaseTexture9*>(replacement_texture);
+                }
+
+                if (record != nullptr)
+                {
+                    record->HasLastSetTextureStage = true;
+                    record->LastSetTextureStage = stage;
+                }
+            }
+
+            context->BoundTextures[stage] = proxy_texture != nullptr ? proxy_texture : reinterpret_cast<IDirect3DTexture9*>(texture);
+        }
+
+        if (proxy_texture != nullptr)
+        {
+            if (replacement_texture != nullptr)
+            {
+                Logf(
+                    L"[d3d9] substituted replacement texture stage=%lu source=0x%p replacement=0x%p",
+                    static_cast<unsigned long>(stage),
+                    proxy_texture,
+                    replacement_texture);
+            }
+            else if (active->enable_hash_logging_)
+            {
+                Logf(
+                    L"[d3d9] tracked texture bound stage=%lu texture=0x%p",
+                    static_cast<unsigned long>(stage),
+                    proxy_texture);
+            }
+        }
+
+        IDirect3DBaseTexture9* real_texture =
+            (effective_texture != nullptr && effective_texture->GetType() == D3DRTYPE_TEXTURE)
+                ? UnwrapProxyPointer(
+                    g_direct3d9_texture_hook_contexts,
+                    reinterpret_cast<IDirect3DTexture9*>(effective_texture))
+                : effective_texture;
+
+        return original(context->Real, stage, real_texture);
+    }
+
     HRESULT WINAPI D3d9TextureReplacementHookSet::ResetDetour(
         IDirect3DDevice9* self,
         D3DPRESENT_PARAMETERS* presentation_parameters)
@@ -2325,7 +3499,6 @@ namespace helen
         return result;
     }
 
-#if 0
     HRESULT WINAPI D3d9TextureReplacementHookSet::TextureGetSurfaceLevelDetour(
         IDirect3DTexture9* self,
         UINT level,
@@ -2356,6 +3529,12 @@ namespace helen
             return result;
         }
 
+        if (level != 0)
+        {
+            *returned_surface = real_surface;
+            return result;
+        }
+
         D3d9TextureReplacementHookSet* const active = Current();
         if (active == nullptr || !active->InstallSurfaceInstanceHooks(real_surface, self, nullptr))
         {
@@ -2366,8 +3545,6 @@ namespace helen
         *returned_surface = WrapProxyPointer(g_direct3d9_surface_hook_by_real, real_surface);
         return result;
     }
-
-    #endif
 
     HRESULT WINAPI D3d9TextureReplacementHookSet::TextureLockRectDetour(
         IDirect3DTexture9* self,
@@ -2571,7 +3748,8 @@ namespace helen
             record->Fingerprint.Hash = digest;
         }
 
-        const bool matches_declared_replacement = active->MatchesDeclaredTexture(description, digest);
+        const TextureReplacementDefinition* const matched_replacement = active->FindDeclaredReplacement(description, digest);
+        const bool matches_declared_replacement = matched_replacement != nullptr;
         if (matches_declared_replacement)
         {
             std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
@@ -2587,6 +3765,26 @@ namespace helen
                     static_cast<unsigned int>(description.Height),
                     GetD3d9FormatToken(description.Format).data(),
                     digest.c_str());
+            }
+
+            if (record != nullptr)
+            {
+                HRESULT replacement_result = S_OK;
+                if (active->TryCacheReplacementTexture(self, description, *matched_replacement, replacement_result))
+                {
+                    Logf(
+                        L"[d3d9] cached declared replacement texture ptr=0x%p path=%ls",
+                        self,
+                        matched_replacement->ReplacementPath.c_str());
+                }
+                else
+                {
+                    Logf(
+                        L"[d3d9] failed to cache declared replacement texture ptr=0x%p path=%ls hr=0x%08lX",
+                        self,
+                        matched_replacement->ReplacementPath.c_str(),
+                        static_cast<unsigned long>(replacement_result));
+                }
             }
         }
         else if (active->enable_hash_logging_ || active->enable_image_dumping_ || active->replacements_.empty())
@@ -2709,6 +3907,7 @@ namespace helen
         }
 
         IDirect3DDevice9* owning_device = nullptr;
+        IDirect3DTexture9* replacement_texture = nullptr;
         bool had_tracked_record = false;
         bool had_fingerprint = false;
         bool matched_replacement = false;
@@ -2718,6 +3917,7 @@ namespace helen
             if (record_iterator != g_tracked_texture_records.end())
             {
                 owning_device = record_iterator->second.OwningDevice;
+                replacement_texture = record_iterator->second.ReplacementTexture;
                 had_tracked_record = true;
                 had_fingerprint = record_iterator->second.HasFingerprint;
                 matched_replacement = record_iterator->second.ReplacementMatched;
@@ -2741,6 +3941,11 @@ namespace helen
             std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
             g_direct3d9_texture_hook_contexts.erase(self);
             g_direct3d9_texture_hook_by_real.erase(real);
+            const auto record_iterator = g_tracked_texture_records.find(self);
+            if (record_iterator != g_tracked_texture_records.end())
+            {
+                record_iterator->second.ReplacementTexture = nullptr;
+            }
             g_tracked_texture_records.erase(self);
 
             if (owning_device != nullptr)
@@ -2753,10 +3958,14 @@ namespace helen
             }
         }
 
+        if (reference_count == 0 && replacement_texture != nullptr)
+        {
+            replacement_texture->Release();
+        }
+
         return reference_count;
     }
 
-    #if 0
     ULONG WINAPI D3d9TextureReplacementHookSet::SurfaceReleaseDetour(IDirect3DSurface9* self)
     {
         Direct3d9SurfaceHookContext* const context = FindSurfaceHookContext(self);
@@ -2843,7 +4052,38 @@ namespace helen
             return D3DERR_INVALIDCALL;
         }
 
-        return original(context->Real, locked_rect, rect, flags);
+        const HRESULT result = original(context->Real, locked_rect, rect, flags);
+        if (FAILED(result) || (flags & D3DLOCK_READONLY) != 0)
+        {
+            return result;
+        }
+
+        if (context->OwningTexture == nullptr)
+        {
+            return result;
+        }
+
+        std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+        TrackedTextureRecord* const record = FindTrackedTextureRecord(context->OwningTexture);
+        if (record != nullptr)
+        {
+            record->Dirty = true;
+            record->HasWritableLockSnapshot = false;
+            record->WritableLockBytes = nullptr;
+            record->WritableLockPitch = 0;
+
+            if (locked_rect != nullptr &&
+                locked_rect->pBits != nullptr &&
+                locked_rect->Pitch > 0 &&
+                rect == nullptr)
+            {
+                record->HasWritableLockSnapshot = true;
+                record->WritableLockBytes = static_cast<const std::uint8_t*>(locked_rect->pBits);
+                record->WritableLockPitch = locked_rect->Pitch;
+            }
+        }
+
+        return result;
     }
 
     HRESULT WINAPI D3d9TextureReplacementHookSet::SurfaceUnlockRectDetour(IDirect3DSurface9* self)
@@ -2861,9 +4101,218 @@ namespace helen
             return D3DERR_INVALIDCALL;
         }
 
-        return original(context->Real);
+        const HRESULT result = original(context->Real);
+        if (context->OwningTexture == nullptr)
+        {
+            return result;
+        }
+
+        D3d9TextureReplacementHookSet* const active = Current();
+        if (active == nullptr)
+        {
+            return result;
+        }
+
+        IDirect3DTexture9* const tracked_texture = context->OwningTexture;
+        Direct3d9TextureHookContext* const texture_context = FindTextureHookContext(tracked_texture);
+        if (texture_context == nullptr || texture_context->Real == nullptr)
+        {
+            return result;
+        }
+
+        const std::uint8_t* source_bytes = nullptr;
+        LONG source_pitch = 0;
+        D3DSURFACE_DESC description{};
+        bool should_compute_fingerprint = false;
+        bool has_snapshot = false;
+        {
+            std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+            const TrackedTextureRecord* const record = FindTrackedTextureRecord(tracked_texture);
+            if (record != nullptr && record->Dirty)
+            {
+                should_compute_fingerprint =
+                    active->enable_hash_logging_ ||
+                    active->enable_image_dumping_ ||
+                    !active->replacements_.empty();
+
+                if (record->HasDescription)
+                {
+                    description = record->Description;
+                }
+
+                if (record->HasWritableLockSnapshot)
+                {
+                    source_bytes = record->WritableLockBytes;
+                    source_pitch = record->WritableLockPitch;
+                    has_snapshot = source_bytes != nullptr && source_pitch > 0;
+                }
+
+                TrackedTextureRecord* const mutable_record = FindTrackedTextureRecord(tracked_texture);
+                if (mutable_record != nullptr)
+                {
+                    mutable_record->Dirty = false;
+                    mutable_record->HasWritableLockSnapshot = false;
+                    mutable_record->WritableLockBytes = nullptr;
+                    mutable_record->WritableLockPitch = 0;
+                }
+            }
+        }
+
+        if (!has_snapshot && !TryGetTextureDescription(*texture_context->Real, description))
+        {
+            return result;
+        }
+
+        if (!has_snapshot)
+        {
+            std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+            TrackedTextureRecord* const record = FindTrackedTextureRecord(tracked_texture);
+            if (record != nullptr)
+            {
+                if (!record->HasDescription)
+                {
+                    record->Description = description;
+                    record->HasDescription = true;
+                }
+            }
+
+            Logf(
+                L"[d3d9] tracked surface upload observed ptr=0x%p size=%ux%u format=%hs",
+                self,
+                static_cast<unsigned int>(description.Width),
+                static_cast<unsigned int>(description.Height),
+                GetD3d9FormatToken(description.Format).data());
+            if (!should_compute_fingerprint)
+            {
+                return result;
+            }
+        }
+
+        if (!should_compute_fingerprint)
+        {
+            std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+            TrackedTextureRecord* const record = FindTrackedTextureRecord(tracked_texture);
+            if (record != nullptr)
+            {
+                record->HasDescription = true;
+                record->Description = description;
+            }
+
+            Logf(
+                L"[d3d9] tracked surface upload observed ptr=0x%p size=%ux%u format=%hs",
+                self,
+                static_cast<unsigned int>(description.Width),
+                static_cast<unsigned int>(description.Height),
+                GetD3d9FormatToken(description.Format).data());
+            return result;
+        }
+
+        std::string digest;
+        HRESULT hash_result = S_OK;
+        const bool hash_succeeded = TryComputeTextureSha256FromBytes(description, source_bytes, source_pitch, digest, hash_result);
+        if (!hash_succeeded)
+        {
+            if (active->enable_hash_logging_ || active->enable_image_dumping_)
+            {
+                Logf(
+                    L"[d3d9] surface fingerprint failed ptr=0x%p size=%ux%u format=%hs hr=0x%08lX",
+                    self,
+                    static_cast<unsigned int>(description.Width),
+                    static_cast<unsigned int>(description.Height),
+                    GetD3d9FormatToken(description.Format).data(),
+                    static_cast<unsigned long>(hash_result));
+            }
+
+            return result;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+            TrackedTextureRecord* const record = FindTrackedTextureRecord(tracked_texture);
+            if (record == nullptr)
+            {
+                return result;
+            }
+
+            record->HasDescription = true;
+            record->Description = description;
+            record->HasFingerprint = true;
+            record->Fingerprint.Width = description.Width;
+            record->Fingerprint.Height = description.Height;
+            record->Fingerprint.Format = description.Format;
+            record->Fingerprint.Hash = digest;
+        }
+
+        const TextureReplacementDefinition* const matched_replacement = active->FindDeclaredReplacement(description, digest);
+        const bool matches_declared_replacement = matched_replacement != nullptr;
+        if (matches_declared_replacement)
+        {
+            std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+            TrackedTextureRecord* const record = FindTrackedTextureRecord(tracked_texture);
+            if (record != nullptr && !record->ReplacementMatched)
+            {
+                record->ReplacementMatched = true;
+                record->FingerprintLogged = true;
+                Logf(
+                    L"[d3d9] surface matched declared replacement ptr=0x%p size=%ux%u format=%hs hash=%hs",
+                    self,
+                    static_cast<unsigned int>(description.Width),
+                    static_cast<unsigned int>(description.Height),
+                    GetD3d9FormatToken(description.Format).data(),
+                    digest.c_str());
+            }
+
+            if (record != nullptr)
+            {
+                HRESULT replacement_result = S_OK;
+                if (active->TryCacheReplacementTexture(tracked_texture, description, *matched_replacement, replacement_result))
+                {
+                    Logf(
+                        L"[d3d9] cached surface replacement texture ptr=0x%p path=%ls",
+                        self,
+                        matched_replacement->ReplacementPath.c_str());
+                }
+                else
+                {
+                    Logf(
+                        L"[d3d9] failed to cache surface replacement texture ptr=0x%p path=%ls hr=0x%08lX",
+                        self,
+                        matched_replacement->ReplacementPath.c_str(),
+                        static_cast<unsigned long>(replacement_result));
+                }
+            }
+        }
+        else if (active->enable_hash_logging_ || active->enable_image_dumping_ || active->replacements_.empty())
+        {
+            bool should_log_candidate = false;
+            {
+                std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+                TrackedTextureRecord* const candidate_record = FindTrackedTextureRecord(tracked_texture);
+                if (candidate_record != nullptr && !candidate_record->FingerprintLogged)
+                {
+                    candidate_record->FingerprintLogged = true;
+                    should_log_candidate = true;
+                }
+            }
+
+            if (should_log_candidate)
+            {
+                Logf(
+                    L"[d3d9] tracked surface fingerprint ptr=0x%p size=%ux%u format=%hs hash=%hs pool=%hs usage=0x%08lX",
+                    self,
+                    static_cast<unsigned int>(description.Width),
+                    static_cast<unsigned int>(description.Height),
+                    GetD3d9FormatToken(description.Format).data(),
+                    digest.c_str(),
+                    GetD3d9PoolToken(description.Pool).data(),
+                    static_cast<unsigned long>(description.Usage));
+            }
+        }
+
+        return result;
     }
 
+    #if 0
     ULONG WINAPI D3d9TextureReplacementHookSet::SwapChainReleaseDetour(IDirect3DSwapChain9* self)
     {
         Direct3d9SwapChainHookContext* const context = FindSwapChainHookContext(self);
@@ -2972,7 +4421,6 @@ namespace helen
         *returned_surface = WrapProxyPointer(g_direct3d9_surface_hook_by_real, real_surface);
         return result;
     }
-
     #endif
 
     bool D3d9TextureReplacementHookSet::ValidateDeclaredReplacements(std::size_t& d3d9_replacement_count) const
@@ -3088,6 +4536,7 @@ namespace helen
             texture,
             Direct3d9TextureVtableSlotCount,
             {
+                {Direct3d9TextureGetSurfaceLevelVtableIndex, reinterpret_cast<void*>(&TextureGetSurfaceLevelDetour)},
                 {Direct3d9TextureLockRectVtableIndex, reinterpret_cast<void*>(&TextureLockRectDetour)},
                 {Direct3d9TextureUnlockRectVtableIndex, reinterpret_cast<void*>(&TextureUnlockRectDetour)},
                 {ReleaseVtableIndex, reinterpret_cast<void*>(&TextureReleaseDetour)},
@@ -3130,6 +4579,7 @@ namespace helen
                 {Direct3d9ResetVtableIndex, reinterpret_cast<void*>(&ResetDetour)},
                 {Direct3d9CreateTextureVtableIndex, reinterpret_cast<void*>(&CreateTextureDetour)},
                 {Direct3d9UpdateTextureVtableIndex, reinterpret_cast<void*>(&UpdateTextureDetour)},
+                {Direct3d9SetTextureVtableIndex, reinterpret_cast<void*>(&SetTextureDetour)},
             });
         if (context == nullptr)
         {
@@ -3145,15 +4595,54 @@ namespace helen
         IDirect3DTexture9* owner_texture,
         IDirect3DSwapChain9* owner_swap_chain)
     {
-        (void)owner_texture;
-        (void)owner_swap_chain;
-        return surface != nullptr ? false : false;
+        if (surface == nullptr || owner_texture == nullptr || owner_swap_chain != nullptr)
+        {
+            return false;
+        }
+
+        Logf(L"[d3d9] install surface instance begin surface=0x%p texture=0x%p", surface, owner_texture);
+        std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+        if (g_direct3d9_surface_hook_by_real.find(surface) != g_direct3d9_surface_hook_by_real.end())
+        {
+            return true;
+        }
+
+        Direct3d9SurfaceHookContext* const context = CreateOrGetProxyContext(
+            g_direct3d9_surface_hook_contexts,
+            g_direct3d9_surface_hook_by_real,
+            surface,
+            Direct3d9SurfaceVtableSlotCount,
+            {
+                {ReleaseVtableIndex, reinterpret_cast<void*>(&SurfaceReleaseDetour)},
+                {3, reinterpret_cast<void*>(&SurfaceGetDeviceDetour)},
+                {13, reinterpret_cast<void*>(&SurfaceLockRectDetour)},
+                {14, reinterpret_cast<void*>(&SurfaceUnlockRectDetour)},
+            });
+        if (context == nullptr)
+        {
+            return false;
+        }
+
+        context->OwningTexture = owner_texture;
+        context->OwningSwapChain = owner_swap_chain;
+
+        Logf(L"[d3d9] install surface proxy complete proxy=0x%p real=0x%p", reinterpret_cast<IDirect3DSurface9*>(context), surface);
+        return true;
     }
 
     bool D3d9TextureReplacementHookSet::InstallSwapChainInstanceHooks(IDirect3DSwapChain9* swap_chain, IDirect3DDevice9* owner_device)
     {
         (void)owner_device;
         return swap_chain != nullptr ? false : false;
+    }
+
+    bool D3d9TextureReplacementHookSet::TryCacheReplacementTexture(
+        IDirect3DTexture9* tracked_texture,
+        const D3DSURFACE_DESC& description,
+        const TextureReplacementDefinition& replacement_definition,
+        HRESULT& failure_result) const
+    {
+        return ::TryCacheReplacementTexture(asset_resolver_, tracked_texture, description, replacement_definition, failure_result);
     }
 
     bool D3d9TextureReplacementHookSet::ShouldTrackTextures() const noexcept
@@ -3168,9 +4657,16 @@ namespace helen
 
     bool D3d9TextureReplacementHookSet::MatchesDeclaredTexture(const D3DSURFACE_DESC& description, std::string_view digest) const
     {
+        return FindDeclaredReplacement(description, digest) != nullptr;
+    }
+
+    const TextureReplacementDefinition* D3d9TextureReplacementHookSet::FindDeclaredReplacement(
+        const D3DSURFACE_DESC& description,
+        std::string_view digest) const
+    {
         if (replacements_.empty())
         {
-            return false;
+            return nullptr;
         }
 
         const std::string_view format_token = GetD3d9FormatToken(description.Format);
@@ -3196,9 +4692,9 @@ namespace helen
                 continue;
             }
 
-            return true;
+            return &replacement;
         }
 
-        return false;
+        return nullptr;
     }
 }

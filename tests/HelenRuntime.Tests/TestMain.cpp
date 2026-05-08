@@ -97,6 +97,11 @@ void RunHgdeltaFileTests();
 void RunTextureDumpSerializerTests();
 
 /**
+ * @brief Runs the replacement asset loader test coverage for larger DDS texture swaps.
+ */
+void RunTextureReplacementAssetLoaderTests();
+
+/**
  * @brief Runs the delta-backed virtual file source coverage for exact base-file reconstruction.
  */
 void RunDeltaVirtualFileSourceTests();
@@ -126,6 +131,7 @@ int main()
         RunExecutableFingerprintTests();
         RunHgdeltaFileTests();
         RunTextureDumpSerializerTests();
+        RunTextureReplacementAssetLoaderTests();
         RunDeltaVirtualFileSourceTests();
         RunPackAssetResolverTests();
         RunPackRepositoryTests();

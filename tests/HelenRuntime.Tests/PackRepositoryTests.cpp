@@ -595,7 +595,7 @@ void RunPackRepositoryTests()
         Expect(loaded_batman_pack->Build.Hooks.empty(), "Checked-in Batman graphics pack unexpectedly declared hooks.");
         Expect(loaded_batman_pack->Build.TextureReplacements.empty(), "Checked-in Batman graphics pack unexpectedly declared texture replacements.");
         Expect(loaded_batman_pack->Build.Commands.size() == 4, "Checked-in Batman graphics pack command count mismatch.");
-        Expect(loaded_batman_pack->Build.ExternalBindings.size() == 27, "Checked-in Batman graphics pack external binding count mismatch.");
+        Expect(loaded_batman_pack->Build.ExternalBindings.size() == 29, "Checked-in Batman graphics pack external binding count mismatch.");
 
         const helen::CommandDefinition* checked_in_load_draft_command = nullptr;
         const helen::CommandDefinition* checked_in_sync_preset_command = nullptr;
@@ -693,8 +693,8 @@ void RunPackRepositoryTests()
         Expect(checked_in_graphics_frontend_file->Source.Path == std::filesystem::path("assets/deltas/Frontend-graphics-options.hgdelta"), "Checked-in Batman graphics frontend delta path mismatch.");
         Expect(checked_in_graphics_frontend_file->Source.Base.FileSize == 2988548, "Checked-in Batman graphics frontend package base size mismatch.");
         Expect(checked_in_graphics_frontend_file->Source.Base.Sha256 == "271916b888f83374122af0fccc5c685804f4c8286a92a772cd71e4f48a00f2cc", "Checked-in Batman graphics frontend package base hash mismatch.");
-        Expect(checked_in_graphics_frontend_file->Source.Target.FileSize == 4277050, "Checked-in Batman graphics frontend package target size mismatch.");
-        Expect(checked_in_graphics_frontend_file->Source.Target.Sha256 == "7307b098fd176c2b63ac4038c9ae567b11dcff61a52c34a28e5468ad55c04642", "Checked-in Batman graphics frontend package target hash mismatch.");
+        Expect(checked_in_graphics_frontend_file->Source.Target.FileSize == 12416760, "Checked-in Batman graphics frontend package target size mismatch.");
+        Expect(checked_in_graphics_frontend_file->Source.Target.Sha256 == "3e010c701fec4fd1f81baec21d66be65e0f09c0ba4112702eedbb4e57869c3cb", "Checked-in Batman graphics frontend package target hash mismatch.");
         Expect(checked_in_graphics_frontend_file->Source.ChunkSize == 65536, "Checked-in Batman graphics frontend chunk size mismatch.");
     }
     catch (...)
