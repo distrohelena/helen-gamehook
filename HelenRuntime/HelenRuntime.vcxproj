@@ -101,6 +101,8 @@
     <ClCompile Include="Pattern.cpp" />
     <ClCompile Include="HgdeltaFile.cpp" />
     <ClCompile Include="ProxyBootstrapCoordinator.cpp" />
+    <ClCompile Include="ModuleLoadRoutingService.cpp" />
+    <ClCompile Include="ModuleLoadRoutingHookSet.cpp" />
     <ClCompile Include="RuntimeLayout.cpp" />
     <ClCompile Include="RuntimeValueStore.cpp" />
     <ClCompile Include="TextureDumpSerializer.cpp" />
@@ -146,6 +148,8 @@
     <ClInclude Include="..\include\HelenHook\MemoryStateObserverMapEntryDefinition.h" />
     <ClInclude Include="..\include\HelenHook\MemoryStateObserverService.h" />
     <ClInclude Include="..\include\HelenHook\MemoryStateObserverUpdate.h" />
+    <ClInclude Include="..\include\HelenHook\ModuleLoadRoutingService.h" />
+    <ClInclude Include="..\include\HelenHook\ModuleLoadRoutingHookSet.h" />
     <ClInclude Include="..\include\HelenHook\PackAssetResolver.h" />
     <ClInclude Include="..\include\HelenHook\PackDefinition.h" />
     <ClInclude Include="..\include\HelenHook\PackRepository.h" />

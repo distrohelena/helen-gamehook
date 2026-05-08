@@ -96,6 +96,8 @@
     <ClCompile Include="PackSelectionConfigTests.cpp" />
     <ClCompile Include="PackRepositoryTests.cpp" />
     <ClCompile Include="ProxyBootstrapCoordinatorTests.cpp" />
+    <ClCompile Include="ModuleLoadRoutingServiceTests.cpp" />
+    <ClCompile Include="ModuleLoadRoutingHookSetTests.cpp" />
     <ClCompile Include="RuntimeValueStoreTests.cpp" />
     <ClCompile Include="RuntimeLayoutTests.cpp" />
     <ClCompile Include="HgdeltaFileTests.cpp" />
