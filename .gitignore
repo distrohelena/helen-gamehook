@@ -12,11 +12,13 @@
 /games/HelenBatmanAA/builder/extracted/
 /games/HelenBatmanAA/builder/generated/
 /games/HelenBatmanAA/builder/tools/NativeSubtitleExePatcher/.git.local/
+output/
 *.VC.db
 *.VC.opendb
 *.suo
 *.user
 *.log
 *.tmp
+*.dmp
 *.hgdelta
 artifacts/*
