@@ -33,6 +33,10 @@ namespace helen
          * @brief Normalizes one candidate path into a folded relative game path.
          * @param candidate_path Runtime file path that may be relative or absolute.
          * @return Lowercased slash-normalized relative game path used for comparisons.
+         *
+         * Absolute paths that do not lexically belong to the game root are normalized to a
+         * non-matching relative form instead of throwing, so special device and pipe paths can
+         * flow through the matcher without crashing the process.
          */
         std::wstring NormalizeToRelativeGamePath(const std::filesystem::path& candidate_path) const;
 

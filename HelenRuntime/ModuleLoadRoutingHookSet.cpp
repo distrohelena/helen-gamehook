@@ -9,6 +9,32 @@
 #include <string_view>
 #include <vector>
 
+/**
+ * @brief Minimal UNICODE_STRING layout needed to read LdrLoadDll requests without pulling in the full ntdll header set.
+ */
+struct _UNICODE_STRING
+{
+    /**
+     * @brief Size of the string in bytes, excluding any trailing null terminator.
+     */
+    USHORT Length;
+
+    /**
+     * @brief Maximum size of the backing buffer in bytes.
+     */
+    USHORT MaximumLength;
+
+    /**
+     * @brief Wide-character buffer that stores the module text.
+     */
+    PWSTR Buffer;
+};
+
+/**
+ * @brief Function pointer signature for the ntdll LdrLoadDll export.
+ */
+using LdrLoadDllFunction = NTSTATUS (NTAPI*)(PWSTR, PULONG, PUNICODE_STRING, PHANDLE);
+
 namespace
 {
     /**
@@ -61,11 +87,18 @@ namespace helen
     ModuleLoadRoutingHookSet* ModuleLoadRoutingHookSet::active_instance_ = nullptr;
 
     /**
-     * @brief Binds the hook set to one routing service that classifies loader requests.
+     * @brief Binds the hook set to one routing service and stores the runtime loader flags that should be honored.
      * @param routing_service Pure routing service that formats diagnostics for intercepted requests.
+     * @param enable_load_library_hooks True when the main-module LoadLibrary* routing hooks should be installed.
+     * @param enable_ldr_load_dll_hook True when the deeper ntdll LdrLoadDll detour should be installed.
      */
-    ModuleLoadRoutingHookSet::ModuleLoadRoutingHookSet(ModuleLoadRoutingService& routing_service)
+    ModuleLoadRoutingHookSet::ModuleLoadRoutingHookSet(
+        ModuleLoadRoutingService& routing_service,
+        bool enable_load_library_hooks,
+        bool enable_ldr_load_dll_hook)
         : routing_service_(routing_service)
+        , enable_load_library_hooks_(enable_load_library_hooks)
+        , enable_ldr_load_dll_hook_(enable_ldr_load_dll_hook)
     {
     }
 
@@ -110,6 +143,22 @@ namespace helen
         }
 
         return std::wstring(lpLibFileName, lpLibFileName + std::strlen(lpLibFileName));
+    }
+
+    /**
+     * @brief Converts one UNICODE_STRING loader request into a wide string for routing and logging.
+     * @param module_file_name Structured module text passed to LdrLoadDll.
+     * @return Wide string representation of the request, or a sentinel string when the input is null.
+     */
+    std::wstring ModuleLoadRoutingHookSet::ConvertUnicodeRequest(PUNICODE_STRING module_file_name)
+    {
+        if (module_file_name == nullptr || module_file_name->Buffer == nullptr)
+        {
+            return L"<null>";
+        }
+
+        const std::size_t character_count = static_cast<std::size_t>(module_file_name->Length / sizeof(wchar_t));
+        return std::wstring(module_file_name->Buffer, module_file_name->Buffer + character_count);
     }
 
     /**
@@ -185,6 +234,35 @@ namespace helen
     }
 
     /**
+     * @brief Returns the real LdrLoadDll export without using the patched entry point.
+     * @param search_path Optional search-path override passed to LdrLoadDll.
+     * @param load_flags Optional flag word passed to LdrLoadDll.
+     * @param module_file_name Module name or path passed to LdrLoadDll.
+     * @param module_handle Receives the loaded module handle when the original export succeeds.
+     * @return The original LdrLoadDll status when the export can be resolved; otherwise a failure status.
+     */
+    NTSTATUS ModuleLoadRoutingHookSet::CallRealLdrLoadDll(
+        PWSTR search_path,
+        PULONG load_flags,
+        PUNICODE_STRING module_file_name,
+        PHANDLE module_handle)
+    {
+        const ModuleLoadRoutingHookSet* current = Current();
+        if (current == nullptr)
+        {
+            return static_cast<NTSTATUS>(0xC0000001L);
+        }
+
+        const auto ldr_load_dll = current->ldr_load_dll_hook_.Original<LdrLoadDllFunction>();
+        if (ldr_load_dll == nullptr)
+        {
+            return static_cast<NTSTATUS>(0xC0000001L);
+        }
+
+        return ldr_load_dll(search_path, load_flags, module_file_name, module_handle);
+    }
+
+    /**
      * @brief Installs one optional import hook only when the target import exists on the main executable.
      * @param hook Mutable IAT hook that should capture the located import slot.
      * @param module Main executable module whose import table should be patched.
@@ -213,8 +291,8 @@ namespace helen
     }
 
     /**
-     * @brief Installs loader hooks for the main executable import table.
-     * @return True when at least one targeted loader import was present and every present import was patched successfully.
+     * @brief Installs the enabled loader hooks for the main executable import table and the optional ntdll LdrLoadDll export.
+     * @return True when at least one enabled loader entry point was present and every present hook was patched successfully.
      */
     bool ModuleLoadRoutingHookSet::Install()
     {
@@ -236,61 +314,102 @@ namespace helen
 
         active_instance_ = this;
 
-        bool has_loader_hook = false;
-        bool import_present = false;
-        if (!InstallOptionalHook(
-                load_library_a_hook_,
-                *main_module,
-                "kernel32.dll",
-                "LoadLibraryA",
-                reinterpret_cast<void*>(&LoadLibraryADetour),
-                import_present))
-        {
-            Remove();
-            return false;
-        }
-        has_loader_hook = has_loader_hook || import_present;
+        bool any_hook_requested = false;
+        bool any_hook_installed = false;
 
-        if (!InstallOptionalHook(
-                load_library_w_hook_,
-                *main_module,
-                "kernel32.dll",
-                "LoadLibraryW",
-                reinterpret_cast<void*>(&LoadLibraryWDetour),
-                import_present))
+        if (enable_load_library_hooks_)
         {
-            Remove();
-            return false;
-        }
-        has_loader_hook = has_loader_hook || import_present;
+            any_hook_requested = true;
 
-        if (!InstallOptionalHook(
-                load_library_ex_a_hook_,
-                *main_module,
-                "kernel32.dll",
-                "LoadLibraryExA",
-                reinterpret_cast<void*>(&LoadLibraryExADetour),
-                import_present))
+            bool import_present = false;
+            if (!InstallOptionalHook(
+                    load_library_a_hook_,
+                    *main_module,
+                    "kernel32.dll",
+                    "LoadLibraryA",
+                    reinterpret_cast<void*>(&LoadLibraryADetour),
+                    import_present))
+            {
+                Remove();
+                return false;
+            }
+
+            any_hook_installed = any_hook_installed || import_present;
+
+            if (!InstallOptionalHook(
+                    load_library_w_hook_,
+                    *main_module,
+                    "kernel32.dll",
+                    "LoadLibraryW",
+                    reinterpret_cast<void*>(&LoadLibraryWDetour),
+                    import_present))
+            {
+                Remove();
+                return false;
+            }
+
+            any_hook_installed = any_hook_installed || import_present;
+
+            if (!InstallOptionalHook(
+                    load_library_ex_a_hook_,
+                    *main_module,
+                    "kernel32.dll",
+                    "LoadLibraryExA",
+                    reinterpret_cast<void*>(&LoadLibraryExADetour),
+                    import_present))
+            {
+                Remove();
+                return false;
+            }
+
+            any_hook_installed = any_hook_installed || import_present;
+
+            if (!InstallOptionalHook(
+                    load_library_ex_w_hook_,
+                    *main_module,
+                    "kernel32.dll",
+                    "LoadLibraryExW",
+                    reinterpret_cast<void*>(&LoadLibraryExWDetour),
+                    import_present))
+            {
+                Remove();
+                return false;
+            }
+
+            any_hook_installed = any_hook_installed || import_present;
+        }
+
+        if (enable_ldr_load_dll_hook_)
         {
-            Remove();
-            return false;
-        }
-        has_loader_hook = has_loader_hook || import_present;
+            any_hook_requested = true;
 
-        if (!InstallOptionalHook(
-                load_library_ex_w_hook_,
-                *main_module,
-                "kernel32.dll",
-                "LoadLibraryExW",
-                reinterpret_cast<void*>(&LoadLibraryExWDetour),
-                import_present))
-        {
-            Remove();
-            return false;
-        }
-        has_loader_hook = has_loader_hook || import_present;
+            const HMODULE ntdll_module = GetModuleHandleW(L"ntdll.dll");
+            if (ntdll_module == nullptr)
+            {
+                Remove();
+                return false;
+            }
 
-        if (!has_loader_hook)
+            const auto ldr_load_dll = reinterpret_cast<LdrLoadDllFunction>(GetProcAddress(ntdll_module, "LdrLoadDll"));
+            if (ldr_load_dll == nullptr)
+            {
+                Remove();
+                return false;
+            }
+
+            if (!ldr_load_dll_hook_.Install(
+                    reinterpret_cast<void*>(ldr_load_dll),
+                    reinterpret_cast<void*>(&LdrLoadDllDetour),
+                    5))
+            {
+                Remove();
+                return false;
+            }
+
+            any_hook_installed = true;
+        }
+
+        if (!any_hook_requested || !any_hook_installed)
         {
             Remove();
             return false;
@@ -304,6 +423,7 @@ namespace helen
      */
     void ModuleLoadRoutingHookSet::Remove()
     {
+        ldr_load_dll_hook_.Remove();
         load_library_ex_w_hook_.Remove();
         load_library_ex_a_hook_.Remove();
         load_library_w_hook_.Remove();
@@ -325,7 +445,8 @@ namespace helen
             && (load_library_a_hook_.IsInstalled()
                 || load_library_w_hook_.IsInstalled()
                 || load_library_ex_a_hook_.IsInstalled()
-                || load_library_ex_w_hook_.IsInstalled());
+                || load_library_ex_w_hook_.IsInstalled()
+                || ldr_load_dll_hook_.IsInstalled());
     }
 
     /**
@@ -394,5 +515,28 @@ namespace helen
         }
 
         return CallRealLoadLibraryExW(lpLibFileName, hFile, dwFlags);
+    }
+
+    /**
+     * @brief Inline detour for ntdll's LdrLoadDll export that logs direct loader activity before forwarding the call.
+     * @param search_path Optional search-path override passed to LdrLoadDll.
+     * @param load_flags Optional flag word passed to LdrLoadDll.
+     * @param module_file_name Module name or path passed to LdrLoadDll.
+     * @param module_handle Receives the loaded module handle when the original export succeeds.
+     * @return The original LdrLoadDll status when the export can be reached; otherwise a failure status.
+     */
+    NTSTATUS WINAPI ModuleLoadRoutingHookSet::LdrLoadDllDetour(
+        PWSTR search_path,
+        PULONG load_flags,
+        PUNICODE_STRING module_file_name,
+        PHANDLE module_handle)
+    {
+        const ModuleLoadRoutingHookSet* current = Current();
+        if (current != nullptr)
+        {
+            current->LogRequest(L"LdrLoadDll", ConvertUnicodeRequest(module_file_name));
+        }
+
+        return CallRealLdrLoadDll(search_path, load_flags, module_file_name, module_handle);
     }
 }

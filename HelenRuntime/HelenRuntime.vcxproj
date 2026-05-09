@@ -108,6 +108,8 @@
     <ClCompile Include="TextureDumpSerializer.cpp" />
     <ClCompile Include="TextureReplacementAssetLoader.cpp" />
     <ClCompile Include="VirtualFileService.cpp" />
+    <ClCompile Include="WindowBehaviorConfig.cpp" />
+    <ClCompile Include="WindowBehaviorHookSet.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\include\HelenHook\BatmanGraphicsConfigService.h" />
@@ -172,6 +174,8 @@
     <ClInclude Include="..\include\HelenHook\VirtualFileSourceDefinition.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileSourceKind.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileService.h" />
+    <ClInclude Include="..\include\HelenHook\WindowBehaviorConfig.h" />
+    <ClInclude Include="..\include\HelenHook\WindowBehaviorHookSet.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

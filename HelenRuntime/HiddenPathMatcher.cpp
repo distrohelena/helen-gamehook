@@ -56,7 +56,7 @@ namespace helen
         std::filesystem::path normalized_candidate = candidate_path;
         if (normalized_candidate.is_absolute())
         {
-            normalized_candidate = std::filesystem::relative(normalized_candidate, game_root_);
+            normalized_candidate = normalized_candidate.lexically_relative(game_root_);
         }
 
         return FoldPath(normalized_candidate.wstring());

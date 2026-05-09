@@ -40,4 +40,10 @@ void RunHiddenPathMatcherTests()
     Expect(
         !matcher.ShouldHidePath(std::filesystem::path(L"BmGame/Movies/Intro.bik")),
         "Unexpected non-hidden movie match.");
+    Expect(
+        !matcher.ShouldHidePath(std::filesystem::path(L"E:\\OtherGame\\BmGame\\Movies\\Legal.bik")),
+        "Expected an absolute path outside the game root to be treated as non-hidden without throwing.");
+    Expect(
+        !matcher.ShouldHidePath(std::filesystem::path(L"\\\\.\\pipe\\Batman")),
+        "Expected a pipe-style device path to be treated as non-hidden without throwing.");
 }

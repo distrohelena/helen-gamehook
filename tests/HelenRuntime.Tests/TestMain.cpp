@@ -142,6 +142,16 @@ void RunDeltaVirtualFileSourceTests();
 void RunVirtualFileServiceTests();
 
 /**
+ * @brief Runs the window behavior config coverage for generic `window.*` keys and derived hook plans.
+ */
+void RunWindowBehaviorConfigTests();
+
+/**
+ * @brief Runs the window behavior hook coverage for focus spoofing and WndProc filtering.
+ */
+void RunWindowBehaviorHookSetTests();
+
+/**
  * @brief Runs the native runtime tests and reports the first failure to stderr.
  */
 int main()
@@ -176,6 +186,8 @@ int main()
         RunMemoryStateObserverServiceTests();
         RunVirtualFileServiceTests();
         RunDebugTraceServiceTests();
+        RunWindowBehaviorConfigTests();
+        RunWindowBehaviorHookSetTests();
         std::cout << "PASS\n";
         return 0;
     }

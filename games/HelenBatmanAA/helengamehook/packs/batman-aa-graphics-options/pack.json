@@ -85,8 +85,124 @@
                        "key":  "stereo",
                        "type":  "int",
                        "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.focusSpoofEnabled",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.activeWindowSpoofEnabled",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.backgroundInputEnabled",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.blockRawInputRegistrationEnabled",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.clipCursorEnabled",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.removeWindowFrameEnabled",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.forcePositionEnabled",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.forceSizeEnabled",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.forceTopmostEnabled",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.positionX",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.positionY",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.width",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "window.height",
+                       "type":  "int",
+                       "defaultValue":  0
                    }
                ],
+    "features":  [
+                     {
+                         "id":  "windowFocusSpoof",
+                         "name":  "Spoof Foreground Focus",
+                         "kind":  "toggle",
+                         "configKey":  "window.focusSpoofEnabled",
+                         "defaultValue":  0
+                     },
+                     {
+                         "id":  "windowActiveFocusSpoof",
+                         "name":  "Spoof Active Window",
+                         "kind":  "toggle",
+                         "configKey":  "window.activeWindowSpoofEnabled",
+                         "defaultValue":  0
+                     },
+                     {
+                         "id":  "windowBackgroundInput",
+                         "name":  "Background Input",
+                         "kind":  "toggle",
+                         "configKey":  "window.backgroundInputEnabled",
+                         "defaultValue":  0
+                     },
+                     {
+                         "id":  "windowBlockRawInputRegistration",
+                         "name":  "Block Raw Input Registration",
+                         "kind":  "toggle",
+                         "configKey":  "window.blockRawInputRegistrationEnabled",
+                         "defaultValue":  0
+                     },
+                     {
+                         "id":  "windowClipCursor",
+                         "name":  "Clip Cursor To Window",
+                         "kind":  "toggle",
+                         "configKey":  "window.clipCursorEnabled",
+                         "defaultValue":  0
+                     },
+                     {
+                         "id":  "windowRemoveFrame",
+                         "name":  "Remove Window Frame",
+                         "kind":  "toggle",
+                         "configKey":  "window.removeWindowFrameEnabled",
+                         "defaultValue":  0
+                     },
+                     {
+                         "id":  "windowForceTopmost",
+                         "name":  "Keep Window Topmost",
+                         "kind":  "toggle",
+                         "configKey":  "window.forceTopmostEnabled",
+                         "defaultValue":  0
+                     }
+                 ],
     "builds":  [
                    "steam-goty-1.0"
                ]

@@ -743,6 +743,57 @@ void RunPackRepositoryTests()
         Expect(loaded_batman_pack->Build.Commands.size() == 4, "Checked-in Batman graphics pack command count mismatch.");
         Expect(loaded_batman_pack->Build.ExternalBindings.size() == 29, "Checked-in Batman graphics pack external binding count mismatch.");
 
+        bool found_focus_spoof_config = false;
+        bool found_background_input_config = false;
+        bool found_clip_cursor_config = false;
+        bool found_force_width_config = false;
+        bool found_focus_spoof_feature = false;
+        bool found_background_input_feature = false;
+        bool found_clip_cursor_feature = false;
+        for (const helen::ConfigEntryDefinition& config_entry : loaded_batman_pack->Pack.ConfigEntries)
+        {
+            if (config_entry.Key == "window.focusSpoofEnabled")
+            {
+                found_focus_spoof_config = true;
+            }
+            else if (config_entry.Key == "window.backgroundInputEnabled")
+            {
+                found_background_input_config = true;
+            }
+            else if (config_entry.Key == "window.clipCursorEnabled")
+            {
+                found_clip_cursor_config = true;
+            }
+            else if (config_entry.Key == "window.width")
+            {
+                found_force_width_config = true;
+            }
+        }
+
+        for (const helen::FeatureDefinition& feature : loaded_batman_pack->Pack.Features)
+        {
+            if (feature.Id == "windowFocusSpoof")
+            {
+                found_focus_spoof_feature = true;
+            }
+            else if (feature.Id == "windowBackgroundInput")
+            {
+                found_background_input_feature = true;
+            }
+            else if (feature.Id == "windowClipCursor")
+            {
+                found_clip_cursor_feature = true;
+            }
+        }
+
+        Expect(found_focus_spoof_config, "Checked-in Batman graphics pack is missing the window.focusSpoofEnabled config entry.");
+        Expect(found_background_input_config, "Checked-in Batman graphics pack is missing the window.backgroundInputEnabled config entry.");
+        Expect(found_clip_cursor_config, "Checked-in Batman graphics pack is missing the window.clipCursorEnabled config entry.");
+        Expect(found_force_width_config, "Checked-in Batman graphics pack is missing the raw window.width config entry.");
+        Expect(found_focus_spoof_feature, "Checked-in Batman graphics pack is missing the curated focus spoof feature.");
+        Expect(found_background_input_feature, "Checked-in Batman graphics pack is missing the curated background input feature.");
+        Expect(found_clip_cursor_feature, "Checked-in Batman graphics pack is missing the curated clip cursor feature.");
+
         const helen::CommandDefinition* checked_in_load_draft_command = nullptr;
         const helen::CommandDefinition* checked_in_sync_preset_command = nullptr;
         const helen::CommandDefinition* checked_in_sync_detail_level_command = nullptr;

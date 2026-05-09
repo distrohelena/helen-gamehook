@@ -5,8 +5,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <initializer_list>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace
 {
@@ -22,10 +25,41 @@ namespace
             throw std::runtime_error(message);
         }
     }
+
+    /**
+     * @brief Returns true when one log line contains every requested token.
+     * @param log_text Full log file text to search.
+     * @param tokens Required substrings that must appear on the same line.
+     * @return True when one line contains every token.
+     */
+    bool ContainsLogLineWithTokens(std::string_view log_text, std::initializer_list<std::string_view> tokens)
+    {
+        std::istringstream stream{std::string(log_text)};
+        std::string line;
+        while (std::getline(stream, line))
+        {
+            bool matches = true;
+            for (const std::string_view token : tokens)
+            {
+                if (line.find(token) == std::string::npos)
+                {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (matches)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
 
 /**
- * @brief Runs coverage for loader-hook installation, removal, and Bink request logging.
+ * @brief Runs coverage for loader-hook installation, removal, and runtime flag selection for the Bink request logs.
  */
 void RunModuleLoadRoutingHookSetTests()
 {
@@ -36,27 +70,57 @@ void RunModuleLoadRoutingHookSetTests()
     helen::SetLogPath(log_path);
 
     helen::ModuleLoadRoutingService routing_service({});
-    helen::ModuleLoadRoutingHookSet hook_set(routing_service);
-
-    Expect(hook_set.Install(), "Expected the loader hook set to install on the test runner's main module.");
-    Expect(hook_set.IsInstalled(), "Expected the loader hook set to report an installed state.");
-
     {
-        const HMODULE module_handle = LoadLibraryW(L"binkw32.dll");
-        Expect(module_handle == nullptr, "Expected a missing Bink DLL request to fail after the detour logs it.");
+        helen::ModuleLoadRoutingHookSet hook_set(routing_service, true, false);
+
+        Expect(hook_set.Install(), "Expected the loader hook set to install with only the LoadLibrary routing flag enabled.");
+        Expect(hook_set.IsInstalled(), "Expected the loader hook set to report an installed state with only the LoadLibrary routing flag enabled.");
+
+        {
+            const HMODULE module_handle = LoadLibraryW(L"binkw32.dll");
+            Expect(module_handle == nullptr, "Expected a missing Bink DLL request to fail after the LoadLibrary detour logs it.");
+        }
+
+        hook_set.Remove();
+        Expect(!hook_set.IsInstalled(), "Expected the loader hook set to report a removed state after the LoadLibrary-only run.");
+
+        std::ifstream stream(log_path, std::ios::binary);
+        Expect(static_cast<bool>(stream), "Expected the LoadLibrary-only routing hook test to create a log file.");
+
+        const std::string log_text((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+        Expect(ContainsLogLineWithTokens(log_text, { "api=LoadLibraryW", "requested=binkw32.dll", "matched=bink alias" }), "Expected the LoadLibrary-only log to capture the normalized Bink DLL name.");
+        Expect(!ContainsLogLineWithTokens(log_text, { "api=LdrLoadDll", "requested=binkw32.dll" }), "Expected the deeper loader hook to stay disabled when only the LoadLibrary routing flag is enabled.");
     }
 
-    hook_set.Remove();
-    Expect(!hook_set.IsInstalled(), "Expected the loader hook set to report a removed state.");
+    {
+        std::error_code clear_error;
+        std::filesystem::remove(log_path, clear_error);
 
-    std::ifstream stream(log_path, std::ios::binary);
-    Expect(static_cast<bool>(stream), "Expected the routing hook test to create a log file.");
+        helen::ModuleLoadRoutingHookSet hook_set(routing_service, false, true);
 
-    const std::string log_text((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-    Expect(log_text.find("api=LoadLibraryW") != std::string::npos, "Expected the log file to capture the loader API name.");
-    Expect(log_text.find("requested=binkw32.dll") != std::string::npos, "Expected the log file to capture the normalized Bink DLL name.");
-    Expect(log_text.find("matched=bink alias") != std::string::npos, "Expected the log file to capture the Bink alias classification.");
-    Expect(log_text.find("redirect=<none>") != std::string::npos, "Expected the log file to preserve pass-through behavior in the log-only slice.");
+        Expect(hook_set.Install(), "Expected the loader hook set to install with only the LdrLoadDll routing flag enabled.");
+        Expect(hook_set.IsInstalled(), "Expected the loader hook set to report an installed state with only the LdrLoadDll routing flag enabled.");
+
+        {
+            const HMODULE module_handle = LoadLibraryW(L"binkw32.dll");
+            Expect(module_handle == nullptr, "Expected a missing Bink DLL request to fail after the LdrLoadDll detour logs it.");
+        }
+
+        hook_set.Remove();
+        Expect(!hook_set.IsInstalled(), "Expected the loader hook set to report a removed state after the LdrLoadDll-only run.");
+
+        std::ifstream stream(log_path, std::ios::binary);
+        Expect(static_cast<bool>(stream), "Expected the LdrLoadDll-only routing hook test to create a log file.");
+
+        const std::string log_text((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+        Expect(ContainsLogLineWithTokens(log_text, { "api=LdrLoadDll", "requested=binkw32.dll", "matched=bink alias" }), "Expected the LdrLoadDll-only log to capture the normalized Bink DLL name.");
+    }
+
+    {
+        helen::ModuleLoadRoutingHookSet hook_set(routing_service, false, false);
+        Expect(!hook_set.Install(), "Expected the loader hook set to reject a configuration that disables every loader path.");
+        Expect(!hook_set.IsInstalled(), "Expected the loader hook set to remain uninstalled when every loader path is disabled.");
+    }
 
     std::error_code cleanup_error;
     std::filesystem::remove(log_path, cleanup_error);

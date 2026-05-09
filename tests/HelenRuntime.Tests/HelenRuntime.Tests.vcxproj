@@ -104,6 +104,8 @@
     <ClCompile Include="TextureDumpSerializerTests.cpp" />
     <ClCompile Include="TextureReplacementAssetLoaderTests.cpp" />
     <ClCompile Include="VirtualFileServiceTests.cpp" />
+    <ClCompile Include="WindowBehaviorConfigTests.cpp" />
+    <ClCompile Include="WindowBehaviorHookSetTests.cpp" />
     <ClCompile Include="TestMain.cpp" />
   </ItemGroup>
   <ItemGroup>
