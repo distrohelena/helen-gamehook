@@ -38,6 +38,22 @@ function Test-PathWithinRoot {
         $fullPath.StartsWith($fullRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-ExistingDeploymentItem {
+    <# Read an exact directory entry, including a dangling link that Test-Path would hide. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$Path
+    )
+
+    try {
+        return Get-Item -LiteralPath (Get-SafeFullPath $Path) -Force -ErrorAction Stop
+    } catch {
+        if ($_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::ObjectNotFound) {
+            return $null
+        }
+        throw
+    }
+}
+
 function Assert-SafeDeploymentPath {
     <# Validate path scope and reject reparse points on every existing path component. #>
     param(
@@ -57,14 +73,14 @@ function Assert-SafeDeploymentPath {
     if ($null -eq $matchingRoot) {
         throw "Deployment path is outside its allowed root: $fullPath"
     }
-    if ($RequireExisting -and -not (Test-Path -LiteralPath $fullPath)) {
+    if ($RequireExisting -and $null -eq (Get-ExistingDeploymentItem -Path $fullPath)) {
         throw "Required deployment path was not found: $fullPath"
     }
 
     $current = $fullPath
     while ($true) {
-        if (Test-Path -LiteralPath $current) {
-            $item = Get-Item -LiteralPath $current -Force
+        $item = Get-ExistingDeploymentItem -Path $current
+        if ($null -ne $item) {
             if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
                 throw "Deployment path contains a reparse point: $current"
             }
@@ -140,10 +156,11 @@ function Assert-DeploymentArtifactKind {
         [Parameter(Mandatory = $true)] [string]$Context
     )
 
-    if (-not (Test-Path -LiteralPath $Path)) {
+    $existingItem = Get-ExistingDeploymentItem -Path $Path
+    if ($null -eq $existingItem) {
         return
     }
-    $isDirectory = Test-Path -LiteralPath $Path -PathType Container
+    $isDirectory = $existingItem.PSIsContainer
     if (($Kind -eq 'Directory' -and -not $isDirectory) -or ($Kind -eq 'File' -and $isDirectory)) {
         throw "$Context has the wrong filesystem type: $Path"
     }
@@ -242,7 +259,7 @@ function Get-RecoverySurvivorPaths {
         [Parameter(Mandatory = $true)] [string]$GameBin
     )
 
-    if (-not (Test-Path -LiteralPath $RecoveryRoot)) {
+    if ($null -eq (Get-ExistingDeploymentItem -Path $RecoveryRoot)) {
         return @()
     }
     Assert-SafeDeploymentTree -Root $RecoveryRoot -AllowedRoots @($GameBin) -RequireExisting | Out-Null
@@ -256,7 +273,7 @@ function Remove-EmptyDeploymentRecoveryRoot {
         [Parameter(Mandatory = $true)] [string]$GameBin
     )
 
-    if (-not (Test-Path -LiteralPath $RecoveryRoot)) {
+    if ($null -eq (Get-ExistingDeploymentItem -Path $RecoveryRoot)) {
         return
     }
     Assert-SafeDeploymentTree -Root $RecoveryRoot -AllowedRoots @($GameBin) -RequireExisting | Out-Null
@@ -272,11 +289,85 @@ function Remove-DeploymentStagingRoot {
         [Parameter(Mandatory = $true)] [string]$GameBin
     )
 
-    if (-not (Test-Path -LiteralPath $StagingRoot)) {
+    if ($null -eq (Get-ExistingDeploymentItem -Path $StagingRoot)) {
         return
     }
     Assert-SafeDeploymentTree -Root $StagingRoot -AllowedRoots @($GameBin) -RequireExisting | Out-Null
     Remove-Item -LiteralPath $StagingRoot -Recurse -Force
+}
+
+function Assert-DeploymentStagingRootAvailable {
+    <# Reject any pre-existing unique staging root before the deployment can mutate live files. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$StagingRoot,
+        [Parameter(Mandatory = $true)] [string]$GameBin
+    )
+
+    Assert-SafeDeploymentPath -Path $StagingRoot -AllowedRoots @($GameBin) | Out-Null
+    $existingItem = Get-ExistingDeploymentItem -Path $StagingRoot
+    if ($null -ne $existingItem) {
+        throw "Deployment staging root already exists and will not be reused: $StagingRoot"
+    }
+}
+
+function Initialize-DeploymentRoots {
+    <# Create validated same-volume staging and recovery roots, cleaning empty roots on setup failure. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$GameBin,
+        [Parameter(Mandatory = $true)] [string]$StagingRoot,
+        [Parameter(Mandatory = $true)] [string]$RecoveryRoot,
+        [Parameter(Mandatory = $true)] [string]$PackStagingDestination,
+        [Parameter(Mandatory = $true)] [string]$ConfigStagingPath,
+        [Parameter(Mandatory = $true)] [string]$PackParent,
+        [Parameter(Mandatory = $true)] [string]$ConfigParent,
+        [AllowEmptyString()] [string]$FailureInjection = ''
+    )
+
+    $stagingRootCreated = $false
+    $recoveryRootCreated = $false
+    try {
+        Assert-DeploymentStagingRootAvailable -StagingRoot $StagingRoot -GameBin $GameBin
+        foreach ($path in @($RecoveryRoot, $PackStagingDestination, $ConfigStagingPath, $PackParent, $ConfigParent)) {
+            Assert-SafeDeploymentPath -Path $path -AllowedRoots @($GameBin) | Out-Null
+        }
+        New-Item -ItemType Directory -Path $StagingRoot | Out-Null
+        $stagingRootCreated = $true
+        $existingRecoveryItem = Get-ExistingDeploymentItem -Path $RecoveryRoot
+        if ($null -eq $existingRecoveryItem) {
+            New-Item -ItemType Directory -Path $RecoveryRoot | Out-Null
+            $recoveryRootCreated = $true
+        } else {
+            Assert-SafeDeploymentTree -Root $RecoveryRoot -AllowedRoots @($GameBin) -RequireExisting | Out-Null
+            if (@(Get-ChildItem -LiteralPath $RecoveryRoot -Force).Count -ne 0) {
+                throw "Deployment recovery root is not empty: $RecoveryRoot"
+            }
+        }
+        Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterRecoveryRootCreation'
+        New-Item -ItemType Directory -Force -Path $PackStagingDestination, (Split-Path -Parent $ConfigStagingPath), $PackParent, $ConfigParent | Out-Null
+        Assert-SafeDeploymentTree -Root $StagingRoot -AllowedRoots @($GameBin) -RequireExisting | Out-Null
+        Assert-SafeDeploymentPath -Path $RecoveryRoot -AllowedRoots @($GameBin) -RequireExisting | Out-Null
+        return [pscustomobject]@{
+            StagingRootCreated = $stagingRootCreated
+            RecoveryRootCreated = $recoveryRootCreated
+        }
+    } catch {
+        $setupFailure = $_
+        if ($recoveryRootCreated) {
+            try {
+                Remove-EmptyDeploymentRecoveryRoot -RecoveryRoot $RecoveryRoot -GameBin $GameBin
+            } catch {
+                Write-Warning "Deployment setup cleanup could not remove recovery root after '$($setupFailure.Exception.Message)': $($_.Exception.Message)"
+            }
+        }
+        if ($stagingRootCreated) {
+            try {
+                Remove-DeploymentStagingRoot -StagingRoot $StagingRoot -GameBin $GameBin
+            } catch {
+                Write-Warning "Deployment setup cleanup could not remove staging root after '$($setupFailure.Exception.Message)': $($_.Exception.Message)"
+            }
+        }
+        throw $setupFailure
+    }
 }
 
 function Invoke-DeploymentFailureInjection {
@@ -318,14 +409,14 @@ function Restore-AtomicGraphicsDeployment {
         Assert-SafeDeploymentPath -Path $path -AllowedRoots @($GameBin) | Out-Null
     }
 
-    if ($PackWasInstalled -and (Test-Path -LiteralPath $LivePackRoot)) { Remove-Item -LiteralPath $LivePackRoot -Recurse -Force }
-    if ($PackWasBackedUp -and (Test-Path -LiteralPath $PackBackupRoot)) { Move-Item -LiteralPath $PackBackupRoot -Destination $LivePackRoot }
-    if ($ConfigWasInstalled -and (Test-Path -LiteralPath $LiveConfigPath)) { Remove-Item -LiteralPath $LiveConfigPath -Force }
-    if ($ConfigWasBackedUp -and (Test-Path -LiteralPath $ConfigBackupPath)) { Move-Item -LiteralPath $ConfigBackupPath -Destination $LiveConfigPath }
-    if ($HelenGameHookWasInstalled -and (Test-Path -LiteralPath $LiveHelenGameHookPath)) { Remove-Item -LiteralPath $LiveHelenGameHookPath -Force }
-    if ($HelenGameHookWasBackedUp -and (Test-Path -LiteralPath $HelenGameHookBackupPath)) { Move-Item -LiteralPath $HelenGameHookBackupPath -Destination $LiveHelenGameHookPath }
-    if ($ProxyWasInstalled -and (Test-Path -LiteralPath $LiveProxyPath)) { Remove-Item -LiteralPath $LiveProxyPath -Force }
-    if ($ProxyWasBackedUp -and (Test-Path -LiteralPath $ProxyBackupPath)) { Move-Item -LiteralPath $ProxyBackupPath -Destination $LiveProxyPath }
+    if ($PackWasInstalled -and $null -ne (Get-ExistingDeploymentItem -Path $LivePackRoot)) { Remove-Item -LiteralPath $LivePackRoot -Recurse -Force }
+    if ($PackWasBackedUp -and $null -ne (Get-ExistingDeploymentItem -Path $PackBackupRoot)) { Move-Item -LiteralPath $PackBackupRoot -Destination $LivePackRoot }
+    if ($ConfigWasInstalled -and $null -ne (Get-ExistingDeploymentItem -Path $LiveConfigPath)) { Remove-Item -LiteralPath $LiveConfigPath -Force }
+    if ($ConfigWasBackedUp -and $null -ne (Get-ExistingDeploymentItem -Path $ConfigBackupPath)) { Move-Item -LiteralPath $ConfigBackupPath -Destination $LiveConfigPath }
+    if ($HelenGameHookWasInstalled -and $null -ne (Get-ExistingDeploymentItem -Path $LiveHelenGameHookPath)) { Remove-Item -LiteralPath $LiveHelenGameHookPath -Force }
+    if ($HelenGameHookWasBackedUp -and $null -ne (Get-ExistingDeploymentItem -Path $HelenGameHookBackupPath)) { Move-Item -LiteralPath $HelenGameHookBackupPath -Destination $LiveHelenGameHookPath }
+    if ($ProxyWasInstalled -and $null -ne (Get-ExistingDeploymentItem -Path $LiveProxyPath)) { Remove-Item -LiteralPath $LiveProxyPath -Force }
+    if ($ProxyWasBackedUp -and $null -ne (Get-ExistingDeploymentItem -Path $ProxyBackupPath)) { Move-Item -LiteralPath $ProxyBackupPath -Destination $LiveProxyPath }
     Remove-EmptyDeploymentRecoveryRoot -RecoveryRoot $RecoveryRoot -GameBin $GameBin
 }
 
@@ -368,7 +459,7 @@ function Invoke-AtomicGraphicsDeployment {
     Assert-DeploymentArtifactKind -Path $StagedHelenGameHookPath -Kind File -Context 'Staged HelenGameHook.dll'
     Assert-DeploymentArtifactKind -Path $StagedProxyPath -Kind File -Context 'Staged dinput8.dll'
 
-    if (Test-Path -LiteralPath $RecoveryRoot) {
+    if ($null -ne (Get-ExistingDeploymentItem -Path $RecoveryRoot)) {
         Assert-SafeDeploymentTree -Root $RecoveryRoot -AllowedRoots @($gameBinPath) -RequireExisting | Out-Null
         if (@(Get-ChildItem -LiteralPath $RecoveryRoot -Force).Count -ne 0) { throw "Graphics deployment recovery root is not empty: $RecoveryRoot" }
     } else {
@@ -379,7 +470,7 @@ function Invoke-AtomicGraphicsDeployment {
     foreach ($path in @($LivePackRoot, $LiveConfigPath, $LiveHelenGameHookPath, $LiveProxyPath)) {
         Assert-SafeDeploymentPath -Path $path -AllowedRoots @($gameBinPath) | Out-Null
     }
-    if (Test-Path -LiteralPath $LivePackRoot) { Assert-SafeDeploymentTree -Root $LivePackRoot -AllowedRoots @($gameBinPath) -RequireExisting | Out-Null }
+    if ($null -ne (Get-ExistingDeploymentItem -Path $LivePackRoot)) { Assert-SafeDeploymentTree -Root $LivePackRoot -AllowedRoots @($gameBinPath) -RequireExisting | Out-Null }
     Assert-DeploymentArtifactKind -Path $LivePackRoot -Kind Directory -Context 'Installed graphics pack'
     Assert-DeploymentArtifactKind -Path $LiveConfigPath -Kind File -Context 'Installed packs.json'
     Assert-DeploymentArtifactKind -Path $LiveHelenGameHookPath -Kind File -Context 'Installed HelenGameHook.dll'
@@ -396,13 +487,13 @@ function Invoke-AtomicGraphicsDeployment {
     $publicationCommitted = $false
 
     try {
-        if (Test-Path -LiteralPath $LivePackRoot) { Move-Item -LiteralPath $LivePackRoot -Destination $PackBackupRoot; $packWasBackedUp = $true }
+        if ($null -ne (Get-ExistingDeploymentItem -Path $LivePackRoot)) { Move-Item -LiteralPath $LivePackRoot -Destination $PackBackupRoot; $packWasBackedUp = $true }
         Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterPackBackup'
-        if (Test-Path -LiteralPath $LiveConfigPath) { Move-Item -LiteralPath $LiveConfigPath -Destination $ConfigBackupPath; $configWasBackedUp = $true }
+        if ($null -ne (Get-ExistingDeploymentItem -Path $LiveConfigPath)) { Move-Item -LiteralPath $LiveConfigPath -Destination $ConfigBackupPath; $configWasBackedUp = $true }
         Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterConfigBackup'
-        if (Test-Path -LiteralPath $LiveHelenGameHookPath) { Move-Item -LiteralPath $LiveHelenGameHookPath -Destination $HelenGameHookBackupPath; $helenGameHookWasBackedUp = $true }
+        if ($null -ne (Get-ExistingDeploymentItem -Path $LiveHelenGameHookPath)) { Move-Item -LiteralPath $LiveHelenGameHookPath -Destination $HelenGameHookBackupPath; $helenGameHookWasBackedUp = $true }
         Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterHelenGameHookBackup'
-        if (Test-Path -LiteralPath $LiveProxyPath) { Move-Item -LiteralPath $LiveProxyPath -Destination $ProxyBackupPath; $proxyWasBackedUp = $true }
+        if ($null -ne (Get-ExistingDeploymentItem -Path $LiveProxyPath)) { Move-Item -LiteralPath $LiveProxyPath -Destination $ProxyBackupPath; $proxyWasBackedUp = $true }
         Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterProxyBackup'
 
         Move-Item -LiteralPath $StagedPackRoot -Destination $LivePackRoot; $packWasInstalled = $true
@@ -426,7 +517,7 @@ function Invoke-AtomicGraphicsDeployment {
         )
         foreach ($operation in $cleanupOperations) {
             if (-not $operation.WasBackedUp) { continue }
-            if (-not (Test-Path -LiteralPath $operation.Path)) { throw "Recovery backup disappeared before cleanup: $($operation.Path)" }
+            if ($null -eq (Get-ExistingDeploymentItem -Path $operation.Path)) { throw "Recovery backup disappeared before cleanup: $($operation.Path)" }
             Assert-SafeDeploymentPath -Path $operation.Path -AllowedRoots @($gameBinPath) -RequireExisting | Out-Null
             if ($operation.Recursive) { Assert-SafeDeploymentTree -Root $operation.Path -AllowedRoots @($gameBinPath) -RequireExisting | Out-Null; Remove-Item -LiteralPath $operation.Path -Recurse -Force } else { Remove-Item -LiteralPath $operation.Path -Force }
             Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point $operation.Point
@@ -523,12 +614,12 @@ Get-Process ShippingPC-BmGame -ErrorAction SilentlyContinue | Stop-Process -Forc
 Start-Sleep -Seconds 2
 
 $primaryFailure = $null
+$stagingRootCreated = $false
+$recoveryRootCreated = $false
 try {
-    Assert-SafeDeploymentPath -Path $DeploymentStagingRoot -AllowedRoots @($GameBin) | Out-Null
-    Assert-SafeDeploymentPath -Path $DeploymentRecoveryRoot -AllowedRoots @($GameBin) | Out-Null
-    Assert-SafeDeploymentPath -Path $PackParent -AllowedRoots @($GameBin) | Out-Null
-    Assert-SafeDeploymentPath -Path $ConfigParent -AllowedRoots @($GameBin) | Out-Null
-    New-Item -ItemType Directory -Force -Path $DeploymentStagingRoot, $PackStagingDestination, (Split-Path -Parent $ConfigStagingPath), $DeploymentRecoveryRoot, $PackParent, $ConfigParent | Out-Null
+    $deploymentRoots = Initialize-DeploymentRoots -GameBin $GameBin -StagingRoot $DeploymentStagingRoot -RecoveryRoot $DeploymentRecoveryRoot -PackStagingDestination $PackStagingDestination -ConfigStagingPath $ConfigStagingPath -PackParent $PackParent -ConfigParent $ConfigParent
+    $stagingRootCreated = $deploymentRoots.StagingRootCreated
+    $recoveryRootCreated = $deploymentRoots.RecoveryRootCreated
     Assert-SafeDeploymentPath -Path $PackParent -AllowedRoots @($GameBin) -RequireExisting | Out-Null
     Assert-SafeDeploymentPath -Path $ConfigParent -AllowedRoots @($GameBin) -RequireExisting | Out-Null
     Assert-SafeDeploymentTree -Root $DeploymentStagingRoot -AllowedRoots @($GameBin) -RequireExisting | Out-Null
@@ -576,11 +667,22 @@ try {
     $primaryFailure = $_
     throw $primaryFailure
 } finally {
-    if (Test-Path -LiteralPath $DeploymentStagingRoot) {
+    if ($stagingRootCreated) {
         try {
-            Remove-DeploymentStagingRoot -StagingRoot $DeploymentStagingRoot -GameBin $GameBin
+            if ($null -ne (Get-ExistingDeploymentItem -Path $DeploymentStagingRoot)) {
+                Remove-DeploymentStagingRoot -StagingRoot $DeploymentStagingRoot -GameBin $GameBin
+            }
         } catch {
             if ($null -ne $primaryFailure) { Write-Warning "Graphics deployment staging cleanup failed after the primary failure '$($primaryFailure.Exception.Message)': $($_.Exception.Message)" } else { throw "Graphics deployment staging cleanup failed: $($_.Exception.Message)" }
+        }
+    }
+    if ($recoveryRootCreated) {
+        try {
+            if ($null -ne (Get-ExistingDeploymentItem -Path $DeploymentRecoveryRoot)) {
+                Remove-EmptyDeploymentRecoveryRoot -RecoveryRoot $DeploymentRecoveryRoot -GameBin $GameBin
+            }
+        } catch {
+            if ($null -ne $primaryFailure) { Write-Warning "Graphics deployment recovery cleanup failed after the primary failure '$($primaryFailure.Exception.Message)': $($_.Exception.Message)" } else { throw "Graphics deployment recovery cleanup failed: $($_.Exception.Message)" }
         }
     }
 }

@@ -146,6 +146,10 @@ foreach ($RequiredToken in @(
     'Move-Item -LiteralPath',
     'Assert-SafeDeploymentPath',
     'Get-SafeDeploymentItems',
+    'Get-ExistingDeploymentItem',
+    'Assert-DeploymentStagingRootAvailable',
+    'Initialize-DeploymentRoots',
+    'AfterRecoveryRootCreation',
     'Get-DirectorySnapshot',
     'Remove-DeploymentStagingRoot',
     'GetPathRoot',
@@ -199,6 +203,54 @@ try {
     Reset-DeploymentFixture -LivePackRoot $LivePackRoot -LiveConfigPath $LiveConfigPath -LiveHelenGameHookPath $LiveHelenGameHookPath -LiveProxyPath $LiveProxyPath -SubtitlePackRoot $SubtitlePackRoot -StagingRoot $StagingRoot -RecoveryRoot $RecoveryRoot -StagedPackRoot $StagedPackRoot -StagedConfigPath $StagedConfigPath -StagedHelenGameHookPath $StagedHelenGameHookPath -StagedProxyPath $StagedProxyPath -IncludeExistingGraphicsPack $true
     $ExpectedHelenGameHookHash = (Get-FileHash -LiteralPath $StagedHelenGameHookPath -Algorithm SHA256).Hash
     $ExpectedProxyHash = (Get-FileHash -LiteralPath $StagedProxyPath -Algorithm SHA256).Hash
+
+    $StaleStagingRoot = Join-Path $GameBin '.helengamehook-staging-stale'
+    New-Item -ItemType Directory -Force -Path (Join-Path $StaleStagingRoot 'nested') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $StaleStagingRoot 'normal.txt'), 'stale')
+    $hiddenStalePath = Join-Path (Join-Path $StaleStagingRoot 'nested') 'hidden.txt'
+    [IO.File]::WriteAllText($hiddenStalePath, 'stale-hidden')
+    (Get-Item -LiteralPath $hiddenStalePath -Force).Attributes = [IO.FileAttributes]::Hidden
+    $staleStagingFailureObserved = $false
+    $staleStagingFailureMessage = ''
+    try {
+        Initialize-DeploymentRoots -GameBin $GameBin -StagingRoot $StaleStagingRoot -RecoveryRoot (Join-Path $GameBin '.helengamehook-recovery-stale') -PackStagingDestination (Join-Path $StaleStagingRoot 'pack') -ConfigStagingPath (Join-Path (Join-Path $StaleStagingRoot 'config') 'packs.json') -PackParent (Split-Path -Parent $LivePackRoot) -ConfigParent (Split-Path -Parent $LiveConfigPath) | Out-Null
+    } catch {
+        $staleStagingFailureObserved = $true
+        $staleStagingFailureMessage = $_.Exception.Message
+    }
+    if (-not $staleStagingFailureObserved -or $staleStagingFailureMessage -notmatch 'already exists') { throw 'Pre-existing staging root was not rejected.' }
+    if ((Get-Content -LiteralPath (Join-Path $LivePackRoot 'state.txt') -Raw) -cne 'old-pack') { throw 'Pre-existing staging root check changed the live graphics pack.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $StaleStagingRoot 'normal.txt')) -or -not (Test-Path -LiteralPath (Join-Path (Join-Path $StaleStagingRoot 'nested') 'hidden.txt'))) { throw 'Pre-existing staging root check removed stale files.' }
+    Remove-Item -LiteralPath $StaleStagingRoot -Recurse -Force
+
+    New-Item -ItemType Directory -Force -Path $StaleStagingRoot | Out-Null
+    $emptyStagingFailureObserved = $false
+    $emptyStagingFailureMessage = ''
+    try {
+        Initialize-DeploymentRoots -GameBin $GameBin -StagingRoot $StaleStagingRoot -RecoveryRoot (Join-Path $GameBin '.helengamehook-recovery-empty-stale') -PackStagingDestination (Join-Path $StaleStagingRoot 'pack') -ConfigStagingPath (Join-Path (Join-Path $StaleStagingRoot 'config') 'packs.json') -PackParent (Split-Path -Parent $LivePackRoot) -ConfigParent (Split-Path -Parent $LiveConfigPath) | Out-Null
+    } catch {
+        $emptyStagingFailureObserved = $true
+        $emptyStagingFailureMessage = $_.Exception.Message
+    }
+    if (-not $emptyStagingFailureObserved -or $emptyStagingFailureMessage -notmatch 'already exists') { throw 'Empty pre-existing staging root was not rejected.' }
+    if (-not (Test-Path -LiteralPath $StaleStagingRoot -PathType Container)) { throw 'Empty pre-existing staging root was removed.' }
+    Remove-Item -LiteralPath $StaleStagingRoot -Recurse -Force
+
+    $SetupFailureStagingRoot = Join-Path $GameBin '.helengamehook-staging-setup-failure'
+    $SetupFailureRecoveryRoot = Join-Path $GameBin '.helengamehook-recovery-setup-failure'
+    $SetupFailurePackStagingRoot = Join-Path $SetupFailureStagingRoot 'pack'
+    $SetupFailureConfigStagingPath = Join-Path (Join-Path $SetupFailureStagingRoot 'config') 'packs.json'
+    $SetupFailureObserved = $false
+    $SetupFailureMessage = ''
+    try {
+        Initialize-DeploymentRoots -GameBin $GameBin -StagingRoot $SetupFailureStagingRoot -RecoveryRoot $SetupFailureRecoveryRoot -PackStagingDestination $SetupFailurePackStagingRoot -ConfigStagingPath $SetupFailureConfigStagingPath -PackParent (Split-Path -Parent $LivePackRoot) -ConfigParent (Split-Path -Parent $LiveConfigPath) -FailureInjection 'AfterRecoveryRootCreation' | Out-Null
+    } catch {
+        $SetupFailureObserved = $true
+        $SetupFailureMessage = $_.Exception.Message
+    }
+    if (-not $SetupFailureObserved -or $SetupFailureMessage -notmatch 'AfterRecoveryRootCreation') { throw 'Setup failure injection did not preserve the primary error.' }
+    if (Test-Path -LiteralPath $SetupFailureStagingRoot) { throw 'Setup failure left its staging root behind.' }
+    if (Test-Path -LiteralPath $SetupFailureRecoveryRoot) { throw 'Setup failure left an empty recovery root behind.' }
 
     $VerifyPublication = {
         param($LivePackPath, $LiveConfigPathForVerification, $LiveHelenPath, $LiveProxyPath)
@@ -273,10 +325,11 @@ try {
     if (Test-Path -LiteralPath $OuterStagingRoot) { throw 'Outer staging cleanup did not remove staging root.' }
     if (-not (Test-Path -LiteralPath (Join-Path $OuterRecoveryRoot 'survivor.txt'))) { throw 'Outer staging cleanup removed recovery state.' }
 
-    $ReparseRoot = Join-Path $TestRoot 'reparse'
-    $ReparseTarget = Join-Path $ReparseRoot 'target'
-    $ReparseLink = Join-Path $ReparseRoot 'link'
-    New-Item -ItemType Directory -Force -Path $ReparseTarget | Out-Null
+    $ReparseTarget = Join-Path $TestRoot 'reparse-target'
+    $ReparseLink = Join-Path $GameBin 'reparse-link'
+    $ReparseCleanupStagingRoot = Join-Path $GameBin '.reparse-cleanup-staging'
+    $ReparseCleanupTarget = Join-Path $TestRoot 'reparse-cleanup-target'
+    New-Item -ItemType Directory -Force -Path $ReparseTarget, $ReparseCleanupStagingRoot, $ReparseCleanupTarget | Out-Null
     $reparseCreated = $false
     try {
         New-Item -ItemType Junction -Path $ReparseLink -Target $ReparseTarget -ErrorAction Stop | Out-Null
@@ -290,12 +343,34 @@ try {
         }
     }
     if (-not $reparseCreated) { throw 'Required reparse-point fixture was not created.' }
+    $reparseItem = Get-Item -LiteralPath $ReparseLink -Force
+    if (($reparseItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { throw 'Reparse fixture does not expose the ReparsePoint attribute.' }
+    Remove-Item -LiteralPath $ReparseTarget -Recurse -Force
+    $reparseCandidate = Join-Path $ReparseLink 'payload.txt'
+    if (-not (Test-PathWithinRoot -Path $reparseCandidate -Root $GameBin)) { throw 'Reparse candidate is not lexically beneath GameBin.' }
     $reparseRejected = $false
-    try { Assert-SafeDeploymentPath -Path $ReparseLink -AllowedRoots @($GameBin) -RequireExisting } catch { $reparseRejected = $true }
-    if (-not $reparseRejected) { throw 'Safe path validator accepted a reparse-point target.' }
-    $reparseDescendantRejected = $false
-    try { Assert-SafeDeploymentPath -Path (Join-Path $ReparseLink 'payload.txt') -AllowedRoots @($GameBin) } catch { $reparseDescendantRejected = $true }
-    if (-not $reparseDescendantRejected) { throw 'Safe path validator accepted a path through a reparse-point ancestor.' }
+    $reparseMessage = ''
+    try { Assert-SafeDeploymentPath -Path $reparseCandidate -AllowedRoots @($GameBin) } catch { $reparseRejected = $true; $reparseMessage = $_.Exception.Message }
+    if (-not $reparseRejected -or $reparseMessage -notmatch 'reparse point') { throw "Safe path validator did not reject the in-root dangling reparse traversal: $reparseMessage" }
+    $reparseCleanupLink = Join-Path $ReparseCleanupStagingRoot 'reparse-link'
+    try {
+        New-Item -ItemType Junction -Path $reparseCleanupLink -Target $ReparseCleanupTarget -ErrorAction Stop | Out-Null
+    } catch {
+        try {
+            New-Item -ItemType SymbolicLink -Path $reparseCleanupLink -Target $ReparseCleanupTarget -ErrorAction Stop | Out-Null
+        } catch {
+            throw "Unable to evaluate recursive reparse cleanup fixture: $($_.Exception.Message)"
+        }
+    }
+    $reparseCleanupItem = Get-Item -LiteralPath $reparseCleanupLink -Force
+    if (($reparseCleanupItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { throw 'Recursive reparse fixture does not expose the ReparsePoint attribute.' }
+    $reparseCleanupRejected = $false
+    $reparseCleanupMessage = ''
+    try { Remove-DeploymentStagingRoot -StagingRoot $ReparseCleanupStagingRoot -GameBin $GameBin } catch { $reparseCleanupRejected = $true; $reparseCleanupMessage = $_.Exception.Message }
+    if (-not $reparseCleanupRejected -or $reparseCleanupMessage -notmatch 'reparse point') { throw "Recursive staging cleanup accepted a reparse point: $reparseCleanupMessage" }
+    Remove-Item -LiteralPath $reparseCleanupLink -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ReparseCleanupStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ReparseLink -Force -ErrorAction SilentlyContinue
 
     Write-Output 'PASS'
 }
