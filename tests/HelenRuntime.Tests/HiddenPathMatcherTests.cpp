@@ -26,6 +26,7 @@ void RunHiddenPathMatcherTests()
 {
     helen::HiddenPathMatcher matcher(
         std::filesystem::path(L"D:/steam/steamapps/common/Batman Arkham Asylum GOTY"),
+        std::filesystem::path(L"D:/steam/steamapps/common/Batman Arkham Asylum GOTY/Binaries"),
         {
             "bmgame/movies/legal.bik",
             "bmgame/movies/nvidia.bik"
@@ -34,6 +35,17 @@ void RunHiddenPathMatcherTests()
     Expect(
         matcher.ShouldHidePath(std::filesystem::path(L"D:\\steam\\steamapps\\common\\Batman Arkham Asylum GOTY\\BmGame\\Movies\\Legal.bik")),
         "Expected absolute Legal.bik path to match.");
+    Expect(
+        matcher.ShouldHidePath(std::filesystem::path(
+            L"D:\\steam\\steamapps\\common\\Batman Arkham Asylum GOTY\\Binaries\\..\\BmGame\\Movies\\Legal.bik")),
+        "Expected the observed Binaries-relative absolute Legal.bik path to match.");
+    Expect(
+        !matcher.ShouldHidePath(std::filesystem::path(
+            L"C:\\Users\\Helena\\Documents\\Square Enix\\Batman Arkham Asylum GOTY\\Binaries\\..\\BmGame\\Movies\\Legal.bik")),
+        "Expected the Documents fallback movie path to remain visible.");
+    Expect(
+        matcher.ShouldHidePath(std::filesystem::path(L"..\\BmGame\\Movies\\Legal.bik")),
+        "Expected a Binaries-relative Legal.bik request to match.");
     Expect(
         matcher.ShouldHidePath(std::filesystem::path(L"BmGame/Movies/nvidia.bik")),
         "Expected relative nvidia.bik path to match.");

@@ -31,12 +31,16 @@ namespace
 
 namespace helen
 {
-    HiddenPathMatcher::HiddenPathMatcher(std::filesystem::path game_root, std::vector<std::string> hidden_paths)
-        : game_root_(std::filesystem::weakly_canonical(std::move(game_root)))
+    HiddenPathMatcher::HiddenPathMatcher(
+        std::filesystem::path game_root,
+        std::filesystem::path request_base_directory,
+        std::vector<std::string> hidden_paths)
+        : game_root_(std::filesystem::weakly_canonical(std::move(game_root))),
+          request_base_directory_(std::filesystem::weakly_canonical(std::move(request_base_directory)))
     {
-        if (game_root_.empty())
+        if (game_root_.empty() || request_base_directory_.empty())
         {
-            throw std::invalid_argument("HiddenPathMatcher requires a non-empty game root.");
+            throw std::invalid_argument("HiddenPathMatcher requires non-empty game and request roots.");
         }
 
         for (const std::string& hidden_path : hidden_paths)
@@ -48,12 +52,25 @@ namespace helen
     bool HiddenPathMatcher::ShouldHidePath(const std::filesystem::path& candidate_path) const
     {
         const std::wstring normalized = NormalizeToRelativeGamePath(candidate_path);
-        return std::find(hidden_paths_.begin(), hidden_paths_.end(), normalized) != hidden_paths_.end();
+        if (std::find(hidden_paths_.begin(), hidden_paths_.end(), normalized) != hidden_paths_.end())
+        {
+            return true;
+        }
+
+        if (!candidate_path.is_relative())
+        {
+            return false;
+        }
+
+        const std::filesystem::path resolved_candidate =
+            (request_base_directory_ / candidate_path).lexically_normal();
+        const std::wstring resolved = NormalizeToRelativeGamePath(resolved_candidate);
+        return std::find(hidden_paths_.begin(), hidden_paths_.end(), resolved) != hidden_paths_.end();
     }
 
     std::wstring HiddenPathMatcher::NormalizeToRelativeGamePath(const std::filesystem::path& candidate_path) const
     {
-        std::filesystem::path normalized_candidate = candidate_path;
+        std::filesystem::path normalized_candidate = candidate_path.lexically_normal();
         if (normalized_candidate.is_absolute())
         {
             normalized_candidate = normalized_candidate.lexically_relative(game_root_);

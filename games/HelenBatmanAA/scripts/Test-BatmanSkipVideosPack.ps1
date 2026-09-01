@@ -25,7 +25,20 @@ $ConfigJson = Get-Content -LiteralPath $ConfigJsonPath -Raw | ConvertFrom-Json
 
 if ($PackJson.id -ne 'batman-aa-skip-videos') { throw 'Pack id mismatch.' }
 if ($BuildJson.id -ne 'steam-goty-1.0') { throw 'Build id mismatch.' }
-if (@($BuildJson.missingPaths).Count -ne 5) { throw 'Expected 5 hidden startup videos.' }
+$ExpectedMissingPaths = @(
+    'BmGame/Movies/baa_logo_run_v5_h264.bik',
+    'BmGame/Movies/Legal.bik',
+    'BmGame/Movies/Legalus.bik',
+    'BmGame/Movies/nvidia.bik',
+    'BmGame/Movies/utlogo.bik'
+)
+$ActualMissingPaths = @($BuildJson.missingPaths)
+if ($ActualMissingPaths.Count -ne $ExpectedMissingPaths.Count) { throw 'Expected exactly five hidden startup videos.' }
+for ($Index = 0; $Index -lt $ExpectedMissingPaths.Count; $Index++) {
+    if ($ActualMissingPaths[$Index] -ne $ExpectedMissingPaths[$Index]) {
+        throw "Unexpected hidden startup video at index ${Index}: $($ActualMissingPaths[$Index])"
+    }
+}
 if ($BuildJson.match.fileSize -ne 38758728) { throw 'Executable match file size mismatch.' }
 if ($BuildJson.match.sha256 -ne '4DAC1F5E2AC6710B7378FDCE74601F616F4753E3756CB5FDA63C7519CC2EB028') { throw 'Executable match hash mismatch.' }
 

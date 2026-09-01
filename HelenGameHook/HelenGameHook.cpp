@@ -737,6 +737,7 @@ namespace
 
         g_file_hooks = std::make_unique<helen::FileApiHookSet>(
             *g_virtual_files,
+            layout.GameRoot.parent_path(),
             layout.GameRoot,
             active_pack_set.MissingPaths);
         helen::Log(L"[runtime] active-pack init file api hook set created.");

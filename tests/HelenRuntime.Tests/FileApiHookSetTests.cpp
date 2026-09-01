@@ -26,6 +26,7 @@ void RunFileApiHookSetTests()
 {
     helen::HiddenPathMatcher matcher(
         std::filesystem::path(L"D:/steam/steamapps/common/Batman Arkham Asylum GOTY"),
+        std::filesystem::path(L"D:/steam/steamapps/common/Batman Arkham Asylum GOTY/Binaries"),
         { "bmgame/movies/legal.bik" });
 
     Expect(

@@ -32,12 +32,14 @@ namespace helen
         /**
          * @brief Binds the hook set to the virtual file service and the active hidden-path declarations.
          * @param virtual_files Service that owns the RAM-backed replacement payloads.
-         * @param game_root Absolute game installation root used to relativize hidden absolute paths.
+         * @param game_installation_root Absolute game installation root used to relativize hidden paths.
+         * @param request_base_directory Absolute directory used to resolve relative file requests.
          * @param hidden_paths Canonical relative paths that should be reported as missing.
          */
         FileApiHookSet(
             VirtualFileService& virtual_files,
-            std::filesystem::path game_root,
+            std::filesystem::path game_installation_root,
+            std::filesystem::path request_base_directory,
             std::vector<std::string> hidden_paths);
 
         /**

@@ -5,6 +5,7 @@
 
 #include <HelenHook/FileApiHookSet.h>
 
+#include <HelenHook/Log.h>
 #include <HelenHook/Memory.h>
 
 namespace
@@ -380,10 +381,14 @@ namespace helen
 
     FileApiHookSet::FileApiHookSet(
         VirtualFileService& virtual_files,
-        std::filesystem::path game_root,
+        std::filesystem::path game_installation_root,
+        std::filesystem::path request_base_directory,
         std::vector<std::string> hidden_paths)
         : virtual_files_(virtual_files)
-        , hidden_path_matcher_(std::move(game_root), std::move(hidden_paths))
+        , hidden_path_matcher_(
+            std::move(game_installation_root),
+            std::move(request_base_directory),
+            std::move(hidden_paths))
     {
     }
 
@@ -550,10 +555,16 @@ namespace helen
             return INVALID_HANDLE_VALUE;
         }
 
-        if (lpFileName != nullptr && active->hidden_path_matcher_.ShouldHidePath(std::filesystem::path(lpFileName)))
+        if (lpFileName != nullptr)
         {
-            SetLastError(ERROR_FILE_NOT_FOUND);
-            return INVALID_HANDLE_VALUE;
+            const std::filesystem::path requested_path(lpFileName);
+            const bool should_hide = active->hidden_path_matcher_.ShouldHidePath(requested_path);
+            if (should_hide)
+            {
+                helen::Logf(L"[file] suppressed CreateFileW path=%ls", lpFileName);
+                SetLastError(ERROR_FILE_NOT_FOUND);
+                return INVALID_HANDLE_VALUE;
+            }
         }
 
         if (!CanVirtualizeOpen(dwDesiredAccess, dwCreationDisposition, dwFlagsAndAttributes))
@@ -606,10 +617,15 @@ namespace helen
         if (lpFileName != nullptr)
         {
             const std::optional<std::filesystem::path> hidden_path = TryConvertAnsiPath(lpFileName);
-            if (hidden_path.has_value() && active->hidden_path_matcher_.ShouldHidePath(*hidden_path))
+            if (hidden_path.has_value())
             {
-                SetLastError(ERROR_FILE_NOT_FOUND);
-                return INVALID_HANDLE_VALUE;
+                const bool should_hide = active->hidden_path_matcher_.ShouldHidePath(*hidden_path);
+                if (should_hide)
+                {
+                    helen::Logf(L"[file] suppressed CreateFileA path=%ls", hidden_path->c_str());
+                    SetLastError(ERROR_FILE_NOT_FOUND);
+                    return INVALID_HANDLE_VALUE;
+                }
             }
         }
 

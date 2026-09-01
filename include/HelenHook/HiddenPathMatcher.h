@@ -16,11 +16,15 @@ namespace helen
     {
     public:
         /**
-         * @brief Creates one hidden-path matcher bound to a concrete game installation root.
-         * @param game_root Absolute game installation root used to relativize incoming absolute paths.
+         * @brief Creates one matcher with separate installation and relative-request roots.
+         * @param game_root Absolute installation root used to relativize absolute candidates.
+         * @param request_base_directory Absolute directory used to resolve candidates containing parent traversal.
          * @param hidden_paths Canonical relative paths that should be treated as hidden.
          */
-        HiddenPathMatcher(std::filesystem::path game_root, std::vector<std::string> hidden_paths);
+        HiddenPathMatcher(
+            std::filesystem::path game_root,
+            std::filesystem::path request_base_directory,
+            std::vector<std::string> hidden_paths);
 
         /**
          * @brief Returns whether one candidate path should be treated as hidden.
@@ -43,6 +47,9 @@ namespace helen
     private:
         /** @brief Canonical absolute game installation root used to relativize incoming absolute paths. */
         std::filesystem::path game_root_;
+
+        /** @brief Absolute directory used to resolve relative runtime requests after direct matching. */
+        std::filesystem::path request_base_directory_;
 
         /** @brief Lowercased slash-normalized hidden paths stored as relative wide strings. */
         std::vector<std::wstring> hidden_paths_;
