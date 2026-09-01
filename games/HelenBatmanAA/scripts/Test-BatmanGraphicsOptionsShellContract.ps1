@@ -91,6 +91,8 @@ $ShellMethodChecks = @(
     @{ Text = $AssetBuilderText; Signature = 'public static void BuildShell(GraphicsOptionsShellBuildPaths paths)'; Context = 'AssetBuilder BuildShell' },
     @{ Text = $AssetBuilderText; Signature = 'private static void ValidateShellInputs(GraphicsOptionsShellBuildPaths paths)'; Context = 'AssetBuilder ValidateShellInputs' },
     @{ Text = $AssetBuilderText; Signature = 'private static void ValidateShellOutputPaths(GraphicsOptionsShellBuildPaths paths)'; Context = 'AssetBuilder ValidateShellOutputPaths' },
+    @{ Text = $AssetBuilderText; Signature = 'private static void ValidateShellOutputDomains(string outputDirectory, string rootPath)'; Context = 'AssetBuilder ValidateShellOutputDomains' },
+    @{ Text = $AssetBuilderText; Signature = 'private static void ValidateShellOutputPathComponents(string outputDirectory, string allowedRoot)'; Context = 'AssetBuilder ValidateShellOutputPathComponents' },
     @{ Text = $AssetBuilderText; Signature = 'private static void PatchFrontendShellScripts(string scriptsRoot)'; Context = 'AssetBuilder PatchFrontendShellScripts' },
     @{ Text = $AssetBuilderText; Signature = 'private static void WriteGraphicsShellRowClipActions(string scriptsRoot)'; Context = 'AssetBuilder WriteGraphicsShellRowClipActions' },
     @{ Text = $XmlPatcherText; Signature = 'public static void PatchShell(string inputXmlPath, string outputXmlPath)'; Context = 'XmlPatcher PatchShell' },
@@ -121,8 +123,19 @@ Assert-SourceTokens -Text $XmlPatcherText -Context 'GraphicsOptionsXmlPatcher.cs
     'AppendGraphicsShellSpriteAndExport(tags, optionsGamePcSprite)'
 )
 Assert-SourceTokens -Text $AssetBuilderText -Context 'GraphicsOptionsAssetBuilder.cs' -Tokens @(
-    'GraphicsOptionsShellScriptTemplates.RowClipActions'
+    'GraphicsOptionsShellScriptTemplates.RowClipActions',
+    'FileAttributes.ReparsePoint',
+    'ValidateShellOutputDomains',
+    'ValidateShellOutputPathComponents',
+    'HasUnsupportedDevicePrefix'
 )
+
+$BuildShellMethodBody = Get-CSharpMethodBody -Text $AssetBuilderText -MethodSignature 'public static void BuildShell(GraphicsOptionsShellBuildPaths paths)' -Context 'AssetBuilder BuildShell order'
+$ValidateShellInputsPosition = $BuildShellMethodBody.IndexOf('ValidateShellInputs(paths)', [System.StringComparison]::Ordinal)
+$PrepareOutputDirectoriesPosition = $BuildShellMethodBody.IndexOf('PrepareOutputDirectories(paths.OutputDirectory, paths.TempDirectory)', [System.StringComparison]::Ordinal)
+if ($ValidateShellInputsPosition -lt 0 -or $PrepareOutputDirectoriesPosition -lt 0 -or $ValidateShellInputsPosition -ge $PrepareOutputDirectoriesPosition) {
+    throw 'BuildShell must validate shell inputs before preparing output directories.'
+}
 
 $BuilderProjectPath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj'
 $DebugAssemblyPath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\bin\Debug\net8.0\SubtitleSizeModBuilder.dll'
@@ -241,6 +254,10 @@ Type builderType = assembly.GetType("SubtitleSizeModBuilder.GraphicsOptionsAsset
 FieldInfo graphicsRowDepthsField = builderType.GetField("GraphicsRowDepths", staticFlags)
     ?? throw new MissingFieldException(builderType.FullName, "GraphicsRowDepths");
 int[] graphicsRowDepths = (int[])graphicsRowDepthsField.GetValue(null)!;
+Type xmlPatcherType = assembly.GetType("SubtitleSizeModBuilder.GraphicsOptionsXmlPatcher", throwOnError: true)!;
+FieldInfo xmlGraphicsRowDepthsField = xmlPatcherType.GetField("GraphicsRowDepths", staticFlags)
+    ?? throw new MissingFieldException(xmlPatcherType.FullName, "GraphicsRowDepths");
+int[] xmlGraphicsRowDepths = (int[])xmlGraphicsRowDepthsField.GetValue(null)!;
 MethodInfo escapeMethod = templateType.GetMethod(
     "EscapeActionScriptString",
     staticFlags,
@@ -261,9 +278,9 @@ catch (TargetInvocationException exception)
     nulInnerException = exception.InnerException?.GetType().FullName;
 }
 
-Console.WriteLine(JsonSerializer.Serialize(new ReflectionContract(rowClipActions, graphicsRowDepths, escapedValue, nulInnerException)));
+Console.WriteLine(JsonSerializer.Serialize(new ReflectionContract(rowClipActions, graphicsRowDepths, xmlGraphicsRowDepths, escapedValue, nulInnerException)));
 
-public sealed record ReflectionContract(string[] RowClipActions, int[] GraphicsRowDepths, string EscapedValue, string? NulInnerException);
+public sealed record ReflectionContract(string[] RowClipActions, int[] GraphicsRowDepths, int[] XmlGraphicsRowDepths, string EscapedValue, string? NulInnerException);
 '@
 
 function Get-ReflectionContract {
@@ -293,6 +310,13 @@ function Get-ReflectionContract {
         }
 
         $GraphicsRowDepths = @($GraphicsRowDepthsField.GetValue($null))
+        $XmlPatcherType = $Assembly.GetType('SubtitleSizeModBuilder.GraphicsOptionsXmlPatcher', $true)
+        $XmlGraphicsRowDepthsField = $XmlPatcherType.GetField('GraphicsRowDepths', $StaticFlags)
+        if ($null -eq $XmlGraphicsRowDepthsField) {
+            throw 'Graphics-options XML patcher type is missing GraphicsRowDepths.'
+        }
+
+        $XmlGraphicsRowDepths = @($XmlGraphicsRowDepthsField.GetValue($null))
         $EscapeInput = 'slash\quote"' + [char]13 + [char]10 + [char]9
         $EscapedValue = [string]$EscapeMethod.Invoke($null, @($EscapeInput))
         $NulInnerException = $null
@@ -305,6 +329,7 @@ function Get-ReflectionContract {
         return [pscustomobject]@{
             RowClipActions = $RowClipActions
             GraphicsRowDepths = $GraphicsRowDepths
+            XmlGraphicsRowDepths = $XmlGraphicsRowDepths
             EscapedValue = $EscapedValue
             NulInnerException = $NulInnerException
         }
@@ -366,11 +391,22 @@ for ($DepthIndex = 0; $DepthIndex -lt $ExpectedGraphicsRowDepths.Count; $DepthIn
     }
 }
 
+$XmlGraphicsRowDepths = @($ReflectionContract.XmlGraphicsRowDepths)
+if ($XmlGraphicsRowDepths.Count -ne $ExpectedGraphicsRowDepths.Count) {
+    throw "Expected exactly $($ExpectedGraphicsRowDepths.Count) XML graphics row depths, found $($XmlGraphicsRowDepths.Count)."
+}
+
+for ($DepthIndex = 0; $DepthIndex -lt $ExpectedGraphicsRowDepths.Count; $DepthIndex++) {
+    if ([int]$XmlGraphicsRowDepths[$DepthIndex] -ne $ExpectedGraphicsRowDepths[$DepthIndex]) {
+        throw "XML graphics row depth $($DepthIndex + 1) was $($XmlGraphicsRowDepths[$DepthIndex]), expected $($ExpectedGraphicsRowDepths[$DepthIndex])."
+    }
+}
+
 $ValidationBridgeSource = @'
 using System.Reflection;
 using System.Text.Json;
 
-if (args.Length != 5)
+if (args.Length < 5)
 {
     throw new ArgumentException("Expected assembly, builder root, repository root, generated output, and temp output paths.");
 }
@@ -390,7 +426,13 @@ ValidationResult[] results =
     RunValidation("unrelated-temp", args[1], args[4], expectValid: true)
 ];
 
-Console.WriteLine(JsonSerializer.Serialize(results));
+List<ValidationResult> allResults = results.ToList();
+for (int index = 5; index < args.Length; index++)
+{
+    allResults.Add(RunValidation($"additional-{index - 5}", args[1], args[index], expectValid: false));
+}
+
+Console.WriteLine(JsonSerializer.Serialize(allResults));
 
 ValidationResult RunValidation(string name, string root, string outputDirectory, bool expectValid)
 {
@@ -398,12 +440,12 @@ ValidationResult RunValidation(string name, string root, string outputDirectory,
     try
     {
         _ = validateMethod.Invoke(null, new[] { shellPaths });
-        return new ValidationResult(name, expectValid, false, null);
+        return new ValidationResult(name, outputDirectory, expectValid, false, null);
     }
     catch (TargetInvocationException exception)
     {
         string message = exception.InnerException?.Message ?? exception.Message;
-        return new ValidationResult(name, !expectValid, true, message);
+        return new ValidationResult(name, outputDirectory, !expectValid, true, message);
     }
 }
 
@@ -428,7 +470,7 @@ object CreatePaths(string root, string outputDirectory)
     })!;
 }
 
-public sealed record ValidationResult(string Name, bool ValidationPassed, bool Rejected, string? Error);
+public sealed record ValidationResult(string Name, string OutputDirectory, bool ValidationPassed, bool Rejected, string? Error);
 '@
 
 function Get-ShellOutputValidationContract {
@@ -437,7 +479,8 @@ function Get-ShellOutputValidationContract {
         [string]$BuilderRootPath,
         [string]$RepositoryRootPath,
         [string]$GeneratedOutputPath,
-        [string]$TempOutputPath
+        [string]$TempOutputPath,
+        [string[]]$AdditionalOutputPaths
     )
 
     $BridgeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("BatmanGraphicsShellValidation-" + [guid]::NewGuid().ToString('N'))
@@ -464,7 +507,8 @@ function Get-ShellOutputValidationContract {
         }
 
         $BridgeAssemblyPath = Join-Path $BridgeRoot 'bin\Debug\net8.0\ValidationBridge.dll'
-        $ReflectionOutput = & dotnet $BridgeAssemblyPath $AssemblyPath $BuilderRootPath $RepositoryRootPath $GeneratedOutputPath $TempOutputPath 2>&1
+        $BridgeArguments = @($AssemblyPath, $BuilderRootPath, $RepositoryRootPath, $GeneratedOutputPath, $TempOutputPath) + @($AdditionalOutputPaths)
+        $ReflectionOutput = & dotnet $BridgeAssemblyPath @BridgeArguments 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "Validation bridge failed:`n$($ReflectionOutput -join [Environment]::NewLine)"
         }
@@ -482,12 +526,48 @@ $BuilderRootPath = (Resolve-Path (Join-Path $BatmanRoot 'builder')).Path
 $RepositoryRootPath = (Resolve-Path (Join-Path $BatmanRoot '..\..')).Path
 $GeneratedOutputPath = Join-Path $BuilderRootPath 'generated\graphics-options-shell-contract-safety'
 $TempOutputPath = Join-Path ([System.IO.Path]::GetTempPath()) ("BatmanGraphicsShellOutput-" + [guid]::NewGuid().ToString('N'))
-$ValidationContract = @(Get-ShellOutputValidationContract `
-    -AssemblyPath $DebugAssemblyPath `
-    -BuilderRootPath $BuilderRootPath `
-    -RepositoryRootPath $RepositoryRootPath `
-    -GeneratedOutputPath $GeneratedOutputPath `
-    -TempOutputPath $TempOutputPath)
+$GeneratedRootPath = Join-Path $BuilderRootPath 'generated'
+$TempRootPath = [System.IO.Path]::GetTempPath()
+$SiblingPrefixOutputPath = Join-Path $BuilderRootPath 'generated2\graphics-options-shell-contract-safety'
+$ArbitraryExternalOutputPath = Join-Path (Split-Path -Parent $BuilderRootPath) 'graphics-options-shell-contract-arbitrary'
+$FrontendRootPath = Join-Path $BuilderRootPath 'extracted'
+$FrontendScriptsPath = Join-Path $BuilderRootPath 'extracted\frontend\mainv2\frontend-mainv2-export\scripts'
+$FrontendScriptsDescendantPath = Join-Path $FrontendScriptsPath 'unsafe-child'
+$DeviceAliasOutputPaths = @(
+    "\\?\$GeneratedOutputPath",
+    "\\.\$GeneratedOutputPath",
+    "\??\$GeneratedOutputPath"
+)
+$ReparseFixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("BatmanGraphicsShellReparse-" + [guid]::NewGuid().ToString('N'))
+$ReparseFixtureTarget = Join-Path ([System.IO.Path]::GetTempPath()) ("BatmanGraphicsShellReparseTarget-" + [guid]::NewGuid().ToString('N'))
+$ReparseOutputPath = $null
+try {
+    New-Item -ItemType Directory -Path $ReparseFixtureRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $ReparseFixtureTarget -Force | Out-Null
+    try {
+        New-Item -ItemType SymbolicLink -Path (Join-Path $ReparseFixtureRoot 'link') -Target $ReparseFixtureTarget -ErrorAction Stop | Out-Null
+        $ReparseOutputPath = Join-Path $ReparseFixtureRoot 'link\output'
+    } catch {
+        $ReparseOutputPath = $null
+    }
+    $AdditionalOutputPaths = @(
+        $GeneratedRootPath,
+        $TempRootPath,
+        $SiblingPrefixOutputPath,
+        $ArbitraryExternalOutputPath,
+        $FrontendRootPath,
+        $FrontendScriptsDescendantPath
+    ) + $DeviceAliasOutputPaths
+    if ($null -ne $ReparseOutputPath) {
+        $AdditionalOutputPaths += $ReparseOutputPath
+    }
+    $ValidationContract = @(Get-ShellOutputValidationContract `
+        -AssemblyPath $DebugAssemblyPath `
+        -BuilderRootPath $BuilderRootPath `
+        -RepositoryRootPath $RepositoryRootPath `
+        -GeneratedOutputPath $GeneratedOutputPath `
+        -TempOutputPath $TempOutputPath `
+        -AdditionalOutputPaths $AdditionalOutputPaths)
 
 $RepositoryRootValidation = $ValidationContract | Where-Object Name -eq 'repository-root'
 if (-not $RepositoryRootValidation.ValidationPassed -or -not $RepositoryRootValidation.Rejected) {
@@ -507,6 +587,49 @@ foreach ($AcceptedValidationName in @('generated-child', 'unrelated-temp')) {
     $AcceptedValidation = $ValidationContract | Where-Object Name -eq $AcceptedValidationName
     if (-not $AcceptedValidation.ValidationPassed -or $AcceptedValidation.Rejected) {
         throw "$AcceptedValidationName output safety validation rejected a safe output: $($AcceptedValidation.Error)"
+    }
+}
+
+$AdditionalValidationIndex = 0
+$AdditionalValidationCases = @(
+    @{ Name = 'generated-root'; Path = $GeneratedRootPath },
+    @{ Name = 'temp-root'; Path = $TempRootPath },
+    @{ Name = 'sibling-prefix'; Path = $SiblingPrefixOutputPath },
+    @{ Name = 'arbitrary-external'; Path = $ArbitraryExternalOutputPath },
+    @{ Name = 'input-ancestor'; Path = $FrontendRootPath },
+    @{ Name = 'input-descendant'; Path = $FrontendScriptsDescendantPath }
+)
+foreach ($DeviceAliasOutputPath in $DeviceAliasOutputPaths) {
+    $AdditionalValidationCases += @{ Name = "device-alias-$AdditionalValidationIndex"; Path = $DeviceAliasOutputPath }
+    $AdditionalValidationIndex++
+}
+if ($null -ne $ReparseOutputPath) {
+    $AdditionalValidationCases += @{ Name = 'reparse-point'; Path = $ReparseOutputPath }
+}
+
+foreach ($AdditionalValidationCase in $AdditionalValidationCases) {
+    $AdditionalValidation = $ValidationContract | Where-Object OutputDirectory -eq $AdditionalValidationCase.Path
+    if (-not $AdditionalValidation.ValidationPassed -or -not $AdditionalValidation.Rejected) {
+        throw "$($AdditionalValidationCase.Name) output safety validation did not reject the unsafe output: $($AdditionalValidation.Error)"
+    }
+    Assert-ContainsOrdinal -Text ([string]$AdditionalValidation.Error) -Token 'Unsafe shell output directory' -Context "$($AdditionalValidationCase.Name) output safety validation"
+    if ($AdditionalValidationCase.Name.StartsWith('device-alias-', [System.StringComparison]::Ordinal)) {
+        Assert-ContainsOrdinal -Text ([string]$AdditionalValidation.Error) -Token 'unsupported device namespace' -Context "$($AdditionalValidationCase.Name) output safety validation"
+    }
+}
+
+if ($null -eq $ReparseOutputPath) {
+    Assert-SourceTokens -Text $AssetBuilderText -Context 'GraphicsOptionsAssetBuilder.cs reparse coverage' -Tokens @(
+        'FileAttributes.ReparsePoint',
+        'ValidateShellOutputPathComponents'
+    )
+}
+} finally {
+    if (Test-Path -LiteralPath $ReparseFixtureRoot) {
+        Remove-Item -LiteralPath $ReparseFixtureRoot -Recurse -Force
+    }
+    if (Test-Path -LiteralPath $ReparseFixtureTarget) {
+        Remove-Item -LiteralPath $ReparseFixtureTarget -Recurse -Force
     }
 }
 

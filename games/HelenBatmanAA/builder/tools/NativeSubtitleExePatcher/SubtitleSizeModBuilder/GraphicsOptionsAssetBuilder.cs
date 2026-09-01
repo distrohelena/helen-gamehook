@@ -281,6 +281,12 @@ internal static class GraphicsOptionsAssetBuilder
     /// <param name="paths">The resolved shell build paths to validate.</param>
     private static void ValidateShellOutputPaths(GraphicsOptionsShellBuildPaths paths)
     {
+        if (HasUnsupportedDevicePrefix(paths.OutputDirectory))
+        {
+            throw new InvalidOperationException(
+                $"Unsafe shell output directory '{paths.OutputDirectory}' uses an unsupported device namespace.");
+        }
+
         string outputDirectory = Path.GetFullPath(paths.OutputDirectory);
         string rootPath = Path.GetFullPath(paths.RootPath);
 
@@ -314,12 +320,102 @@ internal static class GraphicsOptionsAssetBuilder
             }
         }
 
+        ValidateShellOutputDomains(outputDirectory, rootPath);
+
         string tempDirectory = Path.GetFullPath(paths.TempDirectory);
         if (!IsPathStrictlyUnder(outputDirectory, tempDirectory))
         {
             throw new InvalidOperationException(
                 $"Unsafe shell output directory '{outputDirectory}' requires temporary directory '{tempDirectory}' to be strictly beneath it.");
         }
+    }
+
+    /// <summary>
+    /// Ensures shell output is strictly below the supported generated or system-temporary roots,
+    /// then checks every existing component beneath the selected root for reparse-point escapes.
+    /// </summary>
+    /// <param name="outputDirectory">The fully resolved shell output directory.</param>
+    /// <param name="rootPath">The fully resolved Batman builder root.</param>
+    private static void ValidateShellOutputDomains(string outputDirectory, string rootPath)
+    {
+        string generatedRoot = Path.Combine(rootPath, "generated");
+        string tempRoot = Path.GetFullPath(Path.GetTempPath());
+        bool isUnderGeneratedRoot = IsPathStrictlyUnder(generatedRoot, outputDirectory);
+        bool isUnderTempRoot = IsPathStrictlyUnder(tempRoot, outputDirectory);
+
+        if (!isUnderGeneratedRoot && !isUnderTempRoot)
+        {
+            throw new InvalidOperationException(
+                $"Unsafe shell output directory '{outputDirectory}' is outside allowed roots '{Path.GetFullPath(generatedRoot)}' and '{tempRoot}'.");
+        }
+
+        string allowedRoot = isUnderGeneratedRoot ? Path.GetFullPath(generatedRoot) : tempRoot;
+        ValidateShellOutputPathComponents(outputDirectory, allowedRoot);
+    }
+
+    /// <summary>
+    /// Walks existing path components from an allowed output root through the requested output,
+    /// stopping at the first missing component so not-yet-created output still receives ancestor checks.
+    /// </summary>
+    /// <param name="outputDirectory">The fully resolved shell output directory.</param>
+    /// <param name="allowedRoot">The fully resolved generated or temporary root containing the output.</param>
+    private static void ValidateShellOutputPathComponents(string outputDirectory, string allowedRoot)
+    {
+        string canonicalRoot = Path.GetFullPath(allowedRoot);
+        string canonicalOutput = Path.GetFullPath(outputDirectory);
+        string relativePath = Path.GetRelativePath(canonicalRoot, canonicalOutput);
+        string currentPath = canonicalRoot;
+
+        if (!File.Exists(currentPath) && !Directory.Exists(currentPath))
+        {
+            return;
+        }
+
+        ValidateShellOutputPathComponent(currentPath, canonicalOutput, canonicalRoot);
+
+        string[] components = relativePath.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        foreach (string component in components)
+        {
+            currentPath = Path.Combine(currentPath, component);
+            if (!File.Exists(currentPath) && !Directory.Exists(currentPath))
+            {
+                return;
+            }
+
+            ValidateShellOutputPathComponent(currentPath, canonicalOutput, canonicalRoot);
+        }
+    }
+
+    /// <summary>
+    /// Rejects one existing shell-output component when its filesystem attributes identify a junction,
+    /// symbolic link, or other reparse point that could redirect recursive deletion outside the allowed root.
+    /// </summary>
+    /// <param name="componentPath">The existing component being inspected.</param>
+    /// <param name="outputDirectory">The complete requested shell output directory.</param>
+    /// <param name="allowedRoot">The allowed output root that protects the component walk.</param>
+    private static void ValidateShellOutputPathComponent(string componentPath, string outputDirectory, string allowedRoot)
+    {
+        FileAttributes attributes = File.GetAttributes(componentPath);
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidOperationException(
+                $"Unsafe shell output directory '{outputDirectory}' traverses reparse-point component '{componentPath}' under protected output root '{allowedRoot}'.");
+        }
+    }
+
+    /// <summary>
+    /// Detects Windows device and alternate namespace prefixes before any path normalization can reinterpret them.
+    /// Such aliases can address the same directories as ordinary paths while bypassing lexical containment assumptions.
+    /// </summary>
+    /// <param name="path">The raw output path supplied by the caller.</param>
+    /// <returns><see langword="true" /> when the path starts with a rejected device namespace prefix.</returns>
+    private static bool HasUnsupportedDevicePrefix(string path)
+    {
+        return path.StartsWith(@"\\?\", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith(@"\\.\", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith(@"\??\", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

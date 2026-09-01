@@ -605,7 +605,7 @@ internal static class GraphicsOptionsXmlPatcher
         List<XmlElement> matchingPlacements = subTags.ChildNodes
             .OfType<XmlElement>()
             .Where(node =>
-                GetAttribute(node, "type").StartsWith("PlaceObject", StringComparison.Ordinal) &&
+                GetAttribute(node, "type")!.StartsWith("PlaceObject", StringComparison.Ordinal) &&
                 ParseRequiredDepth(node) == depth)
             .ToList();
 
