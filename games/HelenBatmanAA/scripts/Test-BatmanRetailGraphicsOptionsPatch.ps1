@@ -1,495 +1,91 @@
 param(
     [string]$RetailFrontendPackagePath,
     [string]$BatmanRoot,
-    [string]$Configuration = 'Debug'
+    [string]$Configuration = 'Debug',
+    [string]$BuilderRoot
 )
 
 $ErrorActionPreference = 'Stop'
-$HelperScriptPath = Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1'
-. $HelperScriptPath
+. (Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1')
+
+function Assert-ContainsOrdinal {
+    param([string]$Text, [string]$Token, [string]$Context)
+    if ($Text.IndexOf($Token, [StringComparison]::Ordinal) -lt 0) { throw "$Context is missing '$Token'." }
+}
+
+function Assert-NotContainsOrdinal {
+    param([string]$Text, [string]$Token, [string]$Context)
+    if ($Text.IndexOf($Token, [StringComparison]::Ordinal) -ge 0) { throw "$Context contains forbidden '$Token'." }
+}
 
 function Invoke-ExternalProcess {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$FilePath,
-        [Parameter(Mandatory = $true)]
-        [string[]]$Arguments
-    )
-
-    $StdOutPath = [System.IO.Path]::GetTempFileName()
-    $StdErrPath = [System.IO.Path]::GetTempFileName()
-
-    $Process = Start-Process `
-        -FilePath $FilePath `
-        -ArgumentList $Arguments `
-        -RedirectStandardOutput $StdOutPath `
-        -RedirectStandardError $StdErrPath `
-        -NoNewWindow `
-        -PassThru `
-        -Wait
-
-    $OutputLines = @()
-    if (Test-Path -LiteralPath $StdOutPath) {
-        $OutputLines += Get-Content -LiteralPath $StdOutPath
-    }
-
-    if (Test-Path -LiteralPath $StdErrPath) {
-        $OutputLines += Get-Content -LiteralPath $StdErrPath
-    }
-
-    Remove-Item -LiteralPath $StdOutPath, $StdErrPath -Force
-
-    return [pscustomobject]@{
-        ExitCode = $Process.ExitCode
-        Output = $OutputLines
-    }
+    param([string]$FilePath, [string[]]$Arguments)
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $output = @(& $FilePath @Arguments 2>&1) } finally { $ErrorActionPreference = $previousErrorActionPreference }
+    [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
 }
 
-function Get-DefineSpriteNodeOuterXml {
-    param(
-        [Parameter(Mandatory = $true)]
-        [xml]$Document,
-        [Parameter(Mandatory = $true)]
-        [string]$SpriteId
-    )
+if ([string]::IsNullOrWhiteSpace($BatmanRoot)) { $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path } else { $BatmanRoot = (Resolve-Path $BatmanRoot).Path }
+if ([string]::IsNullOrWhiteSpace($BuilderRoot)) { $BuilderRoot = Join-Path $BatmanRoot 'builder' } elseif ([IO.Path]::IsPathRooted($BuilderRoot)) { $BuilderRoot = [IO.Path]::GetFullPath($BuilderRoot) } elseif (Test-Path -LiteralPath $BuilderRoot) { $BuilderRoot = (Resolve-Path $BuilderRoot).Path } else { $BuilderRoot = [IO.Path]::GetFullPath((Join-Path $BatmanRoot $BuilderRoot)) }
+if ([string]::IsNullOrWhiteSpace($RetailFrontendPackagePath)) { $RetailFrontendPackagePath = Join-Path $BuilderRoot 'extracted\frontend-retail\Frontend.umap' } elseif (-not [IO.Path]::IsPathRooted($RetailFrontendPackagePath)) { $RetailFrontendPackagePath = [IO.Path]::GetFullPath((Join-Path (Get-Location) $RetailFrontendPackagePath)) }
+$RetailFrontendPackagePath = [IO.Path]::GetFullPath($RetailFrontendPackagePath)
 
-    $Nodes = @(
-        $Document.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='$SpriteId']")
-    )
+$match = & (Join-Path $PSScriptRoot 'Get-BatmanSteamBuildMatch.ps1')
+$baseInfo = Get-Item -LiteralPath $RetailFrontendPackagePath
+$baseHash = (Get-FileHash -LiteralPath $RetailFrontendPackagePath -Algorithm SHA256).Hash
+if ($baseInfo.Length -ne 2988548 -or $baseHash -cne '271916B888F83374122AF0FCCC5C685804F4C8286A92A772CD71E4F48A00F2CC') { throw 'Retail frontend input does not match the verified 2988548-byte base.' }
 
-    if ($Nodes.Count -ne 1) {
-        throw "Expected exactly one DefineSpriteTag sprite with id $SpriteId, found $($Nodes.Count)."
-    }
+$builderProject = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj'
+$patcherProject = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\BmGameGfxPatcher\BmGameGfxPatcher.csproj'
+$ffdec = Join-Path $BuilderRoot 'extracted\ffdec\ffdec-cli.exe'
+foreach ($path in @($builderProject, $patcherProject, $ffdec, $RetailFrontendPackagePath)) { if (-not (Test-Path -LiteralPath $path)) { throw "Required retail patch input not found: $path" } }
 
-    return $Nodes[0].OuterXml
+$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('HelenBatmanGraphicsRetailPatch-' + [Guid]::NewGuid().ToString('N'))
+$prototypeRoot = Join-Path $tempRoot 'prototype'
+$prototypeGfx = Join-Path $prototypeRoot 'MainV2-graphics-options.gfx'
+$manifestPath = Join-Path $tempRoot 'patch.manifest.json'
+$patchedPackage = Join-Path $tempRoot 'Frontend-graphics-options.umap'
+$extractedGfx = Join-Path $tempRoot 'MainV2.gfx'
+$xmlPath = Join-Path $tempRoot 'MainV2.xml'
+$exportRoot = Join-Path $tempRoot 'export'
+New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+try {
+    $build = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--project', $builderProject, '-c', $Configuration, '--', 'build-main-menu-graphics-shell', '--root', $BuilderRoot, '--output-dir', $prototypeRoot, '--ffdec', $ffdec)
+    if ($build.ExitCode -ne 0) { throw "Shell prototype build failed: $($build.Output -join [Environment]::NewLine)" }
+    if (-not (Test-Path -LiteralPath $prototypeGfx)) { throw "Shell prototype was not generated: $prototypeGfx" }
+
+    $manifest = [ordered]@{ name = 'MainV2 graphics-options shell retail patch'; patches = @([ordered]@{ owner = 'MainMenu'; exportName = 'MainV2'; exportType = 'GFxMovieInfo'; replacementPath = $prototypeGfx; payloadMagic = 'GFX' }) }
+    [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+    $patch = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--project', $patcherProject, '-c', $Configuration, '--', 'patch', '--package', $RetailFrontendPackagePath, '--manifest', $manifestPath, '--output', $patchedPackage)
+    if ($patch.ExitCode -ne 0) { throw "Retail patch failed: $($patch.Output -join [Environment]::NewLine)" }
+
+    . (Join-Path $PSScriptRoot 'BatmanPackVerificationHelpers.ps1')
+    $patchedStorage = Get-UnrealPackageStorageInfo -Path $patchedPackage
+    if ($patchedStorage.CompressionChunkCount -le 0) { throw 'Retail patch output must remain chunk-compressed.' }
+    $extract = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--project', $patcherProject, '-c', $Configuration, '--', 'extract-gfx', '--package', $patchedPackage, '--owner', 'MainMenu', '--name', 'MainV2', '--output', $extractedGfx)
+    if ($extract.ExitCode -ne 0) { throw 'Failed to extract patched retail MainV2.' }
+    $xmlResult = Invoke-ExternalProcess -FilePath $ffdec -Arguments @('-swf2xml', $extractedGfx, $xmlPath)
+    if ($xmlResult.ExitCode -ne 0) { throw 'FFDec failed to reopen patched retail MainV2.' }
+    $export = Invoke-ExternalProcess -FilePath $ffdec -Arguments @('-export', 'script', $exportRoot, $extractedGfx)
+    if ($export.ExitCode -ne 0) { throw 'FFDec failed to export patched retail scripts.' }
+
+    [xml]$document = Get-Content -LiteralPath $xmlPath -Raw
+    $sprites = @($document.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='600']"))
+    if ($sprites.Count -ne 1) { throw "Expected exactly one shell sprite 600, found $($sprites.Count)." }
+    if (@($document.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='601']")).Count -ne 0) { throw 'Patched retail shell must not contain sprite 601.' }
+    $exports = @(@($document.SelectNodes("/swf/tags/item[@type='ExportAssetsTag']")) | Where-Object { @($_.names.item | Where-Object { $_ -eq 'ScreenOptionsGraphics' }).Count -gt 0 })
+    if ($exports.Count -ne 1 -or @($exports[0].tags.item | Where-Object { $_ -eq '600' }).Count -ne 1) { throw 'Patched retail shell must export exactly sprite 600 as ScreenOptionsGraphics.' }
+
+    $scriptFiles = @(Get-ChildItem -LiteralPath (Join-Path $exportRoot 'scripts') -Recurse -Filter *.as -File)
+    $screenFiles = @($scriptFiles | Where-Object { $_.FullName -like '*DefineSprite_600_ScreenOptionsGraphics*' })
+    $screenText = (($screenFiles | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join [Environment]::NewLine)
+    $allScriptText = (($scriptFiles | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join [Environment]::NewLine)
+    foreach ($required in @('Graphics Options', 'GotoScreen("OptionsGraphics")', 'CancelScreen', 'ReturnFromScreen', 'Not active')) { Assert-ContainsOrdinal -Text $allScriptText -Token $required -Context 'patched retail graphics shell' }
+    foreach ($forbidden in @('Helen_', 'ApplyChanges', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft', 'Unsaved graphics changes', 'Some changes require a restart')) { foreach ($file in $scriptFiles) { Assert-NotContainsOrdinal -Text (Get-Content -LiteralPath $file.FullName -Raw) -Token $forbidden -Context $file.Name } }
 }
-
-function Get-ActionScriptFunctionText {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$ScriptText,
-        [Parameter(Mandatory = $true)]
-        [string]$FunctionName
-    )
-
-    $FunctionToken = "function $FunctionName("
-    $FunctionIndex = $ScriptText.IndexOf($FunctionToken, [System.StringComparison]::Ordinal)
-    if ($FunctionIndex -lt 0) {
-        throw "ActionScript function '$FunctionName' was not found."
-    }
-
-    $BraceStartIndex = $ScriptText.IndexOf('{', $FunctionIndex)
-    if ($BraceStartIndex -lt 0) {
-        throw "ActionScript function '$FunctionName' is missing an opening brace."
-    }
-
-    $Depth = 1
-    $Cursor = $BraceStartIndex + 1
-    while ($Cursor -lt $ScriptText.Length -and $Depth -gt 0) {
-        $CurrentCharacter = $ScriptText[$Cursor]
-        if ($CurrentCharacter -eq '{') {
-            $Depth++
-        } elseif ($CurrentCharacter -eq '}') {
-            $Depth--
-        }
-
-        $Cursor++
-    }
-
-    if ($Depth -ne 0) {
-        throw "ActionScript function '$FunctionName' is missing a closing brace."
-    }
-
-    return $ScriptText.Substring($FunctionIndex, $Cursor - $FunctionIndex)
-}
-
-if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
-    $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-} else {
-    $BatmanRoot = (Resolve-Path $BatmanRoot).Path
-}
-
-if ([string]::IsNullOrWhiteSpace($RetailFrontendPackagePath)) {
-    $RetailFrontendPackagePath = Join-Path $BatmanRoot 'builder\extracted\frontend-retail\Frontend.umap'
-} elseif (-not [System.IO.Path]::IsPathRooted($RetailFrontendPackagePath)) {
-    $RetailFrontendPackagePath = Join-Path $BatmanRoot $RetailFrontendPackagePath
-}
-
-$RetailFrontendPackagePath = [System.IO.Path]::GetFullPath($RetailFrontendPackagePath)
-
-$BuilderRoot = Join-Path $BatmanRoot 'builder'
-$SubtitleSizeModBuilderProjectPath = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj'
-$ProjectPath = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\BmGameGfxPatcher\BmGameGfxPatcher.csproj'
-$FfdecPath = Join-Path $BuilderRoot 'extracted\ffdec\ffdec-cli.exe'
-$CleanMainV2XmlPath = Join-Path $BuilderRoot 'extracted\frontend\mainv2\frontend-mainv2.xml'
-$OutputRoot = Join-Path $BuilderRoot 'generated\test-retail-main-menu-graphics-options'
-$PrototypeBuildRoot = Join-Path $OutputRoot 'prototype'
-$PrototypeGfxPath = Join-Path $PrototypeBuildRoot 'MainV2-graphics-options.gfx'
-$DecompressedRetailFrontendPackagePath = Join-Path $OutputRoot 'Frontend-retail.decompressed.umap'
-$PatchedPackagePath = Join-Path $OutputRoot 'Frontend-graphics-options.umap'
-$ExtractedGfxPath = Join-Path $OutputRoot 'MainV2-graphics-options.gfx'
-$OutputXmlPath = Join-Path $OutputRoot 'MainV2-graphics-options.xml'
-$ExportRoot = Join-Path $OutputRoot 'MainV2-export'
-$ExportScriptsRoot = Join-Path $ExportRoot 'scripts'
-$RetailScreenOptionsGraphicsSpriteId = '4096'
-$RetailGraphicsExitPromptSpriteId = '4097'
-$ExpectedTokens = @(
-    'Graphics Options',
-    'ScreenOptionsGraphics',
-    'Helen_GetInt',
-    'Helen_Log',
-    'FE_RunCommand',
-    'gfx_apply:',
-    'this.BindFixedRow(this.Screen.GraphicsRow1,"Fullscreen");',
-    'this.BindFixedRow(this.Screen.GraphicsRow15,"ApplyChanges");',
-    'this.RefreshRowClip(this.Screen.GraphicsRow15,"ApplyChanges");',
-    'return new Array("Windowed","Fullscreen");',
-    'this.AddItem(GraphicsRow1,14,1,-1,-1);',
-    'this.AddItem(GraphicsRow15,13,0,-1,-1);',
-    'this.LogExitState("HandleRowAction row=" + rowName + " promptOpen=" + this.IsExitPromptOpen() + " pending=" + this.IsExitTransitionPending());',
-    'this.LogExitState("HandleRowAction apply row");',
-    'this.LogDraftSnapshot("ApplyChanges before-native");',
-    'this.LogDraftSnapshot("ApplyChanges after-reload");'
-)
-
-$ForbiddenTokens = @(
-    'var PCVersionString = "',
-    'Subtitle Size',
-    'Helen_GfxLoad',
-    'Helen_GfxGet',
-    'Helen_GfxSet',
-    'Helen_GfxApply',
-    'Helen_BatmanGraphicsLoadDraft',
-    'Helen_BatmanGraphicsGetInt',
-    'Helen_BatmanGraphicsSetInt',
-    'Helen_BatmanGraphicsApplyDraft',
-    'Helen_SetInt',
-    'Helen_ApplyBatmanGraphicsDraft',
-    'this.WindowStartIndex = 0;',
-    'this.VisibleRowCount = 5;',
-    'this.VisibleRows = new Array();',
-    'BindVisibleRows',
-    'BindVisibleRowClip',
-    'OnVisibleRowClipLoaded',
-    'HandleVisibleRowAction',
-    'IncrementVisibleRow',
-    'DecrementVisibleRow',
-    'GetLogicalRowNameByOffset',
-    'ScrollWindowUp',
-    'ScrollWindowDown',
-    'BaseMoveUPDown = this.MoveUPDown',
-    'return new Array(this.DraftState.fullscreen == 0 ? "Windowed" : "Fullscreen");'
-)
-
-$ExpectedFixedRowClipPaths = @(
-    'frame_1\PlaceObject2_290_List_Template_141\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_133\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_125\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_117\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_109\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_101\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_93\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_85\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_77\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_69\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_61\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_53\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_45\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_37\CLIPACTIONRECORD onClipEvent(load).as',
-    'frame_1\PlaceObject2_290_List_Template_29\CLIPACTIONRECORD onClipEvent(load).as'
-)
-
-$RequiredRowClipTokens = @(
-    '_parent.GraphicsController.LogExitState("Row.RunAction row=" + this.RowName + " mouse=" + bMouse + " enabled=" + this.IsEnabled() + " interactive=" + this.IsInteractiveRow() + " apply=" + this.IsApplyRow());',
-    '_parent.GraphicsController.LogExitState("Row.RunAction dispatch-apply row=" + this.RowName);',
-    '_parent.GraphicsController.HandleRowAction(this.RowName);',
-    '_parent.GraphicsController.IncrementRow(this.RowName);',
-    '_parent.GraphicsController.DecrementRow(this.RowName);',
-    '"$UI.Cycle"'
-)
-
-$ForbiddenRowClipTokens = @(
-    'this.RowOffset =',
-    'OnVisibleRowClipLoaded',
-    'HandleVisibleRowAction',
-    'IncrementVisibleRow',
-    'DecrementVisibleRow'
-)
-
-$RequiredCleanRetailSpriteIds = @(
-    '153',
-    '154',
-    '157',
-    '232',
-    '356',
-    '393',
-    '395'
-)
-
-if (-not (Test-Path -LiteralPath $FfdecPath)) {
-    throw "FFDec CLI was not found at '$FfdecPath'."
-}
-
-if (-not (Test-Path -LiteralPath $RetailFrontendPackagePath)) {
-    throw "Retail frontend package was not found at '$RetailFrontendPackagePath'."
-}
-
-if (-not (Test-Path -LiteralPath $CleanMainV2XmlPath)) {
-    throw "Clean MainV2 XML baseline was not found at '$CleanMainV2XmlPath'."
-}
-
-if (-not (Test-Path -LiteralPath $SubtitleSizeModBuilderProjectPath)) {
-    throw "SubtitleSizeModBuilder project was not found at '$SubtitleSizeModBuilderProjectPath'."
-}
-
-if (Test-Path -LiteralPath $OutputRoot) {
-    Remove-Item -LiteralPath $OutputRoot -Recurse -Force
-}
-
-New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
-
-& dotnet run --project $SubtitleSizeModBuilderProjectPath -c $Configuration -- `
-    build-main-menu-graphics `
-    --root $BuilderRoot `
-    --output-dir $PrototypeBuildRoot `
-    --ffdec $FfdecPath
-if ($LASTEXITCODE -ne 0) {
-    throw 'build-main-menu-graphics failed for the retail graphics patch test.'
-}
-
-& dotnet run --project $ProjectPath -c $Configuration -- `
-    decompress `
-    --package $RetailFrontendPackagePath `
-    --output $DecompressedRetailFrontendPackagePath
-if ($LASTEXITCODE -ne 0) {
-    throw 'decompress failed for the retail graphics patch test.'
-}
-
-& dotnet run --project $ProjectPath -c $Configuration -- `
-    patch-mainv2-graphics-options `
-    --package $DecompressedRetailFrontendPackagePath `
-    --output $PatchedPackagePath `
-    --prototype-gfx $PrototypeGfxPath
-if ($LASTEXITCODE -ne 0) {
-    throw 'patch-mainv2-graphics-options failed.'
-}
-
-& dotnet run --project $ProjectPath -c $Configuration -- `
-    extract-gfx `
-    --package $PatchedPackagePath `
-    --owner MainMenu `
-    --name MainV2 `
-    --output $ExtractedGfxPath
-if ($LASTEXITCODE -ne 0) {
-    throw 'extract-gfx failed for patched MainV2.'
-}
-
-$XmlResult = Invoke-ExternalProcess `
-    -FilePath $FfdecPath `
-    -Arguments @('-swf2xml', $ExtractedGfxPath, $OutputXmlPath)
-if ($XmlResult.ExitCode -ne 0) {
-    throw 'FFDec swf2xml failed for patched MainV2.'
-}
-
-$ExportResult = Invoke-ExternalProcess `
-    -FilePath $FfdecPath `
-    -Arguments @('-export', 'script', $ExportRoot, $ExtractedGfxPath)
-if ($ExportResult.ExitCode -ne 0) {
-    throw 'FFDec script export failed for patched MainV2.'
-}
-
-$ExportOutputText = @($ExportResult.Output) -join [Environment]::NewLine
-foreach ($ForbiddenExportToken in @(
-    'SEVERE: SWF already contains characterId=600',
-    'SEVERE: SWF already contains characterId=601',
-    'SEVERE: SWF already contains characterId=4096',
-    'SEVERE: SWF already contains characterId=4097'
-)) {
-    if ($ExportOutputText.IndexOf($ForbiddenExportToken, [System.StringComparison]::Ordinal) -ge 0) {
-        throw "FFDec export reported a duplicate retail character id: $ForbiddenExportToken"
-    }
-}
-
-[xml]$Document = Get-Content -LiteralPath $OutputXmlPath
-[xml]$CleanMainV2Document = Get-Content -LiteralPath $CleanMainV2XmlPath
-
-foreach ($RequiredCleanRetailSpriteId in $RequiredCleanRetailSpriteIds) {
-    $PatchedOuterXml = Get-DefineSpriteNodeOuterXml -Document $Document -SpriteId $RequiredCleanRetailSpriteId
-    $CleanOuterXml = Get-DefineSpriteNodeOuterXml -Document $CleanMainV2Document -SpriteId $RequiredCleanRetailSpriteId
-
-    if ($PatchedOuterXml -cne $CleanOuterXml) {
-        throw "Patched MainV2 changed clean retail sprite id $RequiredCleanRetailSpriteId. Graphics-only patch must preserve baseline title/profile/main sprite tags."
-    }
-}
-
-$RetailOptionsHeaderBacking = $Document.SelectSingleNode("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='333']/subTags/item[@type='PlaceObject2Tag' and @depth='39' and @characterId='118' and @characterId!='0']")
-if ($null -eq $RetailOptionsHeaderBacking) {
-    throw 'Retail-patched ScreenOptionsMenu should keep the vanilla Options header backing shell on depth 39.'
-}
-
-$RetailOptionsTitlePlacement = $Document.SelectSingleNode("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='333']/subTags/item[@type='PlaceObject2Tag' and @depth='40' and @characterId='326' and @characterId!='0']")
-if ($null -eq $RetailOptionsTitlePlacement) {
-    throw 'Retail-patched ScreenOptionsMenu should keep the vanilla $UI.Options title on depth 40.'
-}
-
-$RetailRelocatedOptionsHeaderTimeline = @(
-    $Document.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='333']/subTags/item[((@depth='41' or @depth='42')) and (@type='PlaceObject2Tag' or @type='RemoveObject2Tag')]")
-)
-if ($RetailRelocatedOptionsHeaderTimeline.Count -ne 0) {
-    throw 'Retail-patched ScreenOptionsMenu should not relocate the vanilla Options header timeline onto depths 41 or 42.'
-}
-
-$RetailInjectedGameOptionsHeader = @(
-    $Document.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='333']/subTags/item[@type='PlaceObject2Tag' and ((@depth='146' and @characterId='118') or (@depth='147' and @characterId='340'))]")
-)
-if ($RetailInjectedGameOptionsHeader.Count -ne 0) {
-    throw 'Retail-patched ScreenOptionsMenu should not inject a Game Options submenu header into the main Options chooser.'
-}
-
-$RetailGraphicsScreenDefinitions = @(
-    $Document.SelectNodes("/swf/tags/item[starts-with(@type,'Define') and (@shapeId='$RetailScreenOptionsGraphicsSpriteId' or @spriteId='$RetailScreenOptionsGraphicsSpriteId' or @characterID='$RetailScreenOptionsGraphicsSpriteId' or @characterId='$RetailScreenOptionsGraphicsSpriteId' or @buttonId='$RetailScreenOptionsGraphicsSpriteId' or @fontId='$RetailScreenOptionsGraphicsSpriteId')]")
-)
-if ($RetailGraphicsScreenDefinitions.Count -ne 1) {
-    throw "Expected exactly one definition with id $RetailScreenOptionsGraphicsSpriteId, found $($RetailGraphicsScreenDefinitions.Count)."
-}
-
-if ($RetailGraphicsScreenDefinitions[0].Attributes['type'].Value -ne 'DefineSpriteTag') {
-    throw "Expected id $RetailScreenOptionsGraphicsSpriteId to belong to DefineSpriteTag, but found $($RetailGraphicsScreenDefinitions[0].Attributes['type'].Value)."
-}
-
-$RetailGraphicsTitlePlacement = $Document.SelectSingleNode("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='$RetailScreenOptionsGraphicsSpriteId']/subTags/item[@type='PlaceObject2Tag' and @depth='147' and @characterId='340' and @characterId!='0']")
-if ($null -eq $RetailGraphicsTitlePlacement) {
-    throw "Expected retail-patched ScreenOptionsGraphics title placement at depth 147 for character 340."
-}
-
-$RetailGraphicsTitlePlacementName = $RetailGraphicsTitlePlacement.Attributes['name']
-if ($null -eq $RetailGraphicsTitlePlacementName -or $RetailGraphicsTitlePlacementName.Value -ne 'Title') {
-    throw "Retail-patched ScreenOptionsGraphics title placement should be named 'Title', but found '$($RetailGraphicsTitlePlacementName.Value)'."
-}
-
-$RetailGraphicsTitleHasNameFlag = $RetailGraphicsTitlePlacement.Attributes['placeFlagHasName']
-if ($null -eq $RetailGraphicsTitleHasNameFlag -or $RetailGraphicsTitleHasNameFlag.Value -ne 'true') {
-    throw "Retail-patched ScreenOptionsGraphics title placement should set placeFlagHasName='true', but found '$($RetailGraphicsTitleHasNameFlag.Value)'."
-}
-
-$RetailGraphicsExitPromptDefinitions = @(
-    $Document.SelectNodes("/swf/tags/item[starts-with(@type,'Define') and (@shapeId='$RetailGraphicsExitPromptSpriteId' or @spriteId='$RetailGraphicsExitPromptSpriteId' or @characterID='$RetailGraphicsExitPromptSpriteId' or @characterId='$RetailGraphicsExitPromptSpriteId' or @buttonId='$RetailGraphicsExitPromptSpriteId' or @fontId='$RetailGraphicsExitPromptSpriteId')]")
-)
-if ($RetailGraphicsExitPromptDefinitions.Count -ne 1) {
-    throw "Expected exactly one definition with id $RetailGraphicsExitPromptSpriteId, found $($RetailGraphicsExitPromptDefinitions.Count)."
-}
-
-if ($RetailGraphicsExitPromptDefinitions[0].Attributes['type'].Value -ne 'DefineSpriteTag') {
-    throw "Expected id $RetailGraphicsExitPromptSpriteId to belong to DefineSpriteTag, but found $($RetailGraphicsExitPromptDefinitions[0].Attributes['type'].Value)."
-}
-
-$ScriptFiles = Get-ChildItem -LiteralPath $ExportRoot -Recurse -Filter *.as -File
-if ($ScriptFiles.Count -eq 0) {
-    throw "FFDec did not export any ActionScript files into $ExportRoot."
-}
-
-$GraphicsScreenDirectories = @(
-    Get-ChildItem -LiteralPath $ExportScriptsRoot -Directory | Where-Object {
-        $_.Name -like 'DefineSprite_*_ScreenOptionsGraphics'
-    }
-)
-if ($GraphicsScreenDirectories.Count -ne 1) {
-    throw "Expected exactly one exported ScreenOptionsGraphics sprite directory, found $($GraphicsScreenDirectories.Count)."
-}
-
-$GraphicsScreenExportRoot = $GraphicsScreenDirectories[0].FullName
-$GraphicsScreenScriptPath = Join-Path $GraphicsScreenExportRoot 'frame_1\DoAction.as'
-if (-not (Test-Path -LiteralPath $GraphicsScreenScriptPath)) {
-    throw "Expected exported retail graphics screen script was not found: $GraphicsScreenScriptPath"
-}
-
-$GraphicsScreenScript = Get-Content -LiteralPath $GraphicsScreenScriptPath -Raw
-$SetDraftRowStateFunction = Get-ActionScriptFunctionText -ScriptText $GraphicsScreenScript -FunctionName 'SetDraftRowState'
-if ($SetDraftRowStateFunction.IndexOf('Helen_SetInt', [System.StringComparison]::Ordinal) -ge 0) {
-    throw 'Retail-patched SetDraftRowState must not call Helen_SetInt.'
-}
-
-if ($SetDraftRowStateFunction.IndexOf('this.LoadDraftValues();', [System.StringComparison]::Ordinal) -ge 0) {
-    throw 'Retail-patched SetDraftRowState must not reload draft values from disk.'
-}
-
-$ApplyChangesFunction = Get-ActionScriptFunctionText -ScriptText $GraphicsScreenScript -FunctionName 'ApplyChanges'
-foreach ($RequiredApplyChangesToken in @(
-    'flash.external.ExternalInterface.call("FE_RunCommand",',
-    'gfx_apply:',
-    'this.LoadDraftValues();',
-    'this.LogDraftSnapshot("ApplyChanges after-reload");',
-    'this.CaptureInitialState();',
-    'this.LogDraftSnapshot("ApplyChanges after-capture");',
-    'this.RefreshFocusedRow();'
-)) {
-    if ($ApplyChangesFunction.IndexOf($RequiredApplyChangesToken, [System.StringComparison]::Ordinal) -lt 0) {
-        throw "Retail-patched ApplyChanges is missing required FE-carrier token: $RequiredApplyChangesToken"
-    }
-}
-
-foreach ($ForbiddenApplyChangesToken in @(
-    'Helen_ApplyBatmanGraphicsDraft',
-    'ReturnFromScreen()'
-)) {
-    if ($ApplyChangesFunction.IndexOf($ForbiddenApplyChangesToken, [System.StringComparison]::Ordinal) -ge 0) {
-        throw "Retail-patched ApplyChanges still contains forbidden token: $ForbiddenApplyChangesToken"
-    }
-}
-
-foreach ($ExpectedFixedRowClipPath in $ExpectedFixedRowClipPaths) {
-    $ResolvedFixedRowClipPath = Join-Path $GraphicsScreenExportRoot $ExpectedFixedRowClipPath
-    if (-not (Test-Path -LiteralPath $ResolvedFixedRowClipPath)) {
-        throw "Expected fixed-row clip script was not found in exported retail scripts: $ResolvedFixedRowClipPath"
-    }
-
-    $FixedRowClipScript = Get-Content -LiteralPath $ResolvedFixedRowClipPath -Raw
-    foreach ($RequiredRowClipToken in $RequiredRowClipTokens) {
-        if ($FixedRowClipScript.IndexOf($RequiredRowClipToken, [System.StringComparison]::Ordinal) -lt 0) {
-            throw "Required interactive token was not found in exported row clip '$ResolvedFixedRowClipPath': $RequiredRowClipToken"
-        }
-    }
-
-    foreach ($ForbiddenRowClipToken in $ForbiddenRowClipTokens) {
-        if ($FixedRowClipScript.IndexOf($ForbiddenRowClipToken, [System.StringComparison]::Ordinal) -ge 0) {
-            throw "Forbidden scroll-window token was found in exported row clip '$ResolvedFixedRowClipPath': $ForbiddenRowClipToken"
-        }
-    }
-}
-
-foreach ($ExpectedToken in $ExpectedTokens) {
-    $Found = $false
-
-    foreach ($ScriptFile in $ScriptFiles) {
-        [string]$Contents = Get-Content -LiteralPath $ScriptFile.FullName -Raw
-
-        if ([string]::IsNullOrEmpty($Contents)) {
-            continue
-        }
-
-        if ($Contents.IndexOf($ExpectedToken, [System.StringComparison]::Ordinal) -ge 0) {
-            $Found = $true
-            break
-        }
-    }
-
-    if (-not $Found) {
-        throw "Expected token was not found in exported scripts: $ExpectedToken"
-    }
-}
-
-foreach ($ForbiddenToken in $ForbiddenTokens) {
-    foreach ($ScriptFile in $ScriptFiles) {
-        [string]$Contents = Get-Content -LiteralPath $ScriptFile.FullName -Raw
-
-        if ([string]::IsNullOrEmpty($Contents)) {
-            continue
-        }
-
-        if ($Contents.IndexOf($ForbiddenToken, [System.StringComparison]::Ordinal) -ge 0) {
-            throw "Forbidden token was found in exported scripts: $ForbiddenToken"
-        }
-    }
+finally {
+    if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
 }
 
 Write-Output 'PASS'

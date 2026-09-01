@@ -1,22 +1,22 @@
 {
     "virtualFiles":  [
                          {
+                             "id":  "frontendGraphicsOptionsPackage",
                              "path":  "BmGame/CookedPC/Maps/Frontend/Frontend.umap",
+                             "mode":  "delta-on-read",
                              "source":  {
+                                            "kind":  "delta-file",
                                             "path":  "assets/deltas/Frontend-graphics-options.hgdelta",
                                             "base":  {
-                                                         "sha256":  "271916b888f83374122af0fccc5c685804f4c8286a92a772cd71e4f48a00f2cc",
-                                                         "size":  2988548
+                                                         "size":  2988548,
+                                                         "sha256":  "271916b888f83374122af0fccc5c685804f4c8286a92a772cd71e4f48a00f2cc"
                                                      },
-                                            "chunkSize":  65536,
                                             "target":  {
-                                                           "sha256":  "3e010c701fec4fd1f81baec21d66be65e0f09c0ba4112702eedbb4e57869c3cb",
-                                                           "size":  12416760
+                                                           "size":  12349826,
+                                                           "sha256":  "0834114bc4be5269f302c4114fb5e393f072b98785445f3141245fea3c8b4322"
                                                        },
-                                            "kind":  "delta-file"
-                                        },
-                             "id":  "frontendGraphicsOptionsPackage",
-                             "mode":  "delta-on-read"
+                                            "chunkSize":  65536
+                                        }
                          }
                      ]
 }
