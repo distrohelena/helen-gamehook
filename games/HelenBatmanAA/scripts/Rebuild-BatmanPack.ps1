@@ -280,7 +280,7 @@ $hooksManifest = [ordered]@{
         [ordered]@{
             id = 'subtitleUiStateObserver'
             scanStartAddress = '0x10000000'
-            scanEndAddress = '0x11000000'
+            scanEndAddress = '0x12000000'
             scanStride = 4
             valueOffset = 12
             pollIntervalMs = 25

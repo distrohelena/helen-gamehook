@@ -461,7 +461,7 @@ if (@($HooksManifest.stateObservers).Count -ne 1) {
 }
 
 if ($SubtitleObserver.scanStartAddress -ne '0x10000000' -or
-    $SubtitleObserver.scanEndAddress -ne '0x11000000' -or
+    $SubtitleObserver.scanEndAddress -ne '0x12000000' -or
     [int]$SubtitleObserver.scanStride -ne 4 -or
     [int]$SubtitleObserver.valueOffset -ne 12 -or
     [int]$SubtitleObserver.pollIntervalMs -ne 25 -or
