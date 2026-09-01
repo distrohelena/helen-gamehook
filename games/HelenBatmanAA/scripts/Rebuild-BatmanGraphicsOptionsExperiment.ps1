@@ -1,7 +1,8 @@
 param(
     [string]$Configuration = 'Release',
     [string]$BatmanRoot,
-    [string]$BuilderRoot
+    [string]$BuilderRoot,
+    [switch]$FunctionsOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -110,7 +111,7 @@ function Restore-AtomicRebuild {
         [Parameter(Mandatory = $true)][string]$LiveTargetPath,
         [Parameter(Mandatory = $true)][string]$PackBackupRoot,
         [Parameter(Mandatory = $true)][string]$TargetBackupPath,
-        [Parameter(Mandatory = $true)][string]$ActivationTempRoot,
+        [Parameter(Mandatory = $true)][string]$ActivationBackupRoot,
         [bool]$PackWasBackedUp = $false,
         [bool]$TargetWasBackedUp = $false,
         [bool]$PackWasInstalled = $false,
@@ -122,15 +123,98 @@ function Restore-AtomicRebuild {
         if (Test-Path -LiteralPath $LivePackRoot) { Remove-SafeMutationTarget -Path $LivePackRoot -AllowedExactPaths @($LivePackRoot) }
     }
     if (($PackWasBackedUp -or $packBackupExists) -and $packBackupExists) {
-        Move-SafeMutationTarget -Source $PackBackupRoot -Destination $LivePackRoot -SourceDescendantRoots @($ActivationTempRoot) -DestinationExactPaths @($LivePackRoot)
+        Move-SafeMutationTarget -Source $PackBackupRoot -Destination $LivePackRoot -SourceDescendantRoots @($ActivationBackupRoot) -DestinationExactPaths @($LivePackRoot)
     }
     if ($TargetWasInstalled -or $TargetWasBackedUp -or $targetBackupExists) {
         if (Test-Path -LiteralPath $LiveTargetPath) { Remove-SafeMutationTarget -Path $LiveTargetPath -AllowedExactPaths @($LiveTargetPath) }
     }
     if (($TargetWasBackedUp -or $targetBackupExists) -and $targetBackupExists) {
-        Move-SafeMutationTarget -Source $TargetBackupPath -Destination $LiveTargetPath -SourceDescendantRoots @($ActivationTempRoot) -DestinationExactPaths @($LiveTargetPath)
+        Move-SafeMutationTarget -Source $TargetBackupPath -Destination $LiveTargetPath -SourceDescendantRoots @($ActivationBackupRoot) -DestinationExactPaths @($LiveTargetPath)
     }
 }
+
+function Invoke-AtomicGraphicsPublication {
+    <#
+    Publish a fully verified pack and target as one rollback-capable transaction.
+    The caller supplies a verifier and optional injected transition failure so
+    tests exercise real file moves, restoration, and post-commit cleanup. Backups
+    live in a unique sibling of the staging root and are never removed in finally.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$LivePackRoot,
+        [Parameter(Mandatory = $true)][string]$LiveTargetPath,
+        [Parameter(Mandatory = $true)][string]$StagedPackRoot,
+        [Parameter(Mandatory = $true)][string]$StagedTargetPath,
+        [Parameter(Mandatory = $true)][string]$BackupRoot,
+        [Parameter(Mandatory = $true)][string]$TempRoot,
+        [Parameter(Mandatory = $true)][scriptblock]$VerifyPublication,
+        [ValidateSet('', 'AfterPackBackup', 'AfterTargetBackup', 'AfterPackActivation', 'AfterTargetActivation', 'AfterTargetVerification', 'AfterBackupDeletion')]
+        [string]$FailureInjection = ''
+    )
+    $livePack = Get-SafeFullPath $LivePackRoot
+    $liveTarget = Get-SafeFullPath $LiveTargetPath
+    $stagedPack = Assert-SafeMutationTarget -Path $StagedPackRoot -AllowedDescendantRoots @($TempRoot)
+    $stagedTarget = Assert-SafeMutationTarget -Path $StagedTargetPath -AllowedDescendantRoots @($TempRoot)
+    $tempFull = Get-SafeFullPath $TempRoot
+    $backupFull = Get-SafeFullPath $BackupRoot
+    if ([String]::Equals($backupFull, $tempFull, [StringComparison]::OrdinalIgnoreCase) -or $backupFull.StartsWith($tempFull.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Atomic publication backups must be outside the staging temp tree.'
+    }
+    if (Test-Path -LiteralPath $backupFull) { throw "Atomic publication backup root already exists: $backupFull" }
+    Assert-SafeMutationTarget -Path $backupFull -AllowedDescendantRoots @([IO.Path]::GetTempPath()) | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $backupFull 'pack'), (Join-Path $backupFull 'target') | Out-Null
+    $packBackupRoot = Join-Path $backupFull 'pack\batman-aa-graphics-options'
+    $targetBackupPath = Join-Path $backupFull 'target\Frontend-graphics-options.umap'
+    $packBackedUp = $false
+    $targetBackedUp = $false
+    $packInstalled = $false
+    $targetInstalled = $false
+    $committed = $false
+    try {
+        if (-not (Test-Path -LiteralPath $stagedPack) -or -not (Test-Path -LiteralPath $stagedTarget)) { throw 'Atomic publication staged inputs disappeared before activation.' }
+        if (Test-Path -LiteralPath $livePack) {
+            Move-SafeMutationTarget -Source $livePack -Destination $packBackupRoot -SourceExactPaths @($livePack) -DestinationDescendantRoots @($backupFull)
+            $packBackedUp = $true
+        }
+        if ($FailureInjection -eq 'AfterPackBackup') { throw 'Injected atomic publication failure after pack backup.' }
+        if (Test-Path -LiteralPath $liveTarget) {
+            Move-SafeMutationTarget -Source $liveTarget -Destination $targetBackupPath -SourceExactPaths @($liveTarget) -DestinationDescendantRoots @($backupFull)
+            $targetBackedUp = $true
+        }
+        if ($FailureInjection -eq 'AfterTargetBackup') { throw 'Injected atomic publication failure after target backup.' }
+        Move-SafeMutationTarget -Source $stagedPack -Destination $livePack -SourceDescendantRoots @($TempRoot) -DestinationExactPaths @($livePack)
+        $packInstalled = $true
+        if ($FailureInjection -eq 'AfterPackActivation') { throw 'Injected atomic publication failure after pack activation.' }
+        Move-SafeMutationTarget -Source $stagedTarget -Destination $liveTarget -SourceDescendantRoots @($TempRoot) -DestinationExactPaths @($liveTarget)
+        $targetInstalled = $true
+        if ($FailureInjection -eq 'AfterTargetActivation') { throw 'Injected atomic publication failure after target activation.' }
+        & $VerifyPublication $livePack $liveTarget
+        if (-not $?) { throw 'Atomic publication live-output verification failed.' }
+        if ($FailureInjection -eq 'AfterTargetVerification') { throw 'Injected atomic publication failure after target verification.' }
+        $committed = $true
+
+        if (Test-Path -LiteralPath $packBackupRoot) { Remove-SafeMutationTarget -Path $packBackupRoot -AllowedDescendantRoots @($backupFull) }
+        if ($FailureInjection -eq 'AfterBackupDeletion') { throw "Injected atomic publication backup cleanup failure while deleting '$targetBackupPath'." }
+        if (Test-Path -LiteralPath $targetBackupPath) { Remove-SafeMutationTarget -Path $targetBackupPath -AllowedDescendantRoots @($backupFull) }
+        if (Test-Path -LiteralPath $backupFull) { Remove-SafeMutationTarget -Path $backupFull -AllowedDescendantRoots @([IO.Path]::GetTempPath()) }
+    }
+    catch {
+        $failure = $_
+        if ($committed) {
+            throw "Atomic graphics-shell publication committed, but backup cleanup failed: $($failure.Exception.Message). Recovery copies are retained at $backupFull."
+        }
+        try {
+            Restore-AtomicRebuild -LivePackRoot $livePack -LiveTargetPath $liveTarget -PackBackupRoot $packBackupRoot -TargetBackupPath $targetBackupPath -ActivationBackupRoot $backupFull -PackWasBackedUp $packBackedUp -TargetWasBackedUp $targetBackedUp -PackWasInstalled $packInstalled -TargetWasInstalled $targetInstalled
+            if (Test-Path -LiteralPath $backupFull) { Remove-SafeMutationTarget -Path $backupFull -AllowedDescendantRoots @([IO.Path]::GetTempPath()) }
+        }
+        catch {
+            throw "Atomic graphics-shell publication failed: $($failure.Exception.Message); rollback failed: $($_.Exception.Message)"
+        }
+        throw $failure
+    }
+}
+
+if ($FunctionsOnly) { return }
 
 if ([string]::IsNullOrWhiteSpace($BatmanRoot)) { $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path } else { $BatmanRoot = (Resolve-Path $BatmanRoot).Path }
 if ([string]::IsNullOrWhiteSpace($BuilderRoot)) { $BuilderRoot = Join-Path $BatmanRoot 'builder' } elseif ([IO.Path]::IsPathRooted($BuilderRoot)) { $BuilderRoot = [IO.Path]::GetFullPath($BuilderRoot) } elseif (Test-Path -LiteralPath $BuilderRoot) { $BuilderRoot = (Resolve-Path $BuilderRoot).Path } else { $BuilderRoot = [IO.Path]::GetFullPath((Join-Path $BatmanRoot $BuilderRoot)) }
@@ -165,26 +249,16 @@ $stagedTargetPath = Join-Path $tempRoot 'target\Frontend-graphics-options.umap'
 $stagedPackRoot = Join-Path $tempRoot 'pack\batman-aa-graphics-options'
 $stagedPackBuildRoot = Join-Path $stagedPackRoot 'builds\steam-goty-1.0'
 $stagedDeltaPath = Join-Path $stagedPackBuildRoot 'assets\deltas\Frontend-graphics-options.hgdelta'
-$packBackupRoot = Join-Path $tempRoot 'activation-backup\pack\batman-aa-graphics-options'
-$targetBackupPath = Join-Path $tempRoot 'activation-backup\target\Frontend-graphics-options.umap'
-$activationTempRoot = Join-Path $tempRoot 'activation-backup'
+$activationBackupRoot = Join-Path $systemTempRoot ('HelenBatmanGraphicsShellBackup-' + [Guid]::NewGuid().ToString('N'))
 $stagedPackJsonPath = Join-Path $stagedPackRoot 'pack.json'
 $stagedBuildJsonPath = Join-Path $stagedPackBuildRoot 'build.json'
 $stagedBindingsJsonPath = Join-Path $stagedPackBuildRoot 'bindings.json'
 $stagedCommandsJsonPath = Join-Path $stagedPackBuildRoot 'commands.json'
 $stagedFilesJsonPath = Join-Path $stagedPackBuildRoot 'files.json'
-$stagedPackCreated = $false
-$stagedTargetCreated = $false
-$packBackedUp = $false
-$targetBackedUp = $false
-$packInstalled = $false
-$targetInstalled = $false
-$activationStarted = $false
-$activationCommitted = $false
-
-New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
-Assert-SafeMutationTarget -Path $tempRoot -AllowedDescendantRoots @($systemTempRoot) | Out-Null
+$primaryFailure = $null
 try {
+    New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+    Assert-SafeMutationTarget -Path $tempRoot -AllowedDescendantRoots @($systemTempRoot) | Out-Null
     Invoke-RequiredProcess -FilePath 'dotnet' -Arguments @('build', $builderProjectPath, '-c', $Configuration) -FailureMessage 'SubtitleSizeModBuilder build failed.'
     Invoke-RequiredProcess -FilePath 'dotnet' -Arguments @('build', $patcherProjectPath, '-c', $Configuration) -FailureMessage 'BmGameGfxPatcher build failed.'
     Invoke-RequiredProcess -FilePath 'dotnet' -Arguments @('run', '--project', $builderProjectPath, '-c', $Configuration, '--', 'build-main-menu-graphics-shell', '--root', $BuilderRoot, '--output-dir', $prototypeOutputRoot, '--ffdec', $ffdecPath) -FailureMessage 'build-main-menu-graphics-shell failed.'
@@ -212,7 +286,6 @@ try {
     # Keep the verified current-run target beside the staged pack; this is the only target that may become stable.
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $stagedTargetPath) | Out-Null
     Copy-Item -LiteralPath $tempTargetPath -Destination $stagedTargetPath -Force
-    $stagedTargetCreated = $true
 
     $buildMatch = & $buildMatchPath
     if ($buildMatch.BuildId -cne 'steam-goty-1.0' -or $buildMatch.Executable -cne 'ShippingPC-BmGame.exe' -or [int64]$buildMatch.FileSize -ne 38758728 -or $buildMatch.Sha256 -cne '4DAC1F5E2AC6710B7378FDCE74601F616F4753E3756CB5FDA63C7519CC2EB028') { throw 'Steam build match is not the verified retail executable identity.' }
@@ -247,59 +320,34 @@ try {
     Write-Utf8TextFile -Path $stagedBuildJsonPath -Contents ($build | ConvertTo-Json -Depth 5)
     Write-Utf8TextFile -Path $stagedBindingsJsonPath -Contents (([ordered]@{ bindings = @() }) | ConvertTo-Json -Depth 3)
     Write-Utf8TextFile -Path $stagedCommandsJsonPath -Contents (([ordered]@{ commands = @() }) | ConvertTo-Json -Depth 3)
-    $stagedPackCreated = $true
 
     # The verifier reopens/export-checks the staged target and reconstructs its delta before activation.
     & $packageVerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot -Configuration $Configuration -PackRootOverride $stagedPackRoot -TargetPathOverride $stagedTargetPath
     if (-not $?) { throw 'Staged graphics-options pack verification failed.' }
 
-    $stagedPackFullPath = Get-SafeFullPath $stagedPackRoot
-    $stagedTargetFullPath = Get-SafeFullPath $stagedTargetPath
-    $packFullPath = Get-SafeFullPath $packRoot
-    $targetFullPath = Get-SafeFullPath $stableTargetPath
-    if ([String]::Equals($stagedPackFullPath, $packFullPath, [StringComparison]::OrdinalIgnoreCase) -or [String]::Equals($stagedTargetFullPath, $targetFullPath, [StringComparison]::OrdinalIgnoreCase)) { throw 'Staged graphics-shell paths must differ from live paths.' }
-    Assert-SafeMutationTarget -Path $stableExperimentRoot -AllowedExactPaths @($stableExperimentRoot) | Out-Null
-    New-Item -ItemType Directory -Force -Path $stableExperimentRoot | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $activationTempRoot 'pack') | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $activationTempRoot 'target') | Out-Null
-    $activationStarted = $true
-    if (Test-Path -LiteralPath $packRoot) {
-        Move-SafeMutationTarget -Source $packRoot -Destination $packBackupRoot -SourceExactPaths @($packRoot) -DestinationDescendantRoots @($tempRoot)
-        $packBackedUp = $true
+    $verifyPublication = {
+        param($LivePackRootForVerification, $LiveTargetPathForVerification)
+        & $packageVerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot -Configuration $Configuration
+        if (-not $?) { throw 'Post-activation graphics-options pack verification failed.' }
     }
-    if (Test-Path -LiteralPath $stableTargetPath) {
-        Move-SafeMutationTarget -Source $stableTargetPath -Destination $targetBackupPath -SourceExactPaths @($stableTargetPath) -DestinationDescendantRoots @($tempRoot)
-        $targetBackedUp = $true
-    }
-    Move-SafeMutationTarget -Source $stagedPackRoot -Destination $packRoot -SourceDescendantRoots @($tempRoot) -DestinationExactPaths @($packRoot)
-    $stagedPackCreated = $false
-    $packInstalled = $true
-    Move-SafeMutationTarget -Source $stagedTargetPath -Destination $stableTargetPath -SourceDescendantRoots @($tempRoot) -DestinationExactPaths @($stableTargetPath)
-    $stagedTargetCreated = $false
-    $targetInstalled = $true
-
-    # Verify the activated paths before deleting their explicit rollback backups.
-    & $packageVerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot -Configuration $Configuration
-    if (-not $?) { throw 'Post-activation graphics-options pack verification failed.' }
-    $activationCommitted = $true
-    if (Test-Path -LiteralPath $packBackupRoot) { Remove-SafeMutationTarget -Path $packBackupRoot -AllowedDescendantRoots @($tempRoot) }
-    if (Test-Path -LiteralPath $targetBackupPath) { Remove-SafeMutationTarget -Path $targetBackupPath -AllowedDescendantRoots @($tempRoot) }
+    Invoke-AtomicGraphicsPublication -LivePackRoot $packRoot -LiveTargetPath $stableTargetPath -StagedPackRoot $stagedPackRoot -StagedTargetPath $stagedTargetPath -BackupRoot $activationBackupRoot -TempRoot $tempRoot -VerifyPublication $verifyPublication
 }
 catch {
-    $failure = $_
-    try {
-        if ($activationStarted -and -not $activationCommitted) {
-            Restore-AtomicRebuild -LivePackRoot $packRoot -LiveTargetPath $stableTargetPath -PackBackupRoot $packBackupRoot -TargetBackupPath $targetBackupPath -ActivationTempRoot $tempRoot -PackWasBackedUp $packBackedUp -TargetWasBackedUp $targetBackedUp -PackWasInstalled $packInstalled -TargetWasInstalled $targetInstalled
-        }
-    }
-    catch {
-        throw "Atomic graphics-shell rollback failed after '$($failure.Exception.Message)': $($_.Exception.Message)"
-    }
-    throw $failure
+    $primaryFailure = $_
+    throw $primaryFailure
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot) {
-        Remove-SafeMutationTarget -Path $tempRoot -AllowedDescendantRoots @($systemTempRoot)
+        try {
+            Remove-SafeMutationTarget -Path $tempRoot -AllowedDescendantRoots @($systemTempRoot)
+        }
+        catch {
+            if ($null -ne $primaryFailure) {
+                Write-Warning "Graphics-shell staging cleanup failed after the primary failure '$($primaryFailure.Exception.Message)': $($_.Exception.Message)"
+            } else {
+                throw "Graphics-shell staging cleanup failed: $($_.Exception.Message)"
+            }
+        }
     }
 }
 

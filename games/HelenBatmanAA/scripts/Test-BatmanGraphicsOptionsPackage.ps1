@@ -90,11 +90,24 @@ function Assert-ExactPackFileSet {
         "builds\$BuildDirectoryName\assets\deltas\Frontend-graphics-options.hgdelta"
     ) | Sort-Object
     $rootPrefix = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
-    $actual = @(Get-ChildItem -LiteralPath $Root -Recurse -File | ForEach-Object {
+    $actual = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -File | ForEach-Object {
         $_.FullName.Substring($rootPrefix.Length).Replace('/', '\')
     } | Sort-Object)
     if (($actual -join '|') -cne ($expected -join '|')) {
         throw "Graphics-options pack file set drifted. Expected '$($expected -join ', ')' but found '$($actual -join ', ')'."
+    }
+}
+
+function Assert-ExactGeneratedTargetFileSet {
+    param([Parameter(Mandatory = $true)] [string]$Root, [Parameter(Mandatory = $true)] [string]$TargetPath)
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { throw "Stable generated output root was not found: $Root" }
+    $rootPrefix = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    $expected = @([IO.Path]::GetFileName($TargetPath))
+    $actual = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -File | ForEach-Object { $_.FullName.Substring($rootPrefix.Length).Replace('/', '\') } | Sort-Object)
+    if (($actual -join '|') -cne ($expected -join '|')) {
+        $expectedText = $expected -join ', '
+        $actualText = $actual -join ', '
+        throw "Stable generated output file set drifted. Expected '$expectedText' but found '$actualText'."
     }
 }
 
@@ -207,6 +220,67 @@ function Assert-HgdeltaRejected {
     if (-not $rejected) { throw "HGDL verifier accepted invalid $CaseName fixture." }
 }
 
+function Assert-AtomicPublicationRegression {
+    $rebuildPath = Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1'
+    $regressionRoot = Join-Path ([IO.Path]::GetTempPath()) ('HelenBatmanGraphicsAtomicRegression-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $regressionRoot | Out-Null
+    try {
+        . $rebuildPath -FunctionsOnly
+        if ($null -eq (Get-Command Invoke-AtomicGraphicsPublication -ErrorAction SilentlyContinue)) { throw 'Atomic publication helper was not loaded.' }
+        $preCommitFailures = @('AfterPackBackup', 'AfterTargetBackup', 'AfterPackActivation', 'AfterTargetActivation', 'AfterTargetVerification')
+        foreach ($failureCase in $preCommitFailures) {
+            $caseRoot = Join-Path $regressionRoot $failureCase
+            $livePack = Join-Path $caseRoot 'live\pack'
+            $liveTarget = Join-Path $caseRoot 'live\Frontend.umap'
+            $backupRoot = Join-Path $caseRoot 'backup-sibling'
+            $tempRoot = Join-Path $caseRoot 'staging-temp'
+            $stagedPack = Join-Path $tempRoot 'pack'
+            $stagedTarget = Join-Path $tempRoot 'Frontend.umap'
+            New-Item -ItemType Directory -Force -Path $tempRoot, $livePack, $stagedPack, (Split-Path -Parent $liveTarget) | Out-Null
+            [IO.File]::WriteAllText((Join-Path $livePack 'pack.json'), 'old-pack')
+            [IO.File]::WriteAllText($liveTarget, 'old-target')
+            [IO.File]::WriteAllText((Join-Path $stagedPack 'pack.json'), 'new-pack')
+            [IO.File]::WriteAllText($stagedTarget, 'new-target')
+            $oldPackHash = (Get-FileHash -LiteralPath (Join-Path $livePack 'pack.json') -Algorithm SHA256).Hash
+            $oldTargetHash = (Get-FileHash -LiteralPath $liveTarget -Algorithm SHA256).Hash
+            if ([IO.Path]::GetFullPath($backupRoot).StartsWith(([IO.Path]::GetFullPath($tempRoot).TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)) { throw "$failureCase backup path is inside the temp tree." }
+            $verify = { param($LivePackRoot, $LiveTargetPath) if ((Get-Content -LiteralPath (Join-Path $LivePackRoot 'pack.json') -Raw) -cne 'new-pack' -or (Get-Content -LiteralPath $LiveTargetPath -Raw) -cne 'new-target') { throw 'Injected publication verification saw unexpected live contents.' } }
+            $failed = $false
+            try {
+                Invoke-AtomicGraphicsPublication -LivePackRoot $livePack -LiveTargetPath $liveTarget -StagedPackRoot $stagedPack -StagedTargetPath $stagedTarget -BackupRoot $backupRoot -TempRoot $tempRoot -VerifyPublication $verify -FailureInjection $failureCase
+            } catch { $failed = $true }
+            if (-not $failed) { throw "$failureCase injection did not fail." }
+            if ((Get-FileHash -LiteralPath (Join-Path $livePack 'pack.json') -Algorithm SHA256).Hash -cne $oldPackHash -or (Get-FileHash -LiteralPath $liveTarget -Algorithm SHA256).Hash -cne $oldTargetHash) { throw "$failureCase injection did not restore exact old live hashes." }
+        }
+
+        $cleanupRoot = Join-Path $regressionRoot 'AfterBackupDeletion'
+        $livePack = Join-Path $cleanupRoot 'live\pack'
+        $liveTarget = Join-Path $cleanupRoot 'live\Frontend.umap'
+        $backupRoot = Join-Path $cleanupRoot 'backup-sibling'
+        $tempRoot = Join-Path $cleanupRoot 'staging-temp'
+        $stagedPack = Join-Path $tempRoot 'pack'
+        $stagedTarget = Join-Path $tempRoot 'Frontend.umap'
+        New-Item -ItemType Directory -Force -Path $tempRoot, $livePack, $stagedPack, (Split-Path -Parent $liveTarget) | Out-Null
+        [IO.File]::WriteAllText((Join-Path $livePack 'pack.json'), 'old-pack')
+        [IO.File]::WriteAllText($liveTarget, 'old-target')
+        [IO.File]::WriteAllText((Join-Path $stagedPack 'pack.json'), 'new-pack')
+        [IO.File]::WriteAllText($stagedTarget, 'new-target')
+        $verify = { param($LivePackRoot, $LiveTargetPath) if ((Get-Content -LiteralPath (Join-Path $LivePackRoot 'pack.json') -Raw) -cne 'new-pack' -or (Get-Content -LiteralPath $LiveTargetPath -Raw) -cne 'new-target') { throw 'Injected publication verification saw unexpected live contents.' } }
+        $failed = $false
+        try {
+            Invoke-AtomicGraphicsPublication -LivePackRoot $livePack -LiveTargetPath $liveTarget -StagedPackRoot $stagedPack -StagedTargetPath $stagedTarget -BackupRoot $backupRoot -TempRoot $tempRoot -VerifyPublication $verify -FailureInjection 'AfterBackupDeletion'
+        } catch { $failed = $true }
+        if (-not $failed) { throw 'AfterBackupDeletion injection did not surface cleanup failure.' }
+        if ((Get-Content -LiteralPath (Join-Path $livePack 'pack.json') -Raw) -cne 'new-pack' -or (Get-Content -LiteralPath $liveTarget -Raw) -cne 'new-target') { throw 'Backup cleanup failure did not leave verified new live outputs in place.' }
+        $retainedTargetBackup = Join-Path $backupRoot 'target\Frontend-graphics-options.umap'
+        if (-not (Test-Path -LiteralPath $backupRoot) -or -not (Test-Path -LiteralPath $retainedTargetBackup) -or (Get-Content -LiteralPath $retainedTargetBackup -Raw) -cne 'old-target') { throw 'Backup cleanup failure did not retain the failed sibling recovery copy.' }
+        if ([IO.Path]::GetFullPath($backupRoot).StartsWith(([IO.Path]::GetFullPath($tempRoot).TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)) { throw 'Recovery copies were retained inside the temp tree.' }
+    }
+    finally {
+        if (Test-Path -LiteralPath $regressionRoot) { Remove-Item -LiteralPath $regressionRoot -Recurse -Force }
+    }
+}
+
 function Reconstruct-HgdeltaTarget {
     param(
         [Parameter(Mandatory = $true)] [string]$BasePath,
@@ -309,6 +383,7 @@ $hooksJsonPath = Join-Path $buildRoot 'hooks.json'
 $texturesJsonPath = Join-Path $buildRoot 'textures.json'
 $basePath = Join-Path $BuilderRoot 'extracted\frontend-retail\Frontend.umap'
 $targetPath = if ([string]::IsNullOrWhiteSpace($TargetPathOverride)) { Join-Path $BuilderRoot 'generated\graphics-options-experiment\Frontend-graphics-options.umap' } else { [IO.Path]::GetFullPath($TargetPathOverride) }
+$stableGeneratedRoot = Join-Path $BuilderRoot 'generated\graphics-options-experiment'
 $ffdecPath = Join-Path $BuilderRoot 'extracted\ffdec\ffdec-cli.exe'
 $patcherProjectPath = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\BmGameGfxPatcher\BmGameGfxPatcher.csproj'
 
@@ -316,7 +391,9 @@ foreach ($requiredPath in @($packJsonPath, $buildJsonPath, $bindingsJsonPath, $c
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Batman graphics-options package input not found: $requiredPath" }
 }
 Assert-RebuildAtomicSourceContract -ScriptPath (Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1')
+Assert-AtomicPublicationRegression
 Assert-ExactPackFileSet -Root $packRoot -BuildDirectoryName 'steam-goty-1.0'
+Assert-ExactGeneratedTargetFileSet -Root $stableGeneratedRoot -TargetPath $targetPath
 if (Test-Path -LiteralPath $hooksJsonPath) { throw 'Graphics-options shell must not contain hooks.json.' }
 if (Test-Path -LiteralPath $texturesJsonPath) { throw 'Graphics-options shell must not contain textures.json.' }
 
