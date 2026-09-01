@@ -8,100 +8,282 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1')
 
-$BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$RepoRoot = (Resolve-Path (Join-Path $BatmanRoot '..\..')).Path
-$BuilderRoot = Resolve-OptionalBuilderRoot -BatmanRootPath $BatmanRoot -BuilderRootPath $BuilderRoot
-$GameRoot = [IO.Path]::GetFullPath((Join-Path $GameBin '..'))
+function Get-SafeFullPath {
+    <# Resolve a filesystem path while rejecting Windows device namespaces. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$Path
+    )
 
-$PackSource = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-graphics-options'
-$PackDestination = Join-Path $GameBin 'helengamehook\packs\batman-aa-graphics-options'
-$PackParent = Split-Path -Path $PackDestination -Parent
-$ConfigSourcePath = Join-Path $BatmanRoot 'helengamehook\config\packs.json'
-$ConfigDestinationPath = Join-Path $GameBin 'helengamehook\config\packs.json'
-$ConfigParent = Split-Path -Path $ConfigDestinationPath -Parent
-$SubtitlePackDestination = Join-Path $GameBin 'helengamehook\packs\batman-aa-subtitles'
-$RebuildScriptPath = Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1'
-$VerifierPath = Join-Path $PSScriptRoot 'Test-BatmanGraphicsOptionsPackage.ps1'
-$InstalledBaseVerifierPath = Join-Path $PSScriptRoot 'Test-BatmanInstalledBaseCompatibility.ps1'
-$HelenGameHookPath = Join-Path $RepoRoot "bin\Win32\$Configuration\HelenGameHook.dll"
-$ProxyPath = Join-Path $RepoRoot "bin\Win32\$Configuration\dinput8.dll"
-$DeploymentId = [Guid]::NewGuid().ToString('N')
-$SystemTempRoot = [IO.Path]::GetTempPath()
-$DeploymentTempRoot = Join-Path $SystemTempRoot "HelenBatmanGraphicsDeployment-$DeploymentId"
-$PackStagingDestination = Join-Path $DeploymentTempRoot 'pack'
-$ConfigStagingPath = Join-Path $DeploymentTempRoot 'config\packs.json'
-$ConfigStagingParent = Split-Path -Path $ConfigStagingPath -Parent
-$BackupRoot = Join-Path $SystemTempRoot "HelenBatmanGraphicsDeploymentBackup-$DeploymentId"
-$PackBackupRoot = Join-Path $BackupRoot 'pack'
-$ConfigBackupPath = Join-Path $BackupRoot 'packs.json'
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw 'Deployment paths must not be empty.'
+    }
+    if ($Path.StartsWith('\\?\', [StringComparison]::Ordinal) -or
+        $Path.StartsWith('\\.\', [StringComparison]::Ordinal) -or
+        $Path.StartsWith('\??\', [StringComparison]::Ordinal)) {
+        throw "Deployment device-namespace paths are not allowed: $Path"
+    }
+    return [IO.Path]::GetFullPath($Path)
+}
+
+function Test-PathWithinRoot {
+    <# Return whether a path is the allowed root or a strict descendant of it. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [Parameter(Mandatory = $true)] [string]$Root
+    )
+
+    $fullPath = Get-SafeFullPath $Path
+    $fullRoot = Get-SafeFullPath $Root
+    return [String]::Equals($fullPath, $fullRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith($fullRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-SafeDeploymentPath {
+    <# Validate path scope and reject reparse points on every existing path component. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [Parameter(Mandatory = $true)] [string[]]$AllowedRoots,
+        [switch]$RequireExisting
+    )
+
+    $fullPath = Get-SafeFullPath $Path
+    $matchingRoot = $null
+    foreach ($root in $AllowedRoots) {
+        if (Test-PathWithinRoot -Path $fullPath -Root $root) {
+            $matchingRoot = Get-SafeFullPath $root
+            break
+        }
+    }
+    if ($null -eq $matchingRoot) {
+        throw "Deployment path is outside its allowed root: $fullPath"
+    }
+    if ($RequireExisting -and -not (Test-Path -LiteralPath $fullPath)) {
+        throw "Required deployment path was not found: $fullPath"
+    }
+
+    $current = $fullPath
+    while ($true) {
+        if (Test-Path -LiteralPath $current) {
+            $item = Get-Item -LiteralPath $current -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Deployment path contains a reparse point: $current"
+            }
+        }
+        if ([String]::Equals($current, $matchingRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            break
+        }
+        $parent = Split-Path -Parent $current
+        if ([string]::IsNullOrWhiteSpace($parent) -or [String]::Equals($parent, $current, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Deployment path could not reach its allowed root: $fullPath"
+        }
+        $current = $parent
+    }
+    return $fullPath
+}
+
+function Assert-SafeDeploymentTree {
+    <# Validate a recursive mutation or copy target without traversing links. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$Root,
+        [Parameter(Mandatory = $true)] [string[]]$AllowedRoots,
+        [switch]$RequireExisting
+    )
+
+    $fullRoot = Assert-SafeDeploymentPath -Path $Root -AllowedRoots $AllowedRoots -RequireExisting:$RequireExisting
+    if (-not (Test-Path -LiteralPath $fullRoot -PathType Container)) {
+        throw "Deployment tree is not a directory: $fullRoot"
+    }
+    $pendingDirectories = [Collections.Generic.Stack[string]]::new()
+    $pendingDirectories.Push($fullRoot)
+    while ($pendingDirectories.Count -gt 0) {
+        $currentDirectory = $pendingDirectories.Pop()
+        foreach ($child in @(Get-ChildItem -LiteralPath $currentDirectory -Force)) {
+            $childPath = Assert-SafeDeploymentPath -Path $child.FullName -AllowedRoots $AllowedRoots -RequireExisting
+            if ($child.PSIsContainer) {
+                $pendingDirectories.Push($childPath)
+            }
+        }
+    }
+    return $fullRoot
+}
+
+function Get-SafeDeploymentItems {
+    <# Enumerate a validated tree without descending through a reparse point. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$Root,
+        [Parameter(Mandatory = $true)] [string[]]$AllowedRoots
+    )
+
+    $fullRoot = Assert-SafeDeploymentPath -Path $Root -AllowedRoots $AllowedRoots -RequireExisting
+    if (-not (Test-Path -LiteralPath $fullRoot -PathType Container)) {
+        throw "Deployment tree is not a directory: $fullRoot"
+    }
+    $pendingDirectories = [Collections.Generic.Stack[string]]::new()
+    $pendingDirectories.Push($fullRoot)
+    while ($pendingDirectories.Count -gt 0) {
+        $currentDirectory = $pendingDirectories.Pop()
+        foreach ($child in @(Get-ChildItem -LiteralPath $currentDirectory -Force)) {
+            $childPath = Assert-SafeDeploymentPath -Path $child.FullName -AllowedRoots $AllowedRoots -RequireExisting
+            Write-Output $child
+            if ($child.PSIsContainer) {
+                $pendingDirectories.Push($childPath)
+            }
+        }
+    }
+}
+
+function Assert-DeploymentArtifactKind {
+    <# Require the expected file or directory type before moving a deployment artifact. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [Parameter(Mandatory = $true)] [ValidateSet('File', 'Directory')] [string]$Kind,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    $isDirectory = Test-Path -LiteralPath $Path -PathType Container
+    if (($Kind -eq 'Directory' -and -not $isDirectory) -or ($Kind -eq 'File' -and $isDirectory)) {
+        throw "$Context has the wrong filesystem type: $Path"
+    }
+}
+
+function Get-DirectorySnapshot {
+    <# Capture every directory and file, including size and SHA-256, for exact preservation checks. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$Root
+    )
+
+    Assert-SafeDeploymentTree -Root $Root -AllowedRoots @($Root) -RequireExisting | Out-Null
+    $fullRoot = (Get-SafeFullPath $Root).TrimEnd('\') + '\'
+    return @(
+        Get-SafeDeploymentItems -Root $Root -AllowedRoots @($Root) | ForEach-Object {
+            $relativePath = $_.FullName.Substring($fullRoot.Length).Replace('/', '\')
+            if ($_.PSIsContainer) {
+                [pscustomobject]@{ RelativePath = $relativePath; Kind = 'Directory'; Length = [int64]0; Sha256 = '' }
+            } else {
+                [pscustomobject]@{ RelativePath = $relativePath; Kind = 'File'; Length = [int64]$_.Length; Sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
+            }
+        } | Sort-Object Kind, RelativePath
+    )
+}
+
+function Assert-DirectorySnapshotEqual {
+    <# Fail if an installed directory differs in entries, lengths, or hashes from its baseline. #>
+    param(
+        [Parameter(Mandatory = $true)] [object[]]$Expected,
+        [Parameter(Mandatory = $true)] [string]$ActualRoot,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    $actual = @(Get-DirectorySnapshot -Root $ActualRoot)
+    if ($Expected.Count -ne $actual.Count) {
+        throw "$Context directory entry count changed. Expected $($Expected.Count), found $($actual.Count)."
+    }
+    for ($index = 0; $index -lt $Expected.Count; $index++) {
+        foreach ($property in @('RelativePath', 'Kind', 'Length', 'Sha256')) {
+            if ($Expected[$index].$property -cne $actual[$index].$property) {
+                throw "$Context directory entry changed at index $index property $property."
+            }
+        }
+    }
+}
 
 function Assert-BatmanGraphicsPackConfig {
     <# Validate the only supported checkpoint configuration and its pack order. #>
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path,
-        [Parameter(Mandatory = $true)]
-        [string]$Context
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [Parameter(Mandatory = $true)] [string]$Context
     )
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "$Context pack configuration was not found: $Path"
     }
-
     $config = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     $enabledPacks = @($config.enabledPacksByExecutable.'ShippingPC-BmGame.exe')
-    if ($enabledPacks.Count -ne 2) {
-        throw "$Context pack configuration must contain exactly two enabled packs, found $($enabledPacks.Count)."
-    }
-    if ($enabledPacks[0] -ne 'batman-aa-subtitles' -or $enabledPacks[1] -ne 'batman-aa-graphics-options') {
-        throw "$Context pack configuration must enable batman-aa-subtitles before batman-aa-graphics-options."
+    if ($enabledPacks.Count -ne 2 -or $enabledPacks[0] -ne 'batman-aa-subtitles' -or $enabledPacks[1] -ne 'batman-aa-graphics-options') {
+        throw "$Context pack configuration must enable exactly batman-aa-subtitles then batman-aa-graphics-options."
     }
 }
 
 function Test-ExpectedGraphicsVirtualFile {
     <# Verify that one staged or activated graphics shell manifest names its delta file. #>
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$PackRoot,
-        [Parameter(Mandatory = $true)]
-        [string]$Context
+        [Parameter(Mandatory = $true)] [string]$PackRoot,
+        [Parameter(Mandatory = $true)] [string]$Context
     )
 
+    Assert-SafeDeploymentTree -Root $PackRoot -AllowedRoots @($PackRoot) -RequireExisting | Out-Null
     $buildRoot = Join-Path $PackRoot 'builds\steam-goty-1.0'
     $filesJsonPath = Join-Path $buildRoot 'files.json'
     if (-not (Test-Path -LiteralPath $filesJsonPath -PathType Leaf)) {
         throw "$Context graphics shell files.json was not found: $filesJsonPath"
     }
-
     $files = Get-Content -LiteralPath $filesJsonPath -Raw | ConvertFrom-Json
     $virtualFiles = @($files.virtualFiles)
     if ($virtualFiles.Count -ne 1) {
         throw "$Context graphics shell must contain exactly one virtual file, found $($virtualFiles.Count)."
     }
-
     $virtualFile = $virtualFiles[0]
-    if ($virtualFile.id -ne 'frontendGraphicsOptionsPackage' -or
-        $virtualFile.path -ne 'BmGame/CookedPC/Maps/Frontend/Frontend.umap' -or
-        $virtualFile.mode -ne 'delta-on-read' -or
-        $virtualFile.source.kind -ne 'delta-file' -or
-        $virtualFile.source.path -ne 'assets/deltas/Frontend-graphics-options.hgdelta') {
+    if ($virtualFile.id -ne 'frontendGraphicsOptionsPackage' -or $virtualFile.path -ne 'BmGame/CookedPC/Maps/Frontend/Frontend.umap' -or $virtualFile.mode -ne 'delta-on-read' -or $virtualFile.source.kind -ne 'delta-file' -or $virtualFile.source.path -ne 'assets/deltas/Frontend-graphics-options.hgdelta') {
         throw "$Context graphics shell virtual-file contract drifted."
     }
-
     $deltaPath = Join-Path $buildRoot 'assets\deltas\Frontend-graphics-options.hgdelta'
     if (-not (Test-Path -LiteralPath $deltaPath -PathType Leaf)) {
         throw "$Context graphics shell delta was not found: $deltaPath"
     }
 }
 
-function Invoke-DeploymentFailureInjection {
-    <# Inject a deterministic transition failure for the isolated rollback tests. #>
+function Get-RecoverySurvivorPaths {
+    <# Enumerate only actual recovery entries so post-commit errors never claim deleted backups survive. #>
     param(
-        [Parameter(Mandatory = $true)]
-        [AllowEmptyString()]
-        [string]$FailureInjection,
-        [Parameter(Mandatory = $true)]
-        [string]$Point
+        [Parameter(Mandatory = $true)] [string]$RecoveryRoot,
+        [Parameter(Mandatory = $true)] [string]$GameBin
+    )
+
+    if (-not (Test-Path -LiteralPath $RecoveryRoot)) {
+        return @()
+    }
+    Assert-SafeDeploymentTree -Root $RecoveryRoot -AllowedRoots @($GameBin) -RequireExisting | Out-Null
+    return @(Get-SafeDeploymentItems -Root $RecoveryRoot -AllowedRoots @($GameBin) | Select-Object -ExpandProperty FullName)
+}
+
+function Remove-EmptyDeploymentRecoveryRoot {
+    <# Remove a validated empty recovery directory after rollback has moved originals back. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$RecoveryRoot,
+        [Parameter(Mandatory = $true)] [string]$GameBin
+    )
+
+    if (-not (Test-Path -LiteralPath $RecoveryRoot)) {
+        return
+    }
+    Assert-SafeDeploymentTree -Root $RecoveryRoot -AllowedRoots @($GameBin) -RequireExisting | Out-Null
+    if (@(Get-ChildItem -LiteralPath $RecoveryRoot -Force).Count -eq 0) {
+        Remove-Item -LiteralPath $RecoveryRoot -Force
+    }
+}
+
+function Remove-DeploymentStagingRoot {
+    <# Remove only the validated outer staging root, leaving recovery copies untouched. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$StagingRoot,
+        [Parameter(Mandatory = $true)] [string]$GameBin
+    )
+
+    if (-not (Test-Path -LiteralPath $StagingRoot)) {
+        return
+    }
+    Assert-SafeDeploymentTree -Root $StagingRoot -AllowedRoots @($GameBin) -RequireExisting | Out-Null
+    Remove-Item -LiteralPath $StagingRoot -Recurse -Force
+}
+
+function Invoke-DeploymentFailureInjection {
+    <# Inject a deterministic transition failure for isolated rollback tests. #>
+    param(
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [string]$FailureInjection,
+        [Parameter(Mandatory = $true)] [string]$Point
     )
 
     if ($FailureInjection -eq $Point) {
@@ -110,227 +292,295 @@ function Invoke-DeploymentFailureInjection {
 }
 
 function Restore-AtomicGraphicsDeployment {
-    <# Restore the previous graphics pack and repository config after a pre-commit failure. #>
+    <# Restore every replaced artifact after a failure before publication is committed. #>
     param(
+        [Parameter(Mandatory = $true)] [string]$GameBin,
         [Parameter(Mandatory = $true)] [string]$LivePackRoot,
         [Parameter(Mandatory = $true)] [string]$LiveConfigPath,
+        [Parameter(Mandatory = $true)] [string]$LiveHelenGameHookPath,
+        [Parameter(Mandatory = $true)] [string]$LiveProxyPath,
         [Parameter(Mandatory = $true)] [string]$PackBackupRoot,
         [Parameter(Mandatory = $true)] [string]$ConfigBackupPath,
+        [Parameter(Mandatory = $true)] [string]$HelenGameHookBackupPath,
+        [Parameter(Mandatory = $true)] [string]$ProxyBackupPath,
+        [Parameter(Mandatory = $true)] [string]$RecoveryRoot,
         [bool]$PackWasBackedUp,
         [bool]$ConfigWasBackedUp,
+        [bool]$HelenGameHookWasBackedUp,
+        [bool]$ProxyWasBackedUp,
         [bool]$PackWasInstalled,
-        [bool]$ConfigWasInstalled
+        [bool]$ConfigWasInstalled,
+        [bool]$HelenGameHookWasInstalled,
+        [bool]$ProxyWasInstalled
     )
 
-    if ($PackWasInstalled -and (Test-Path -LiteralPath $LivePackRoot)) {
-        Remove-Item -LiteralPath $LivePackRoot -Recurse -Force
-    }
-    if ($PackWasBackedUp -and (Test-Path -LiteralPath $PackBackupRoot)) {
-        Move-Item -LiteralPath $PackBackupRoot -Destination $LivePackRoot
+    foreach ($path in @($LivePackRoot, $LiveConfigPath, $LiveHelenGameHookPath, $LiveProxyPath, $PackBackupRoot, $ConfigBackupPath, $HelenGameHookBackupPath, $ProxyBackupPath)) {
+        Assert-SafeDeploymentPath -Path $path -AllowedRoots @($GameBin) | Out-Null
     }
 
-    if ($ConfigWasInstalled -and (Test-Path -LiteralPath $LiveConfigPath)) {
-        Remove-Item -LiteralPath $LiveConfigPath -Force
-    }
-    if ($ConfigWasBackedUp -and (Test-Path -LiteralPath $ConfigBackupPath)) {
-        Move-Item -LiteralPath $ConfigBackupPath -Destination $LiveConfigPath
-    }
+    if ($PackWasInstalled -and (Test-Path -LiteralPath $LivePackRoot)) { Remove-Item -LiteralPath $LivePackRoot -Recurse -Force }
+    if ($PackWasBackedUp -and (Test-Path -LiteralPath $PackBackupRoot)) { Move-Item -LiteralPath $PackBackupRoot -Destination $LivePackRoot }
+    if ($ConfigWasInstalled -and (Test-Path -LiteralPath $LiveConfigPath)) { Remove-Item -LiteralPath $LiveConfigPath -Force }
+    if ($ConfigWasBackedUp -and (Test-Path -LiteralPath $ConfigBackupPath)) { Move-Item -LiteralPath $ConfigBackupPath -Destination $LiveConfigPath }
+    if ($HelenGameHookWasInstalled -and (Test-Path -LiteralPath $LiveHelenGameHookPath)) { Remove-Item -LiteralPath $LiveHelenGameHookPath -Force }
+    if ($HelenGameHookWasBackedUp -and (Test-Path -LiteralPath $HelenGameHookBackupPath)) { Move-Item -LiteralPath $HelenGameHookBackupPath -Destination $LiveHelenGameHookPath }
+    if ($ProxyWasInstalled -and (Test-Path -LiteralPath $LiveProxyPath)) { Remove-Item -LiteralPath $LiveProxyPath -Force }
+    if ($ProxyWasBackedUp -and (Test-Path -LiteralPath $ProxyBackupPath)) { Move-Item -LiteralPath $ProxyBackupPath -Destination $LiveProxyPath }
+    Remove-EmptyDeploymentRecoveryRoot -RecoveryRoot $RecoveryRoot -GameBin $GameBin
 }
 
 function Invoke-AtomicGraphicsDeployment {
-    <# Publish the pack and config with rollback until both are verified live. #>
+    <# Stage, publish, verify, and clean four artifacts with rollback before the commit point. #>
     param(
+        [Parameter(Mandatory = $true)] [string]$GameBin,
         [Parameter(Mandatory = $true)] [string]$LivePackRoot,
         [Parameter(Mandatory = $true)] [string]$LiveConfigPath,
+        [Parameter(Mandatory = $true)] [string]$LiveHelenGameHookPath,
+        [Parameter(Mandatory = $true)] [string]$LiveProxyPath,
         [Parameter(Mandatory = $true)] [string]$StagedPackRoot,
         [Parameter(Mandatory = $true)] [string]$StagedConfigPath,
+        [Parameter(Mandatory = $true)] [string]$StagedHelenGameHookPath,
+        [Parameter(Mandatory = $true)] [string]$StagedProxyPath,
         [Parameter(Mandatory = $true)] [string]$PackBackupRoot,
         [Parameter(Mandatory = $true)] [string]$ConfigBackupPath,
-        [Parameter(Mandatory = $true)] [string]$BackupRoot,
-        [Parameter(Mandatory = $true)] [string]$TempRoot,
+        [Parameter(Mandatory = $true)] [string]$HelenGameHookBackupPath,
+        [Parameter(Mandatory = $true)] [string]$ProxyBackupPath,
+        [Parameter(Mandatory = $true)] [string]$RecoveryRoot,
+        [Parameter(Mandatory = $true)] [string]$StagingRoot,
         [Parameter(Mandatory = $true)] [scriptblock]$VerifyPublication,
-        [ValidateSet('', 'AfterPackBackup', 'AfterConfigBackup', 'AfterPackActivation', 'AfterConfigActivation', 'AfterVerification', 'AfterBackupDeletion')]
+        [ValidateSet('', 'AfterPackBackup', 'AfterConfigBackup', 'AfterHelenGameHookBackup', 'AfterProxyBackup', 'AfterPackActivation', 'AfterConfigActivation', 'AfterHelenGameHookActivation', 'AfterProxyActivation', 'AfterVerification', 'AfterPackBackupDeletion', 'AfterConfigBackupDeletion', 'AfterHelenGameHookBackupDeletion', 'AfterProxyBackupDeletion')]
         [string]$FailureInjection = ''
     )
 
-    $fullTempRoot = [IO.Path]::GetFullPath($TempRoot).TrimEnd('\') + '\'
-    $fullBackupRoot = [IO.Path]::GetFullPath($BackupRoot).TrimEnd('\') + '\'
-    if ($fullBackupRoot.StartsWith($fullTempRoot, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Graphics deployment recovery backups must live outside the staging tree.'
-    }
-    if (-not (Test-Path -LiteralPath $StagedPackRoot -PathType Container)) {
-        throw "Staged graphics pack was not found: $StagedPackRoot"
-    }
-    if (-not (Test-Path -LiteralPath $StagedConfigPath -PathType Leaf)) {
-        throw "Staged graphics pack config was not found: $StagedConfigPath"
-    }
-    if (Test-Path -LiteralPath $BackupRoot) {
-        $existingRecoveryEntries = @(Get-ChildItem -LiteralPath $BackupRoot -Force)
-        if ($existingRecoveryEntries.Count -ne 0) {
-            throw "Graphics deployment recovery directory is not empty: $BackupRoot"
+    $gameBinPath = Assert-SafeDeploymentPath -Path $GameBin -AllowedRoots @($GameBin) -RequireExisting
+    $gameVolume = [IO.Path]::GetPathRoot($gameBinPath)
+    foreach ($volumePath in @($StagingRoot, $RecoveryRoot)) {
+        if (-not [String]::Equals([IO.Path]::GetPathRoot((Get-SafeFullPath $volumePath)), $gameVolume, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Deployment staging and recovery paths must share the GameBin volume: $volumePath"
         }
+    }
+    foreach ($path in @($LivePackRoot, $LiveConfigPath, $LiveHelenGameHookPath, $LiveProxyPath, $StagedPackRoot, $StagedConfigPath, $StagedHelenGameHookPath, $StagedProxyPath, $PackBackupRoot, $ConfigBackupPath, $HelenGameHookBackupPath, $ProxyBackupPath, $RecoveryRoot, $StagingRoot)) {
+        Assert-SafeDeploymentPath -Path $path -AllowedRoots @($gameBinPath) | Out-Null
+    }
+    Assert-SafeDeploymentTree -Root $StagingRoot -AllowedRoots @($gameBinPath) -RequireExisting | Out-Null
+    Assert-SafeDeploymentTree -Root $StagedPackRoot -AllowedRoots @($gameBinPath) -RequireExisting | Out-Null
+    Assert-DeploymentArtifactKind -Path $StagedConfigPath -Kind File -Context 'Staged packs.json'
+    Assert-DeploymentArtifactKind -Path $StagedHelenGameHookPath -Kind File -Context 'Staged HelenGameHook.dll'
+    Assert-DeploymentArtifactKind -Path $StagedProxyPath -Kind File -Context 'Staged dinput8.dll'
+
+    if (Test-Path -LiteralPath $RecoveryRoot) {
+        Assert-SafeDeploymentTree -Root $RecoveryRoot -AllowedRoots @($gameBinPath) -RequireExisting | Out-Null
+        if (@(Get-ChildItem -LiteralPath $RecoveryRoot -Force).Count -ne 0) { throw "Graphics deployment recovery root is not empty: $RecoveryRoot" }
     } else {
-        New-Item -ItemType Directory -Force -Path $BackupRoot | Out-Null
+        New-Item -ItemType Directory -Force -Path $RecoveryRoot | Out-Null
     }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PackBackupRoot) | Out-Null
 
+    foreach ($path in @($LivePackRoot, $LiveConfigPath, $LiveHelenGameHookPath, $LiveProxyPath)) {
+        Assert-SafeDeploymentPath -Path $path -AllowedRoots @($gameBinPath) | Out-Null
+    }
+    if (Test-Path -LiteralPath $LivePackRoot) { Assert-SafeDeploymentTree -Root $LivePackRoot -AllowedRoots @($gameBinPath) -RequireExisting | Out-Null }
+    Assert-DeploymentArtifactKind -Path $LivePackRoot -Kind Directory -Context 'Installed graphics pack'
+    Assert-DeploymentArtifactKind -Path $LiveConfigPath -Kind File -Context 'Installed packs.json'
+    Assert-DeploymentArtifactKind -Path $LiveHelenGameHookPath -Kind File -Context 'Installed HelenGameHook.dll'
+    Assert-DeploymentArtifactKind -Path $LiveProxyPath -Kind File -Context 'Installed dinput8.dll'
+
     $packWasBackedUp = $false
     $configWasBackedUp = $false
+    $helenGameHookWasBackedUp = $false
+    $proxyWasBackedUp = $false
     $packWasInstalled = $false
     $configWasInstalled = $false
+    $helenGameHookWasInstalled = $false
+    $proxyWasInstalled = $false
     $publicationCommitted = $false
 
     try {
-        if (Test-Path -LiteralPath $LivePackRoot) {
-            Move-Item -LiteralPath $LivePackRoot -Destination $PackBackupRoot
-            $packWasBackedUp = $true
-        }
+        if (Test-Path -LiteralPath $LivePackRoot) { Move-Item -LiteralPath $LivePackRoot -Destination $PackBackupRoot; $packWasBackedUp = $true }
         Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterPackBackup'
-
-        if (Test-Path -LiteralPath $LiveConfigPath) {
-            Move-Item -LiteralPath $LiveConfigPath -Destination $ConfigBackupPath
-            $configWasBackedUp = $true
-        }
+        if (Test-Path -LiteralPath $LiveConfigPath) { Move-Item -LiteralPath $LiveConfigPath -Destination $ConfigBackupPath; $configWasBackedUp = $true }
         Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterConfigBackup'
+        if (Test-Path -LiteralPath $LiveHelenGameHookPath) { Move-Item -LiteralPath $LiveHelenGameHookPath -Destination $HelenGameHookBackupPath; $helenGameHookWasBackedUp = $true }
+        Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterHelenGameHookBackup'
+        if (Test-Path -LiteralPath $LiveProxyPath) { Move-Item -LiteralPath $LiveProxyPath -Destination $ProxyBackupPath; $proxyWasBackedUp = $true }
+        Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterProxyBackup'
 
-        Move-Item -LiteralPath $StagedPackRoot -Destination $LivePackRoot
-        $packWasInstalled = $true
+        Move-Item -LiteralPath $StagedPackRoot -Destination $LivePackRoot; $packWasInstalled = $true
         Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterPackActivation'
-
-        Move-Item -LiteralPath $StagedConfigPath -Destination $LiveConfigPath
-        $configWasInstalled = $true
+        Move-Item -LiteralPath $StagedConfigPath -Destination $LiveConfigPath; $configWasInstalled = $true
         Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterConfigActivation'
+        Move-Item -LiteralPath $StagedHelenGameHookPath -Destination $LiveHelenGameHookPath; $helenGameHookWasInstalled = $true
+        Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterHelenGameHookActivation'
+        Move-Item -LiteralPath $StagedProxyPath -Destination $LiveProxyPath; $proxyWasInstalled = $true
+        Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterProxyActivation'
 
-        & $VerifyPublication $LivePackRoot $LiveConfigPath
+        & $VerifyPublication $LivePackRoot $LiveConfigPath $LiveHelenGameHookPath $LiveProxyPath
         Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterVerification'
-
-        # Verification establishes the commit point. Recovery copies remain outside the
-        # staging tree so a cleanup failure cannot erase the only rollback state.
         $publicationCommitted = $true
-        if ($packWasBackedUp -and (Test-Path -LiteralPath $PackBackupRoot)) {
-            Remove-Item -LiteralPath $PackBackupRoot -Recurse -Force
-            Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterBackupDeletion'
-        } elseif ($configWasBackedUp -and (Test-Path -LiteralPath $ConfigBackupPath)) {
-            Remove-Item -LiteralPath $ConfigBackupPath -Force
-            Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point 'AfterBackupDeletion'
+
+        $cleanupOperations = @(
+            [pscustomobject]@{ Path = $PackBackupRoot; WasBackedUp = $packWasBackedUp; Point = 'AfterPackBackupDeletion'; Recursive = $true },
+            [pscustomobject]@{ Path = $ConfigBackupPath; WasBackedUp = $configWasBackedUp; Point = 'AfterConfigBackupDeletion'; Recursive = $false },
+            [pscustomobject]@{ Path = $HelenGameHookBackupPath; WasBackedUp = $helenGameHookWasBackedUp; Point = 'AfterHelenGameHookBackupDeletion'; Recursive = $false },
+            [pscustomobject]@{ Path = $ProxyBackupPath; WasBackedUp = $proxyWasBackedUp; Point = 'AfterProxyBackupDeletion'; Recursive = $false }
+        )
+        foreach ($operation in $cleanupOperations) {
+            if (-not $operation.WasBackedUp) { continue }
+            if (-not (Test-Path -LiteralPath $operation.Path)) { throw "Recovery backup disappeared before cleanup: $($operation.Path)" }
+            Assert-SafeDeploymentPath -Path $operation.Path -AllowedRoots @($gameBinPath) -RequireExisting | Out-Null
+            if ($operation.Recursive) { Assert-SafeDeploymentTree -Root $operation.Path -AllowedRoots @($gameBinPath) -RequireExisting | Out-Null; Remove-Item -LiteralPath $operation.Path -Recurse -Force } else { Remove-Item -LiteralPath $operation.Path -Force }
+            Invoke-DeploymentFailureInjection -FailureInjection $FailureInjection -Point $operation.Point
         }
-        if ($configWasBackedUp -and (Test-Path -LiteralPath $ConfigBackupPath)) {
-            Remove-Item -LiteralPath $ConfigBackupPath -Force
-        }
-        if (Test-Path -LiteralPath $BackupRoot) {
-            $remainingRecoveryEntries = @(Get-ChildItem -LiteralPath $BackupRoot -Force)
-            if ($remainingRecoveryEntries.Count -eq 0) {
-                Remove-Item -LiteralPath $BackupRoot -Force
-            }
-        }
+        Remove-EmptyDeploymentRecoveryRoot -RecoveryRoot $RecoveryRoot -GameBin $gameBinPath
     } catch {
         $deploymentFailure = $_
         if (-not $publicationCommitted) {
             try {
-                Restore-AtomicGraphicsDeployment -LivePackRoot $LivePackRoot -LiveConfigPath $LiveConfigPath -PackBackupRoot $PackBackupRoot -ConfigBackupPath $ConfigBackupPath -PackWasBackedUp $packWasBackedUp -ConfigWasBackedUp $configWasBackedUp -PackWasInstalled $packWasInstalled -ConfigWasInstalled $configWasInstalled
+                Restore-AtomicGraphicsDeployment -GameBin $gameBinPath -LivePackRoot $LivePackRoot -LiveConfigPath $LiveConfigPath -LiveHelenGameHookPath $LiveHelenGameHookPath -LiveProxyPath $LiveProxyPath -PackBackupRoot $PackBackupRoot -ConfigBackupPath $ConfigBackupPath -HelenGameHookBackupPath $HelenGameHookBackupPath -ProxyBackupPath $ProxyBackupPath -RecoveryRoot $RecoveryRoot -PackWasBackedUp $packWasBackedUp -ConfigWasBackedUp $configWasBackedUp -HelenGameHookWasBackedUp $helenGameHookWasBackedUp -ProxyWasBackedUp $proxyWasBackedUp -PackWasInstalled $packWasInstalled -ConfigWasInstalled $configWasInstalled -HelenGameHookWasInstalled $helenGameHookWasInstalled -ProxyWasInstalled $proxyWasInstalled
             } catch {
                 throw "Graphics deployment failed and rollback failed. Original error: $($deploymentFailure.Exception.Message). Rollback error: $($_.Exception.Message)"
             }
+        } else {
+            $survivors = @()
+            try { $survivors = @(Get-RecoverySurvivorPaths -RecoveryRoot $RecoveryRoot -GameBin $gameBinPath) } catch { $survivors = @("inspection failed: $($_.Exception.Message)") }
+            $survivorText = if ($survivors.Count -eq 0) { 'none' } else { $survivors -join '; ' }
+            throw "Graphics deployment committed, but recovery cleanup failed. Remaining recovery paths: $survivorText. Original error: $($deploymentFailure.Exception.Message)"
         }
         throw $deploymentFailure
     }
 }
+
+$BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$RepoRoot = (Resolve-Path (Join-Path $BatmanRoot '..\..')).Path
+$BuilderRoot = Resolve-OptionalBuilderRoot -BatmanRootPath $BatmanRoot -BuilderRootPath $BuilderRoot
+$GameBin = Get-SafeFullPath $GameBin
+Assert-SafeDeploymentPath -Path $GameBin -AllowedRoots @($GameBin) -RequireExisting | Out-Null
+Assert-SafeDeploymentPath -Path $BatmanRoot -AllowedRoots @($BatmanRoot) -RequireExisting | Out-Null
+Assert-SafeDeploymentPath -Path $RepoRoot -AllowedRoots @($RepoRoot) -RequireExisting | Out-Null
+
+$PackSource = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-graphics-options'
+$PackDestination = Join-Path $GameBin 'helengamehook\packs\batman-aa-graphics-options'
+$PackParent = Split-Path -Parent $PackDestination
+$ConfigSourcePath = Join-Path $BatmanRoot 'helengamehook\config\packs.json'
+$ConfigDestinationPath = Join-Path $GameBin 'helengamehook\config\packs.json'
+$ConfigParent = Split-Path -Parent $ConfigDestinationPath
+$SubtitlePackDestination = Join-Path $GameBin 'helengamehook\packs\batman-aa-subtitles'
+$RebuildScriptPath = Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1'
+$VerifierPath = Join-Path $PSScriptRoot 'Test-BatmanGraphicsOptionsPackage.ps1'
+$InstalledBaseVerifierPath = Join-Path $PSScriptRoot 'Test-BatmanInstalledBaseCompatibility.ps1'
+$HelenGameHookPath = Join-Path $RepoRoot "bin\Win32\$Configuration\HelenGameHook.dll"
+$ProxyPath = Join-Path $RepoRoot "bin\Win32\$Configuration\dinput8.dll"
+$DeploymentId = [Guid]::NewGuid().ToString('N')
+$DeploymentStagingRoot = Join-Path $GameBin ".helengamehook-staging-$DeploymentId"
+$DeploymentRecoveryRoot = Join-Path $GameBin ".helengamehook-recovery-$DeploymentId"
+$PackStagingDestination = Join-Path $DeploymentStagingRoot 'pack'
+$ConfigStagingPath = Join-Path $DeploymentStagingRoot 'config\packs.json'
+$HelenGameHookStagingPath = Join-Path $DeploymentStagingRoot 'HelenGameHook.dll'
+$ProxyStagingPath = Join-Path $DeploymentStagingRoot 'dinput8.dll'
+$PackBackupRoot = Join-Path $DeploymentRecoveryRoot 'graphics-options'
+$ConfigBackupPath = Join-Path $DeploymentRecoveryRoot 'packs.json'
+$HelenGameHookBackupPath = Join-Path $DeploymentRecoveryRoot 'HelenGameHook.dll'
+$ProxyBackupPath = Join-Path $DeploymentRecoveryRoot 'dinput8.dll'
 
 if ($FunctionsOnly) {
     return
 }
 
 foreach ($requiredPath in @($RebuildScriptPath, $VerifierPath, $InstalledBaseVerifierPath, $ConfigSourcePath)) {
-    if (-not (Test-Path -LiteralPath $requiredPath)) {
-        throw "Batman graphics deployment input not found: $requiredPath"
-    }
+    Assert-SafeDeploymentPath -Path $requiredPath -AllowedRoots @($BatmanRoot) -RequireExisting | Out-Null
 }
+Assert-SafeDeploymentPath -Path $HelenGameHookPath -AllowedRoots @($RepoRoot) | Out-Null
+Assert-SafeDeploymentPath -Path $ProxyPath -AllowedRoots @($RepoRoot) | Out-Null
 
 & $RebuildScriptPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot -Configuration $Configuration
-if ($LASTEXITCODE -ne 0) {
-    throw "Batman graphics shell rebuild failed with exit code $LASTEXITCODE."
-}
+if ($LASTEXITCODE -ne 0) { throw "Batman graphics shell rebuild failed with exit code $LASTEXITCODE." }
 
 Assert-BatmanGraphicsPackConfig -Path $ConfigSourcePath -Context 'Repository'
+Assert-SafeDeploymentTree -Root $PackSource -AllowedRoots @($BatmanRoot) -RequireExisting | Out-Null
 
 try {
     & $VerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot -Configuration $Configuration
-    if ($LASTEXITCODE -ne 0) {
-        throw "Batman graphics-options package verification failed with exit code $LASTEXITCODE."
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Batman graphics-options package verification failed with exit code $LASTEXITCODE." }
 } catch {
     throw "Batman graphics-options package verification failed before deployment. $($_.Exception.Message)"
 }
 
 try {
-    & $InstalledBaseVerifierPath -GameRoot $GameRoot -PackBuildRoot (Join-Path $PackSource 'builds\steam-goty-1.0')
-    if ($LASTEXITCODE -ne 0) {
-        throw "Installed Batman base compatibility verification failed with exit code $LASTEXITCODE."
-    }
+    & $InstalledBaseVerifierPath -GameRoot ([IO.Path]::GetFullPath((Join-Path $GameBin '..'))) -PackBuildRoot (Join-Path $PackSource 'builds\steam-goty-1.0')
+    if ($LASTEXITCODE -ne 0) { throw "Installed Batman base compatibility verification failed with exit code $LASTEXITCODE." }
 } catch {
     throw "Batman graphics-options deployment refused to target an incompatible installed base. Installed Batman base hash mismatch or missing retail input: $($_.Exception.Message)"
 }
 
 foreach ($runtimePath in @($HelenGameHookPath, $ProxyPath)) {
-    if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
-        throw "Batman graphics deployment runtime input not found: $runtimePath"
-    }
+    if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) { throw "Batman graphics deployment runtime input not found: $runtimePath" }
+    Assert-SafeDeploymentPath -Path $runtimePath -AllowedRoots @($RepoRoot) -RequireExisting | Out-Null
 }
+Assert-SafeDeploymentPath -Path $SubtitlePackDestination -AllowedRoots @($GameBin) -RequireExisting | Out-Null
+$SubtitleSnapshot = @(Get-DirectorySnapshot -Root $SubtitlePackDestination)
 
 Get-Process ShippingPC-BmGame -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
 
 $primaryFailure = $null
 try {
-    New-Item -ItemType Directory -Force -Path $DeploymentTempRoot, $PackStagingDestination, $ConfigStagingParent, $PackParent, $ConfigParent | Out-Null
+    Assert-SafeDeploymentPath -Path $DeploymentStagingRoot -AllowedRoots @($GameBin) | Out-Null
+    Assert-SafeDeploymentPath -Path $DeploymentRecoveryRoot -AllowedRoots @($GameBin) | Out-Null
+    Assert-SafeDeploymentPath -Path $PackParent -AllowedRoots @($GameBin) | Out-Null
+    Assert-SafeDeploymentPath -Path $ConfigParent -AllowedRoots @($GameBin) | Out-Null
+    New-Item -ItemType Directory -Force -Path $DeploymentStagingRoot, $PackStagingDestination, (Split-Path -Parent $ConfigStagingPath), $DeploymentRecoveryRoot, $PackParent, $ConfigParent | Out-Null
+    Assert-SafeDeploymentPath -Path $PackParent -AllowedRoots @($GameBin) -RequireExisting | Out-Null
+    Assert-SafeDeploymentPath -Path $ConfigParent -AllowedRoots @($GameBin) -RequireExisting | Out-Null
+    Assert-SafeDeploymentTree -Root $DeploymentStagingRoot -AllowedRoots @($GameBin) -RequireExisting | Out-Null
     foreach ($sourceChild in @(Get-ChildItem -LiteralPath $PackSource -Force)) {
+        Assert-SafeDeploymentPath -Path $sourceChild.FullName -AllowedRoots @($BatmanRoot) -RequireExisting | Out-Null
+        if ($sourceChild.PSIsContainer) { Assert-SafeDeploymentTree -Root $sourceChild.FullName -AllowedRoots @($BatmanRoot) -RequireExisting | Out-Null }
         Copy-Item -LiteralPath $sourceChild.FullName -Destination $PackStagingDestination -Recurse -Force
     }
     Copy-Item -LiteralPath $ConfigSourcePath -Destination $ConfigStagingPath -Force
+    Copy-Item -LiteralPath $HelenGameHookPath -Destination $HelenGameHookStagingPath -Force
+    Copy-Item -LiteralPath $ProxyPath -Destination $ProxyStagingPath -Force
 
     Test-ExpectedGraphicsVirtualFile -PackRoot $PackStagingDestination -Context 'Staged deployment'
     Assert-BatmanGraphicsPackConfig -Path $ConfigStagingPath -Context 'Staged'
-
-    $stagedHooksJsonPath = Join-Path $PackStagingDestination 'builds\steam-goty-1.0\hooks.json'
-    if (Test-Path -LiteralPath $stagedHooksJsonPath) {
-        throw "Batman graphics-options staged pack should not declare hooks.json: $stagedHooksJsonPath"
+    foreach ($stagedPath in @($ConfigStagingPath, $HelenGameHookStagingPath, $ProxyStagingPath)) {
+        Assert-SafeDeploymentPath -Path $stagedPath -AllowedRoots @($GameBin) -RequireExisting | Out-Null
     }
-
-    Copy-Item -LiteralPath $HelenGameHookPath -Destination (Join-Path $GameBin 'HelenGameHook.dll') -Force
-    Copy-Item -LiteralPath $ProxyPath -Destination (Join-Path $GameBin 'dinput8.dll') -Force
+    $StagedHelenGameHookHash = (Get-FileHash -LiteralPath $HelenGameHookStagingPath -Algorithm SHA256).Hash
+    $StagedProxyHash = (Get-FileHash -LiteralPath $ProxyStagingPath -Algorithm SHA256).Hash
+    if (Test-Path -LiteralPath (Join-Path $PackStagingDestination 'builds\steam-goty-1.0\hooks.json')) { throw 'Batman graphics-options staged pack should not declare hooks.json.' }
 
     $verifyPublication = {
-        param($LivePackRootForVerification, $LiveConfigPathForVerification)
+        param($LivePackRootForVerification, $LiveConfigPathForVerification, $LiveHelenGameHookPathForVerification, $LiveProxyPathForVerification)
         Test-ExpectedGraphicsVirtualFile -PackRoot $LivePackRootForVerification -Context 'Activated deployment'
         Assert-BatmanGraphicsPackConfig -Path $LiveConfigPathForVerification -Context 'Activated'
-        if (-not (Test-Path -LiteralPath $SubtitlePackDestination -PathType Container)) {
-            throw "Activated deployment removed the working subtitle pack: $SubtitlePackDestination"
-        }
+        Assert-SafeDeploymentPath -Path $LiveHelenGameHookPathForVerification -AllowedRoots @($GameBin) -RequireExisting | Out-Null
+        Assert-SafeDeploymentPath -Path $LiveProxyPathForVerification -AllowedRoots @($GameBin) -RequireExisting | Out-Null
+        if (-not [String]::Equals((Get-FileHash -LiteralPath $LiveHelenGameHookPathForVerification -Algorithm SHA256).Hash, $StagedHelenGameHookHash, [StringComparison]::OrdinalIgnoreCase)) { throw 'Activated HelenGameHook.dll differs from the staged binary.' }
+        if (-not [String]::Equals((Get-FileHash -LiteralPath $LiveProxyPathForVerification -Algorithm SHA256).Hash, $StagedProxyHash, [StringComparison]::OrdinalIgnoreCase)) { throw 'Activated dinput8.dll differs from the staged binary.' }
+        Assert-DirectorySnapshotEqual -Expected $SubtitleSnapshot -ActualRoot $SubtitlePackDestination -Context 'Activated subtitle pack'
     }.GetNewClosure()
 
-    Invoke-AtomicGraphicsDeployment -LivePackRoot $PackDestination -LiveConfigPath $ConfigDestinationPath -StagedPackRoot $PackStagingDestination -StagedConfigPath $ConfigStagingPath -PackBackupRoot $PackBackupRoot -ConfigBackupPath $ConfigBackupPath -BackupRoot $BackupRoot -TempRoot $DeploymentTempRoot -VerifyPublication $verifyPublication
+    Invoke-AtomicGraphicsDeployment -GameBin $GameBin -LivePackRoot $PackDestination -LiveConfigPath $ConfigDestinationPath -LiveHelenGameHookPath (Join-Path $GameBin 'HelenGameHook.dll') -LiveProxyPath (Join-Path $GameBin 'dinput8.dll') -StagedPackRoot $PackStagingDestination -StagedConfigPath $ConfigStagingPath -StagedHelenGameHookPath $HelenGameHookStagingPath -StagedProxyPath $ProxyStagingPath -PackBackupRoot $PackBackupRoot -ConfigBackupPath $ConfigBackupPath -HelenGameHookBackupPath $HelenGameHookBackupPath -ProxyBackupPath $ProxyBackupPath -RecoveryRoot $DeploymentRecoveryRoot -StagingRoot $DeploymentStagingRoot -VerifyPublication $verifyPublication
 
     $logRoot = Join-Path $GameBin 'helengamehook\logs'
     if (Test-Path -LiteralPath $logRoot -PathType Container) {
+        Assert-SafeDeploymentTree -Root $logRoot -AllowedRoots @($GameBin) -RequireExisting | Out-Null
         foreach ($logFile in @(Get-ChildItem -LiteralPath $logRoot -Force -File)) {
+            Assert-SafeDeploymentPath -Path $logFile.FullName -AllowedRoots @($GameBin) -RequireExisting | Out-Null
             Remove-Item -LiteralPath $logFile.FullName -Force
         }
     }
-
     Write-Output 'DEPLOYED'
 } catch {
     $primaryFailure = $_
     throw $primaryFailure
 } finally {
-    if (Test-Path -LiteralPath $DeploymentTempRoot) {
+    if (Test-Path -LiteralPath $DeploymentStagingRoot) {
         try {
-            Remove-Item -LiteralPath $DeploymentTempRoot -Recurse -Force
+            Remove-DeploymentStagingRoot -StagingRoot $DeploymentStagingRoot -GameBin $GameBin
         } catch {
-            if ($null -ne $primaryFailure) {
-                Write-Warning "Graphics deployment staging cleanup failed after the primary failure '$($primaryFailure.Exception.Message)': $($_.Exception.Message)"
-            } else {
-                throw "Graphics deployment staging cleanup failed: $($_.Exception.Message)"
-            }
+            if ($null -ne $primaryFailure) { Write-Warning "Graphics deployment staging cleanup failed after the primary failure '$($primaryFailure.Exception.Message)': $($_.Exception.Message)" } else { throw "Graphics deployment staging cleanup failed: $($_.Exception.Message)" }
         }
     }
 }
