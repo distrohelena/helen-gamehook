@@ -30,16 +30,6 @@ internal static class CompressedPackageWriter
     private const int CompressionChunkRecordSize = 16;
 
     /// <summary>
-    /// Maximum literal count representable by the decoder's initial literal token (<c>flag - 17</c>).
-    /// </summary>
-    private const int MaximumLiteralOnlyBlockSize = 238;
-
-    /// <summary>
-    /// LZO end-marker token prefix used by the existing reader's decoder implementation.
-    /// </summary>
-    private const byte LzoEndMarkerToken = 0x11;
-
-    /// <summary>
     /// Writes one rebuilt compressed package file using patched logical bytes and original chunk layout.
     /// </summary>
     /// <param name="package">Loaded source package metadata and original physical bytes.</param>
@@ -68,6 +58,14 @@ internal static class CompressedPackageWriter
             throw new InvalidOperationException("Compressed package writer requires at least one source compression chunk.");
         }
 
+        if (package.Header.CompressionFlags == LzoCompressionFlags)
+        {
+            byte[] rebuiltPackageBytes = Ue3Compressor.Compress(patchedLogicalBytes, package.FullPath);
+            VerifyRebuiltPackage(package.Header, patchedLogicalBytes, rebuiltPackageBytes);
+            WriteOutputBytes(outputPath, rebuiltPackageBytes);
+            return;
+        }
+
         CompressionChunkRecord firstChunk = sourceChunks[0];
         int headerPrefixLength = firstChunk.CompressedOffset;
         ValidateSlice(0, headerPrefixLength, package.PhysicalBytes.Length, "Physical header prefix");
@@ -87,9 +85,7 @@ internal static class CompressedPackageWriter
             ValidateSlice(sourceChunk.UncompressedOffset, chunkUncompressedSize, patchedLogicalBytes.Length, $"Logical chunk {index}");
 
             int sourceBlockSize = ReadChunkBlockSize(package.PhysicalBytes, sourceChunk, index);
-            int blockSize = package.Header.CompressionFlags == LzoCompressionFlags
-                ? Math.Min(sourceBlockSize, MaximumLiteralOnlyBlockSize)
-                : sourceBlockSize;
+            int blockSize = sourceBlockSize;
             ReadOnlySpan<byte> logicalChunkBytes = patchedLogicalBytes.AsSpan(sourceChunk.UncompressedOffset, chunkUncompressedSize);
             byte[] compressedChunkBytes = BuildCompressedChunk(logicalChunkBytes, blockSize, package.Header.CompressionFlags);
 
@@ -237,7 +233,6 @@ internal static class CompressedPackageWriter
 
         byte[] compressedBlockBytes = compressionFlags switch
         {
-            LzoCompressionFlags => CompressLiteralOnlyLzoBlock(uncompressedBlockBytes),
             ZlibCompressionFlags => CompressZlibBlock(uncompressedBlockBytes),
             _ => throw new InvalidOperationException(
                 $"Compressed package writer does not support output compression flags 0x{compressionFlags:X8}.")
@@ -253,30 +248,6 @@ internal static class CompressedPackageWriter
                 $"Compressed block round-trip verification failed for codec 0x{compressionFlags:X8} and block length {uncompressedBlockBytes.Length}.");
         }
 
-        return compressedBlockBytes;
-    }
-
-    /// <summary>
-    /// Compresses one block into a literal-only headerless LZO payload accepted by the in-repo
-    /// retail package decoder.
-    /// </summary>
-    /// <param name="uncompressedBlockBytes">Uncompressed source bytes to encode.</param>
-    /// <returns>Serialized LZO payload bytes for one block.</returns>
-    private static byte[] CompressLiteralOnlyLzoBlock(ReadOnlySpan<byte> uncompressedBlockBytes)
-    {
-        if (uncompressedBlockBytes.Length <= 0 || uncompressedBlockBytes.Length > MaximumLiteralOnlyBlockSize)
-        {
-            throw new InvalidOperationException(
-                $"Literal-only LZO block length must be between 1 and {MaximumLiteralOnlyBlockSize} bytes. value={uncompressedBlockBytes.Length}");
-        }
-
-        byte[] compressedBlockBytes = new byte[checked(uncompressedBlockBytes.Length + 4)];
-        compressedBlockBytes[0] = (byte)(uncompressedBlockBytes.Length + 17);
-        uncompressedBlockBytes.CopyTo(compressedBlockBytes.AsSpan(1, uncompressedBlockBytes.Length));
-        int endMarkerOffset = uncompressedBlockBytes.Length + 1;
-        compressedBlockBytes[endMarkerOffset] = LzoEndMarkerToken;
-        compressedBlockBytes[endMarkerOffset + 1] = 0;
-        compressedBlockBytes[endMarkerOffset + 2] = 0;
         return compressedBlockBytes;
     }
 
@@ -343,6 +314,97 @@ internal static class CompressedPackageWriter
             byte[] chunkPayload = chunkPayloads[chunkIndex];
             outputStream.Write(chunkPayload, 0, chunkPayload.Length);
         }
+    }
+
+    /// <summary>
+    /// Verifies a native-LZO rebuilt package against the logical bytes supplied to the writer.
+    /// </summary>
+    /// <param name="header">Source package header describing the compression table location and codec.</param>
+    /// <param name="expectedLogicalBytes">Logical bytes expected after package reconstruction.</param>
+    /// <param name="rebuiltPackageBytes">Physical package bytes returned by the retail compressor.</param>
+    private static void VerifyRebuiltPackage(
+        PackageHeader header,
+        byte[] expectedLogicalBytes,
+        byte[] rebuiltPackageBytes)
+    {
+        LogicalPackageImage rebuiltImage = CompressedPackageReader.BuildLogicalImage(rebuiltPackageBytes, header);
+        byte[] expectedRebuiltLogicalBytes = BuildExpectedRebuiltLogicalBytes(
+            header,
+            expectedLogicalBytes,
+            rebuiltPackageBytes);
+        if (!rebuiltImage.Bytes.AsSpan().SequenceEqual(expectedRebuiltLogicalBytes))
+        {
+            int mismatchOffset = FindFirstMismatch(rebuiltImage.Bytes, expectedRebuiltLogicalBytes);
+            throw new InvalidOperationException(
+                $"Retail LZO package round-trip verification failed: reconstructed logical bytes differ from the patched input at offset {mismatchOffset}.");
+        }
+    }
+
+    /// <summary>
+    /// Copies rebuilt physical compression metadata into the expected logical image before comparing
+    /// package bytes, because chunk offsets and sizes are intentionally retargeted during rebuilding.
+    /// </summary>
+    /// <param name="header">Source package header describing compression metadata.</param>
+    /// <param name="expectedLogicalBytes">Logical bytes supplied to the writer.</param>
+    /// <param name="rebuiltPackageBytes">Rebuilt physical package bytes.</param>
+    /// <returns>Expected logical bytes with rebuilt compression metadata applied.</returns>
+    private static byte[] BuildExpectedRebuiltLogicalBytes(
+        PackageHeader header,
+        byte[] expectedLogicalBytes,
+        byte[] rebuiltPackageBytes)
+    {
+        int compressionMetadataLength = checked(8 + (header.CompressionChunkCount * CompressionChunkRecordSize));
+        ValidateSlice(
+            header.CompressionFlagsFieldOffset,
+            compressionMetadataLength,
+            expectedLogicalBytes.Length,
+            "Expected logical compression metadata");
+        ValidateSlice(
+            header.CompressionFlagsFieldOffset,
+            compressionMetadataLength,
+            rebuiltPackageBytes.Length,
+            "Rebuilt physical compression metadata");
+
+        byte[] normalizedExpectedBytes = expectedLogicalBytes.ToArray();
+        Buffer.BlockCopy(
+            rebuiltPackageBytes,
+            header.CompressionFlagsFieldOffset,
+            normalizedExpectedBytes,
+            header.CompressionFlagsFieldOffset,
+            compressionMetadataLength);
+        return normalizedExpectedBytes;
+    }
+
+    /// <summary>
+    /// Finds the first byte offset at which two package images differ.
+    /// </summary>
+    /// <param name="actualBytes">Reconstructed package bytes.</param>
+    /// <param name="expectedBytes">Expected package bytes.</param>
+    /// <returns>The first differing offset, or the shorter length when one image is truncated.</returns>
+    private static int FindFirstMismatch(byte[] actualBytes, byte[] expectedBytes)
+    {
+        int comparedLength = Math.Min(actualBytes.Length, expectedBytes.Length);
+        for (int offset = 0; offset < comparedLength; offset++)
+        {
+            if (actualBytes[offset] != expectedBytes[offset])
+            {
+                return offset;
+            }
+        }
+
+        return comparedLength;
+    }
+
+    /// <summary>
+    /// Writes a complete already-rebuilt physical package to its destination path.
+    /// </summary>
+    /// <param name="outputPath">Destination package path.</param>
+    /// <param name="packageBytes">Complete physical package bytes to write.</param>
+    private static void WriteOutputBytes(string outputPath, byte[] packageBytes)
+    {
+        string outputDirectory = Path.GetDirectoryName(outputPath) ?? Directory.GetCurrentDirectory();
+        Directory.CreateDirectory(outputDirectory);
+        File.WriteAllBytes(outputPath, packageBytes);
     }
 
     /// <summary>

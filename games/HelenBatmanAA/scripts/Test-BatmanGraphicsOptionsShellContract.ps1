@@ -235,6 +235,61 @@ function Assert-NoOpActionScriptFunction {
     }
 }
 
+function Invoke-RequiredProcess {
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments,
+        [string]$Context
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @(& $FilePath @Arguments 2>&1)
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Context failed (exit code $LASTEXITCODE): $($output -join [Environment]::NewLine)"
+    }
+}
+
+function Assert-RetailStartupSpritesPreserved {
+    param(
+        [string]$RetailXmlPath,
+        [string]$BuiltGfxPath,
+        [string]$FfdecPath,
+        [string]$WorkingDirectory
+    )
+
+    $builtXmlPath = Join-Path $WorkingDirectory 'built-shell.xml'
+    Invoke-RequiredProcess `
+        -FilePath $FfdecPath `
+        -Arguments @('-swf2xml', $BuiltGfxPath, $builtXmlPath) `
+        -Context 'FFDec shell XML export'
+
+    $retailDocument = New-Object System.Xml.XmlDocument
+    $retailDocument.PreserveWhitespace = $true
+    $retailDocument.Load($RetailXmlPath)
+    $builtDocument = New-Object System.Xml.XmlDocument
+    $builtDocument.PreserveWhitespace = $true
+    $builtDocument.Load($builtXmlPath)
+
+    foreach ($spriteId in @(3, 232)) {
+        $retailSprites = @($retailDocument.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='$spriteId']"))
+        $builtSprites = @($builtDocument.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='$spriteId']"))
+        if ($retailSprites.Count -ne 1 -or $builtSprites.Count -ne 1) {
+            throw "Retail startup sprite $spriteId must occur exactly once in both XML documents. Retail=$($retailSprites.Count), built=$($builtSprites.Count)."
+        }
+
+        $retailSpriteXml = $retailSprites[0].OuterXml
+        $builtSpriteXml = $builtSprites[0].OuterXml
+        if ($retailSpriteXml -cne $builtSpriteXml) {
+            throw "Built graphics shell changed retail startup sprite $spriteId nodes or nested action bytes."
+        }
+    }
+}
+
 $BridgeSource = @'
 using System.Reflection;
 using System.Text.Json;
@@ -630,6 +685,44 @@ if ($null -eq $ReparseOutputPath) {
     }
     if (Test-Path -LiteralPath $ReparseFixtureTarget) {
         Remove-Item -LiteralPath $ReparseFixtureTarget -Recurse -Force
+    }
+}
+
+$PreservationOutputPath = Join-Path ([System.IO.Path]::GetTempPath()) ("BatmanGraphicsShellPreservation-" + [guid]::NewGuid().ToString('N'))
+$PreservationOutputGfxPath = Join-Path $PreservationOutputPath 'MainV2-graphics-options.gfx'
+try {
+    $FfdecPath = Join-Path $BuilderRootPath 'extracted\ffdec\ffdec-cli.exe'
+    Invoke-RequiredProcess `
+        -FilePath 'dotnet' `
+        -Arguments @(
+            'run',
+            '--project',
+            $BuilderProjectPath,
+            '-c',
+            'Debug',
+            '--no-restore',
+            '--',
+            'build-main-menu-graphics-shell',
+            '--root',
+            $BuilderRootPath,
+            '--output-dir',
+            $PreservationOutputPath,
+            '--ffdec',
+            $FfdecPath) `
+        -Context 'Graphics shell preservation build'
+
+    if (-not (Test-Path -LiteralPath $PreservationOutputGfxPath -PathType Leaf)) {
+        throw "Graphics shell preservation build did not emit $PreservationOutputGfxPath."
+    }
+
+    Assert-RetailStartupSpritesPreserved `
+        -RetailXmlPath (Join-Path $BuilderRootPath 'extracted\frontend\mainv2\frontend-mainv2.xml') `
+        -BuiltGfxPath $PreservationOutputGfxPath `
+        -FfdecPath $FfdecPath `
+        -WorkingDirectory $PreservationOutputPath
+} finally {
+    if (Test-Path -LiteralPath $PreservationOutputPath) {
+        Remove-Item -LiteralPath $PreservationOutputPath -Recurse -Force
     }
 }
 

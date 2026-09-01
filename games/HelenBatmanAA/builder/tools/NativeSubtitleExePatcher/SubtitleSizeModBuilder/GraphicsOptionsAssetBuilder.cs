@@ -54,6 +54,36 @@ internal static class GraphicsOptionsAssetBuilder
     ];
 
     /// <summary>
+    /// Identifies the only extracted frontend scripts that the shell build replaces. Keeping this
+    /// allow-list explicit prevents FFDec from reserializing untouched startup sprites while still
+    /// providing every parent directory required by the shell's patched scripts.
+    /// </summary>
+    private static readonly string[] ShellPatchedScriptRelativePaths =
+    [
+        "ScreenOptionsGraphics.as",
+        "ScreenOptionsAudio_2.as",
+        "DefineSprite_333_ScreenOptionsMenu\\frame_1\\DoAction_2.as",
+        "DefineSprite_333_ScreenOptionsMenu\\frame_1\\PlaceObject2_117_GenericButton_37\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\DoAction.as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_15\\DoAction.as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_141\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_133\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_125\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_117\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_109\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_101\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_93\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_85\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_77\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_69\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_61\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_53\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_45\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_37\\CLIPACTIONRECORD onClipEvent(load).as",
+        "DefineSprite_600_ScreenOptionsGraphics\\frame_1\\PlaceObject2_290_List_Template_29\\CLIPACTIONRECORD onClipEvent(load).as"
+    ];
+
+    /// <summary>
     /// Builds the graphics-options prototype frontend asset.
     /// </summary>
     /// <param name="paths">The resolved graphics build paths.</param>
@@ -82,8 +112,8 @@ internal static class GraphicsOptionsAssetBuilder
         ValidateShellInputs(paths);
         PrepareOutputDirectories(paths.OutputDirectory, paths.TempDirectory);
 
-        CopyDirectory(paths.FrontendScriptsPath, paths.FrontendWorkingScriptsPath);
         PatchFrontendShellScripts(paths.FrontendWorkingScriptsPath);
+        ValidateShellPatchedScriptSet(paths.FrontendWorkingScriptsPath);
         GraphicsOptionsXmlPatcher.PatchShell(paths.FrontendXmlPath, paths.FrontendPatchedXmlPath);
 
         RunProcess(paths.FfdecPath, "-xml2swf", paths.FrontendPatchedXmlPath, paths.FrontendStructuralGfxPath);
@@ -608,6 +638,31 @@ internal static class GraphicsOptionsAssetBuilder
         {
             string destinationSubdirectory = Path.Combine(destinationDirectory, Path.GetFileName(sourceSubdirectory));
             CopyDirectory(sourceSubdirectory, destinationSubdirectory);
+        }
+    }
+
+    /// <summary>
+    /// Confirms that shell staging contains exactly the scripts emitted by the shell patch. This
+    /// keeps the FFDec import scoped to patched files and catches accidental reintroduction of a
+    /// copied retail script tree before the generated GFX is produced.
+    /// </summary>
+    /// <param name="scriptsRoot">The writable staged shell script root.</param>
+    private static void ValidateShellPatchedScriptSet(string scriptsRoot)
+    {
+        string[] expectedPaths = ShellPatchedScriptRelativePaths
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        string[] actualPaths = Directory.GetFiles(scriptsRoot, "*.as", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(scriptsRoot, path))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (!expectedPaths.SequenceEqual(actualPaths, StringComparer.OrdinalIgnoreCase))
+        {
+            string expected = string.Join(", ", expectedPaths);
+            string actual = string.Join(", ", actualPaths);
+            throw new InvalidOperationException(
+                $"Graphics shell script staging drifted. Expected [{expected}], found [{actual}].");
         }
     }
 

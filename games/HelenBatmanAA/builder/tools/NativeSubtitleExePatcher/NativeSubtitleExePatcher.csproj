@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="BmGameGfxPatcher\**\*.cs" />
+    <Compile Remove="BmGameGfxPatcher.Tests\**\*.cs" />
     <Compile Remove="SubtitleSizeModBuilder\**\*.cs" />
     <Compile Remove="UELibFunctionDump\**\*.cs" />
   </ItemGroup>

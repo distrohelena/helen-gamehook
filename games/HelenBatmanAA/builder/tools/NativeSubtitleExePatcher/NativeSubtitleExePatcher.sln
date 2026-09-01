@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NativeSubtitleExePatcher", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BmGameGfxPatcher", "BmGameGfxPatcher\BmGameGfxPatcher.csproj", "{C217B27F-D867-43AC-AF57-54C8B5CA2CD3}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BmGameGfxPatcher.Tests", "BmGameGfxPatcher.Tests\BmGameGfxPatcher.Tests.csproj", "{830A5D79-5648-41E2-80A5-64B0A7956DE4}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SubtitleSizeModBuilder", "SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj", "{349F28C4-95C3-480D-A4CD-5E8EA059816E}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UELibFunctionDump", "UELibFunctionDump\UELibFunctionDump.csproj", "{97171F23-68BA-49CB-8EC6-1557FCA52F79}"
@@ -45,6 +47,18 @@ Global
 		{C217B27F-D867-43AC-AF57-54C8B5CA2CD3}.Release|x64.Build.0 = Release|Any CPU
 		{C217B27F-D867-43AC-AF57-54C8B5CA2CD3}.Release|x86.ActiveCfg = Release|Any CPU
 		{C217B27F-D867-43AC-AF57-54C8B5CA2CD3}.Release|x86.Build.0 = Release|Any CPU
+		{830A5D79-5648-41E2-80A5-64B0A7956DE4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{830A5D79-5648-41E2-80A5-64B0A7956DE4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{830A5D79-5648-41E2-80A5-64B0A7956DE4}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{830A5D79-5648-41E2-80A5-64B0A7956DE4}.Debug|x64.Build.0 = Debug|Any CPU
+		{830A5D79-5648-41E2-80A5-64B0A7956DE4}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{830A5D79-5648-41E2-80A5-64B0A7956DE4}.Debug|x86.Build.0 = Debug|Any CPU
+		{830A5D79-5648-41E2-80A5-64B0A7956DE4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{830A5D79-5648-41E2-80A5-64B0A7956DE4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{830A5D79-5648-41E2-80A5-64B0A7956DE4}.Release|x64.ActiveCfg = Release|Any CPU
+		{830A5D79-5648-41E2-80A5-64B0A7956DE4}.Release|x64.Build.0 = Release|Any CPU
+		{830A5D79-5648-41E2-80A5-64B0A7956DE4}.Release|x86.ActiveCfg = Release|Any CPU
+		{830A5D79-5648-41E2-80A5-64B0A7956DE4}.Release|x86.Build.0 = Release|Any CPU
 		{349F28C4-95C3-480D-A4CD-5E8EA059816E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{349F28C4-95C3-480D-A4CD-5E8EA059816E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{349F28C4-95C3-480D-A4CD-5E8EA059816E}.Debug|x64.ActiveCfg = Debug|Any CPU
