@@ -3,7 +3,8 @@ param(
     [string]$BuilderRoot,
     [string]$Configuration = 'Release',
     [string]$PackRootOverride,
-    [string]$TargetPathOverride
+    [string]$TargetPathOverride,
+    [switch]$StagedPackageValidation
 )
 
 $ErrorActionPreference = 'Stop'
@@ -253,6 +254,21 @@ function Assert-AtomicPublicationRegression {
             if ((Get-FileHash -LiteralPath (Join-Path $livePack 'pack.json') -Algorithm SHA256).Hash -cne $oldPackHash -or (Get-FileHash -LiteralPath $liveTarget -Algorithm SHA256).Hash -cne $oldTargetHash) { throw "$failureCase injection did not restore exact old live hashes." }
         }
 
+        $firstBuildRoot = Join-Path $regressionRoot 'FirstPublicationWithoutLiveParents'
+        $livePack = Join-Path $firstBuildRoot 'live\pack'
+        $liveTarget = Join-Path $firstBuildRoot 'live\Frontend.umap'
+        $tempRoot = Join-Path $firstBuildRoot 'staging-temp'
+        $stagedPack = Join-Path $tempRoot 'pack'
+        $stagedTarget = Join-Path $tempRoot 'Frontend.umap'
+        $backupRoot = Join-Path $firstBuildRoot 'backup-sibling'
+        New-Item -ItemType Directory -Force -Path $tempRoot, $stagedPack | Out-Null
+        [IO.File]::WriteAllText((Join-Path $stagedPack 'pack.json'), 'new-pack')
+        [IO.File]::WriteAllText($stagedTarget, 'new-target')
+        $verify = { param($LivePackRoot, $LiveTargetPath) if ((Get-Content -LiteralPath (Join-Path $LivePackRoot 'pack.json') -Raw) -cne 'new-pack' -or (Get-Content -LiteralPath $LiveTargetPath -Raw) -cne 'new-target') { throw 'First-publication verification saw unexpected live contents.' } }
+        Invoke-AtomicGraphicsPublication -LivePackRoot $livePack -LiveTargetPath $liveTarget -StagedPackRoot $stagedPack -StagedTargetPath $stagedTarget -BackupRoot $backupRoot -TempRoot $tempRoot -VerifyPublication $verify
+        if (-not (Test-Path -LiteralPath (Join-Path $livePack 'pack.json')) -or -not (Test-Path -LiteralPath $liveTarget)) { throw 'First publication did not create missing live output parents and outputs.' }
+        if (Test-Path -LiteralPath $backupRoot) { throw 'First publication left an unexpected backup root after success.' }
+
         $cleanupRoot = Join-Path $regressionRoot 'AfterBackupDeletion'
         $livePack = Join-Path $cleanupRoot 'live\pack'
         $liveTarget = Join-Path $cleanupRoot 'live\Frontend.umap'
@@ -393,7 +409,7 @@ foreach ($requiredPath in @($packJsonPath, $buildJsonPath, $bindingsJsonPath, $c
 Assert-RebuildAtomicSourceContract -ScriptPath (Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1')
 Assert-AtomicPublicationRegression
 Assert-ExactPackFileSet -Root $packRoot -BuildDirectoryName 'steam-goty-1.0'
-Assert-ExactGeneratedTargetFileSet -Root $stableGeneratedRoot -TargetPath $targetPath
+if (-not $StagedPackageValidation) { Assert-ExactGeneratedTargetFileSet -Root $stableGeneratedRoot -TargetPath $targetPath }
 if (Test-Path -LiteralPath $hooksJsonPath) { throw 'Graphics-options shell must not contain hooks.json.' }
 if (Test-Path -LiteralPath $texturesJsonPath) { throw 'Graphics-options shell must not contain textures.json.' }
 

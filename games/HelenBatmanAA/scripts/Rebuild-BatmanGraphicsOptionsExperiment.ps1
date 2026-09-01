@@ -104,6 +104,29 @@ function Move-SafeMutationTarget {
     Move-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
 }
 
+function Ensure-SafeDirectoryPath {
+    <# Create a missing destination directory and return only the directory paths created by this invocation. #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $fullPath = Assert-SafeMutationTarget -Path $Path -AllowedExactPaths @($Path)
+    if (Test-Path -LiteralPath $fullPath -PathType Container) { return @() }
+    if (Test-Path -LiteralPath $fullPath) { throw "Graphics-shell destination parent is not a directory: $fullPath" }
+
+    $missing = [Collections.Generic.List[string]]::new()
+    $cursor = $fullPath
+    while (-not (Test-Path -LiteralPath $cursor)) {
+        $missing.Insert(0, $cursor)
+        $parent = Split-Path -Parent $cursor
+        if ([string]::IsNullOrWhiteSpace($parent) -or [String]::Equals($parent, $cursor, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Graphics-shell destination parent has no existing ancestor: $fullPath"
+        }
+        $cursor = $parent
+    }
+    foreach ($directory in $missing) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    return @($missing)
+}
+
 function Restore-AtomicRebuild {
     <# Restore both live artifacts from the activation backup, tolerating absent originals. #>
     param(
@@ -161,8 +184,6 @@ function Invoke-AtomicGraphicsPublication {
         throw 'Atomic publication backups must be outside the staging temp tree.'
     }
     if (Test-Path -LiteralPath $backupFull) { throw "Atomic publication backup root already exists: $backupFull" }
-    Assert-SafeMutationTarget -Path $backupFull -AllowedDescendantRoots @([IO.Path]::GetTempPath()) | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $backupFull 'pack'), (Join-Path $backupFull 'target') | Out-Null
     $packBackupRoot = Join-Path $backupFull 'pack\batman-aa-graphics-options'
     $targetBackupPath = Join-Path $backupFull 'target\Frontend-graphics-options.umap'
     $packBackedUp = $false
@@ -170,7 +191,15 @@ function Invoke-AtomicGraphicsPublication {
     $packInstalled = $false
     $targetInstalled = $false
     $committed = $false
+    $createdDestinationParents = [Collections.Generic.List[string]]::new()
     try {
+        Assert-SafeMutationTarget -Path $backupFull -AllowedDescendantRoots @([IO.Path]::GetTempPath()) | Out-Null
+        New-Item -ItemType Directory -Force -Path (Join-Path $backupFull 'pack'), (Join-Path $backupFull 'target') | Out-Null
+        foreach ($destinationParent in @((Split-Path -Parent $livePack), (Split-Path -Parent $liveTarget))) {
+            foreach ($createdParent in @(Ensure-SafeDirectoryPath -Path $destinationParent)) {
+                if (-not $createdDestinationParents.Contains($createdParent)) { $createdDestinationParents.Add($createdParent) }
+            }
+        }
         if (-not (Test-Path -LiteralPath $stagedPack) -or -not (Test-Path -LiteralPath $stagedTarget)) { throw 'Atomic publication staged inputs disappeared before activation.' }
         if (Test-Path -LiteralPath $livePack) {
             Move-SafeMutationTarget -Source $livePack -Destination $packBackupRoot -SourceExactPaths @($livePack) -DestinationDescendantRoots @($backupFull)
@@ -206,6 +235,12 @@ function Invoke-AtomicGraphicsPublication {
         try {
             Restore-AtomicRebuild -LivePackRoot $livePack -LiveTargetPath $liveTarget -PackBackupRoot $packBackupRoot -TargetBackupPath $targetBackupPath -ActivationBackupRoot $backupFull -PackWasBackedUp $packBackedUp -TargetWasBackedUp $targetBackedUp -PackWasInstalled $packInstalled -TargetWasInstalled $targetInstalled
             if (Test-Path -LiteralPath $backupFull) { Remove-SafeMutationTarget -Path $backupFull -AllowedDescendantRoots @([IO.Path]::GetTempPath()) }
+            for ($index = $createdDestinationParents.Count - 1; $index -ge 0; $index--) {
+                $createdParent = $createdDestinationParents[$index]
+                if (Test-Path -LiteralPath $createdParent -PathType Container -and @(Get-ChildItem -LiteralPath $createdParent -Force).Count -eq 0) {
+                    Remove-SafeMutationTarget -Path $createdParent -AllowedExactPaths @($createdParent)
+                }
+            }
         }
         catch {
             throw "Atomic graphics-shell publication failed: $($failure.Exception.Message); rollback failed: $($_.Exception.Message)"
@@ -322,7 +357,7 @@ try {
     Write-Utf8TextFile -Path $stagedCommandsJsonPath -Contents (([ordered]@{ commands = @() }) | ConvertTo-Json -Depth 3)
 
     # The verifier reopens/export-checks the staged target and reconstructs its delta before activation.
-    & $packageVerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot -Configuration $Configuration -PackRootOverride $stagedPackRoot -TargetPathOverride $stagedTargetPath
+    & $packageVerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot -Configuration $Configuration -PackRootOverride $stagedPackRoot -TargetPathOverride $stagedTargetPath -StagedPackageValidation
     if (-not $?) { throw 'Staged graphics-options pack verification failed.' }
 
     $verifyPublication = {
