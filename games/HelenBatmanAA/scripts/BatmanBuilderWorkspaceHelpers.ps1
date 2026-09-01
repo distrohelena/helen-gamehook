@@ -12,6 +12,11 @@ function Resolve-OptionalBuilderRoot {
         return [System.IO.Path]::GetFullPath($BuilderRootPath)
     }
 
+    $CurrentDirectoryBuilderRoot = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $BuilderRootPath))
+    if (Test-Path -LiteralPath $CurrentDirectoryBuilderRoot -PathType Container) {
+        return $CurrentDirectoryBuilderRoot
+    }
+
     return [System.IO.Path]::GetFullPath((Join-Path $BatmanRootPath $BuilderRootPath))
 }
 

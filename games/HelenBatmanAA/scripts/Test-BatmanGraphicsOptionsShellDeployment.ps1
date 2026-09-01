@@ -132,6 +132,7 @@ $DeployScriptText = Get-Content -LiteralPath $DeployScriptPath -Raw
 foreach ($RequiredToken in @(
     '$RebuildScriptPath',
     '& $RebuildScriptPath',
+    '-BuilderRoot $BuilderRoot',
     '$ConfigSourcePath',
     '$ConfigDestinationPath',
     '$ConfigStagingPath',
@@ -197,6 +198,32 @@ $ProxyBackupPath = Join-Path $RecoveryRoot 'dinput8.dll'
 try {
     New-Item -ItemType Directory -Force -Path $GameBin | Out-Null
     . $DeployScriptPath -GameBin $GameBin -BuilderRoot (Join-Path $BatmanRoot 'builder') -FunctionsOnly
+
+    $ResolverRepoRoot = Join-Path $TestRoot 'resolver-repo'
+    $ResolverBatmanRoot = Join-Path $ResolverRepoRoot 'games\HelenBatmanAA'
+    $ResolverCwdBuilderRoot = Join-Path $ResolverBatmanRoot 'builder'
+    $ResolverFallbackBuilderRoot = Join-Path $ResolverBatmanRoot 'fallback-builder'
+    $ResolverAbsoluteBuilderRoot = Join-Path $ResolverRepoRoot 'absolute-builder'
+    New-Item -ItemType Directory -Force -Path $ResolverCwdBuilderRoot, $ResolverFallbackBuilderRoot, $ResolverAbsoluteBuilderRoot | Out-Null
+    Push-Location $ResolverRepoRoot
+    try {
+        $cwdRelativeBuilderRoot = Resolve-OptionalBuilderRoot -BatmanRootPath $ResolverBatmanRoot -BuilderRootPath '.\games\HelenBatmanAA\builder'
+        $fallbackBuilderRoot = Resolve-OptionalBuilderRoot -BatmanRootPath $ResolverBatmanRoot -BuilderRootPath 'fallback-builder'
+        $absoluteBuilderRoot = Resolve-OptionalBuilderRoot -BatmanRootPath $ResolverBatmanRoot -BuilderRootPath $ResolverAbsoluteBuilderRoot
+        $omittedBuilderRoot = Resolve-OptionalBuilderRoot -BatmanRootPath $ResolverBatmanRoot
+    } finally {
+        Pop-Location
+    }
+    foreach ($resolvedPath in @(
+        [pscustomobject]@{ Actual = $cwdRelativeBuilderRoot; Expected = $ResolverCwdBuilderRoot; Context = 'current-directory-relative BuilderRoot' },
+        [pscustomobject]@{ Actual = $fallbackBuilderRoot; Expected = $ResolverFallbackBuilderRoot; Context = 'Batman-root-relative BuilderRoot' },
+        [pscustomobject]@{ Actual = $absoluteBuilderRoot; Expected = $ResolverAbsoluteBuilderRoot; Context = 'absolute BuilderRoot' },
+        [pscustomobject]@{ Actual = $omittedBuilderRoot; Expected = $ResolverCwdBuilderRoot; Context = 'omitted BuilderRoot' }
+    )) {
+        if (-not [String]::Equals([IO.Path]::GetFullPath($resolvedPath.Actual), [IO.Path]::GetFullPath($resolvedPath.Expected), [StringComparison]::OrdinalIgnoreCase)) {
+            throw "$($resolvedPath.Context) resolved to '$($resolvedPath.Actual)' instead of '$($resolvedPath.Expected)'."
+        }
+    }
     if ([IO.Path]::GetPathRoot($GameBin) -cne [IO.Path]::GetPathRoot($StagingRoot) -or [IO.Path]::GetPathRoot($GameBin) -cne [IO.Path]::GetPathRoot($RecoveryRoot)) {
         throw 'Deployment staging and recovery roots must share the GameBin volume.'
     }
