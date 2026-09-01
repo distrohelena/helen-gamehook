@@ -871,16 +871,46 @@ namespace
             return false;
         }
 
-        const std::uint32_t blocks_wide = (std::max)(1u, (asset.Width + 3u) / 4u);
-        const std::uint32_t blocks_high = (std::max)(1u, (asset.Height + 3u) / 4u);
-        const std::size_t expected_size = static_cast<std::size_t>(blocks_wide) * static_cast<std::size_t>(blocks_high) * 16u;
+        const std::size_t blocks_wide =
+            static_cast<std::size_t>(asset.Width / 4u) + static_cast<std::size_t>((asset.Width % 4u) != 0u);
+        const std::size_t blocks_high =
+            static_cast<std::size_t>(asset.Height / 4u) + static_cast<std::size_t>((asset.Height % 4u) != 0u);
+        if (blocks_wide > (std::numeric_limits<std::size_t>::max)() / 16u)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        const std::size_t compressed_row_bytes = blocks_wide * 16u;
+        if (compressed_row_bytes == 0u ||
+            blocks_high > (std::numeric_limits<std::size_t>::max)() / compressed_row_bytes)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        const std::size_t expected_size = blocks_high * compressed_row_bytes;
         if (asset.Level0Bytes.size() != expected_size)
         {
             failure_result = E_FAIL;
             return false;
         }
 
-        const std::size_t decoded_size = static_cast<std::size_t>(asset.Width) * static_cast<std::size_t>(asset.Height) * 4u;
+        if (asset.Width > (std::numeric_limits<std::size_t>::max)() / 4u)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        const std::size_t decoded_row_bytes = static_cast<std::size_t>(asset.Width) * 4u;
+        if (static_cast<std::size_t>(asset.Height) >
+            (std::numeric_limits<std::size_t>::max)() / decoded_row_bytes)
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
+        const std::size_t decoded_size = static_cast<std::size_t>(asset.Height) * decoded_row_bytes;
         decoded_bytes.resize(decoded_size, 0u);
 
         const std::uint8_t* const source_bytes = asset.Level0Bytes.data();
@@ -1009,14 +1039,14 @@ namespace
         TInterface* proxy_pointer);
 
     /**
-     * @brief Creates one lockable `A8R8G8B8` replacement texture from a decoded DXT5 payload.
+     * @brief Creates one lockable `A8R8G8B8` texture from a validated replacement payload.
      * @param device Real `IDirect3DDevice9` instance that owns the texture replacement.
-     * @param asset Replacement DDS payload whose compressed pixels should be expanded.
+     * @param asset Replacement DDS payload whose A8R8G8B8 pixels are copied directly or decoded from DXT5.
      * @param replacement_texture Receives the created replacement texture on success.
      * @param failure_result Receives the HRESULT-style failure reason when creation or upload fails.
      * @return True when the replacement texture object is created and populated successfully.
      */
-    bool TryCreateDecodedReplacementTexture(
+    bool TryCreateA8R8G8B8ReplacementTexture(
         Direct3d9DeviceHookContext* device_context,
         const helen::TextureReplacementAsset& asset,
         IDirect3DTexture9*& replacement_texture,
@@ -1032,7 +1062,29 @@ namespace
         }
 
         std::vector<std::uint8_t> decoded_bytes;
-        if (!TryDecodeDxt5ReplacementToA8R8G8B8(asset, decoded_bytes, failure_result))
+        if (asset.Format == D3DFMT_A8R8G8B8)
+        {
+            if (asset.Width == 0u ||
+                asset.Height == 0u ||
+                asset.Width > (std::numeric_limits<std::size_t>::max)() / 4u ||
+                static_cast<std::size_t>(asset.Height) >
+                    (std::numeric_limits<std::size_t>::max)() / (static_cast<std::size_t>(asset.Width) * 4u))
+            {
+                failure_result = E_FAIL;
+                return false;
+            }
+
+            const std::size_t expected_size =
+                static_cast<std::size_t>(asset.Width) * static_cast<std::size_t>(asset.Height) * 4u;
+            if (asset.Level0Bytes.size() != expected_size)
+            {
+                failure_result = E_FAIL;
+                return false;
+            }
+
+            decoded_bytes = asset.Level0Bytes;
+        }
+        else if (!TryDecodeDxt5ReplacementToA8R8G8B8(asset, decoded_bytes, failure_result))
         {
             return false;
         }
@@ -1916,7 +1968,7 @@ namespace
             replacement_definition.ReplacementPath.c_str());
 
         IDirect3DTexture9* final_texture = nullptr;
-        if (!TryCreateDecodedReplacementTexture(device_context, asset, final_texture, failure_result))
+        if (!TryCreateA8R8G8B8ReplacementTexture(device_context, asset, final_texture, failure_result))
         {
             Logf(
                 L"[d3d9] failed to cache declared replacement texture ptr=0x%p path=%ls hr=0x%08lX",
@@ -1987,17 +2039,6 @@ namespace
                 L"[d3d9] failed to load replacement asset path=%ls hr=0x%08lX",
                 resolved_path->c_str(),
                 static_cast<unsigned long>(failure_result));
-            return false;
-        }
-
-        if (asset.Format != description.Format)
-        {
-            failure_result = E_FAIL;
-            Logf(
-                L"[d3d9] replacement asset format mismatch path=%ls source=%hs asset=%hs",
-                resolved_path->c_str(),
-                GetD3d9FormatToken(description.Format).data(),
-                GetD3d9FormatToken(asset.Format).data());
             return false;
         }
 

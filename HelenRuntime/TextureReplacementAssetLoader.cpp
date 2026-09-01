@@ -14,6 +14,8 @@ namespace
     constexpr std::uint32_t DdsdHeight = 0x00000002u;
     /** @brief DDS header bit flags used by the replacement asset loader. */
     constexpr std::uint32_t DdsdWidth = 0x00000004u;
+    /** @brief DDS header flag indicating that `PitchOrLinearSize` contains an uncompressed row pitch. */
+    constexpr std::uint32_t DdsdPitch = 0x00000008u;
     /** @brief DDS header bit flags used by the replacement asset loader. */
     constexpr std::uint32_t DdsdPixelFormat = 0x00001000u;
     /** @brief DDS header bit flags used by the replacement asset loader. */
@@ -21,6 +23,19 @@ namespace
 
     /** @brief DDS pixel-format flag used by the replacement asset loader. */
     constexpr std::uint32_t DdpfFourCc = 0x00000004u;
+    /** @brief DDS pixel-format flag indicating that the payload contains an explicit alpha channel. */
+    constexpr std::uint32_t DdpfAlphaPixels = 0x00000001u;
+    /** @brief DDS pixel-format flag indicating that the payload contains uncompressed RGB channels. */
+    constexpr std::uint32_t DdpfRgb = 0x00000040u;
+
+    /** @brief Red-channel mask required for Direct3D `A8R8G8B8` byte layout. */
+    constexpr std::uint32_t A8R8G8B8RedMask = 0x00FF0000u;
+    /** @brief Green-channel mask required for Direct3D `A8R8G8B8` byte layout. */
+    constexpr std::uint32_t A8R8G8B8GreenMask = 0x0000FF00u;
+    /** @brief Blue-channel mask required for Direct3D `A8R8G8B8` byte layout. */
+    constexpr std::uint32_t A8R8G8B8BlueMask = 0x000000FFu;
+    /** @brief Alpha-channel mask required for Direct3D `A8R8G8B8` byte layout. */
+    constexpr std::uint32_t A8R8G8B8AlphaMask = 0xFF000000u;
 
     /** @brief DDS capability flag required for texture files. */
     constexpr std::uint32_t DdscapsTexture = 0x00001000u;
@@ -103,29 +118,41 @@ namespace
         D3DFORMAT format,
         std::uint32_t width,
         std::uint32_t height,
-        std::uint32_t& row_count,
-        std::uint32_t& bytes_per_row)
+        std::size_t& row_count,
+        std::size_t& bytes_per_row)
     {
         row_count = 0;
         bytes_per_row = 0;
 
-        const std::uint32_t blocks_wide = (std::max)(1u, (width + 3u) / 4u);
-        const std::uint32_t blocks_high = (std::max)(1u, (height + 3u) / 4u);
+        const std::size_t blocks_wide =
+            static_cast<std::size_t>(width / 4u) + static_cast<std::size_t>((width % 4u) != 0u);
+        const std::size_t blocks_high =
+            static_cast<std::size_t>(height / 4u) + static_cast<std::size_t>((height % 4u) != 0u);
+
+        std::size_t block_size = 0u;
 
         switch (format)
         {
         case D3DFMT_DXT1:
-            row_count = blocks_high;
-            bytes_per_row = blocks_wide * 8u;
-            return true;
+            block_size = 8u;
+            break;
         case D3DFMT_DXT3:
         case D3DFMT_DXT5:
-            row_count = blocks_high;
-            bytes_per_row = blocks_wide * 16u;
-            return true;
+            block_size = 16u;
+            break;
         default:
             return false;
         }
+
+        if (blocks_wide > (std::numeric_limits<std::size_t>::max)() / block_size)
+        {
+            return false;
+        }
+
+        row_count = blocks_high;
+        bytes_per_row = blocks_wide * block_size;
+        return bytes_per_row != 0u &&
+            row_count <= (std::numeric_limits<std::size_t>::max)() / bytes_per_row;
     }
 
     /**
@@ -202,29 +229,80 @@ namespace helen
 
         DdsHeader header{};
         std::memcpy(&header, file_bytes.data() + 4u, sizeof(header));
+        const std::uint32_t required_header_flags = DdsdCaps | DdsdHeight | DdsdWidth | DdsdPixelFormat;
         if (header.Size != 124u ||
             header.PixelFormat.Size != 32u ||
-            header.PixelFormat.Flags != DdpfFourCc ||
             header.Width == 0u ||
-            header.Height == 0u)
+            header.Height == 0u ||
+            (header.Flags & required_header_flags) != required_header_flags ||
+            (header.Caps & DdscapsTexture) == 0u)
         {
             failure_result = E_FAIL;
             return false;
         }
 
-        const std::uint32_t four_cc = header.PixelFormat.FourCc;
         D3DFORMAT format = D3DFMT_UNKNOWN;
-        if (four_cc == FourCcDxt1)
+        std::size_t row_count = 0u;
+        std::size_t bytes_per_row = 0u;
+        bool is_compressed = false;
+        if (header.PixelFormat.Flags == DdpfFourCc)
         {
-            format = D3DFMT_DXT1;
+            if ((header.Flags & DdsdLinearSize) == 0u)
+            {
+                failure_result = E_FAIL;
+                return false;
+            }
+
+            is_compressed = true;
+            const std::uint32_t four_cc = header.PixelFormat.FourCc;
+            if (four_cc == FourCcDxt1)
+            {
+                format = D3DFMT_DXT1;
+            }
+            else if (four_cc == FourCcDxt3)
+            {
+                format = D3DFMT_DXT3;
+            }
+            else if (four_cc == FourCcDxt5)
+            {
+                format = D3DFMT_DXT5;
+            }
+            else
+            {
+                failure_result = E_FAIL;
+                return false;
+            }
+
+            if (!TryGetCompressedLayout(format, header.Width, header.Height, row_count, bytes_per_row))
+            {
+                failure_result = E_FAIL;
+                return false;
+            }
         }
-        else if (four_cc == FourCcDxt3)
+        else if (
+            header.PixelFormat.Flags == (DdpfRgb | DdpfAlphaPixels) &&
+            header.PixelFormat.FourCc == 0u &&
+            header.PixelFormat.RgbBitCount == 32u &&
+            header.PixelFormat.RedMask == A8R8G8B8RedMask &&
+            header.PixelFormat.GreenMask == A8R8G8B8GreenMask &&
+            header.PixelFormat.BlueMask == A8R8G8B8BlueMask &&
+            header.PixelFormat.AlphaMask == A8R8G8B8AlphaMask)
         {
-            format = D3DFMT_DXT3;
-        }
-        else if (four_cc == FourCcDxt5)
-        {
-            format = D3DFMT_DXT5;
+            if ((header.Flags & DdsdPitch) == 0u ||
+                header.Width > (std::numeric_limits<std::uint32_t>::max)() / 4u)
+            {
+                failure_result = E_FAIL;
+                return false;
+            }
+
+            format = D3DFMT_A8R8G8B8;
+            row_count = static_cast<std::size_t>(header.Height);
+            bytes_per_row = static_cast<std::size_t>(header.Width) * 4u;
+            if (static_cast<std::size_t>(header.PitchOrLinearSize) != bytes_per_row)
+            {
+                failure_result = E_FAIL;
+                return false;
+            }
         }
         else
         {
@@ -232,15 +310,21 @@ namespace helen
             return false;
         }
 
-        std::uint32_t row_count = 0;
-        std::uint32_t bytes_per_row = 0;
-        if (!TryGetCompressedLayout(format, header.Width, header.Height, row_count, bytes_per_row))
+        if (bytes_per_row == 0u || row_count > (std::numeric_limits<std::size_t>::max)() / bytes_per_row)
         {
-            failure_result = E_NOTIMPL;
+            failure_result = E_FAIL;
             return false;
         }
 
-        const std::size_t expected_payload_size = static_cast<std::size_t>(row_count) * static_cast<std::size_t>(bytes_per_row);
+        const std::size_t expected_payload_size = row_count * bytes_per_row;
+        if (is_compressed &&
+            (expected_payload_size > (std::numeric_limits<std::uint32_t>::max)() ||
+                header.PitchOrLinearSize != static_cast<std::uint32_t>(expected_payload_size)))
+        {
+            failure_result = E_FAIL;
+            return false;
+        }
+
         const std::size_t payload_offset = 4u + sizeof(DdsHeader);
         const std::size_t payload_size = file_bytes.size() - payload_offset;
         if (payload_size != expected_payload_size)

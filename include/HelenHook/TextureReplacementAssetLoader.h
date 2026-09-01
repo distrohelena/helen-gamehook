@@ -30,8 +30,9 @@ namespace helen
      * @brief Loads replacement DDS assets without requiring the source and replacement dimensions to match.
      *
      * The loader validates that the DDS header is well-formed, reads the declared image dimensions
-     * and format, and returns the level-0 compressed payload bytes for later upload into a live
-     * replacement texture object.
+     * and format, and returns the level-0 compressed or uncompressed payload bytes for later upload
+     * into a live replacement texture object. Supported uncompressed assets must use the exact
+     * Direct3D `A8R8G8B8` channel masks so their rows can be uploaded without color conversion.
      */
     class TextureReplacementAssetLoader
     {
