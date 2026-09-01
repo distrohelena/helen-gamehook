@@ -45,6 +45,7 @@ if ($BuildJson.match.sha256 -ne '4DAC1F5E2AC6710B7378FDCE74601F616F4753E3756CB5F
 $EnabledPacks = @($ConfigJson.enabledPacksByExecutable.'ShippingPC-BmGame.exe')
 if ($EnabledPacks.Count -ne 2) { throw 'Expected 2 enabled Batman packs in packs.json.' }
 if ($EnabledPacks[0] -ne 'batman-aa-subtitles') { throw 'Primary Batman pack order mismatch.' }
-if ($EnabledPacks[1] -ne 'batman-aa-skip-videos') { throw 'Skip-videos Batman pack order mismatch.' }
+if ($EnabledPacks[1] -ne 'batman-aa-graphics-options') { throw 'Graphics-options Batman pack order mismatch.' }
+if ($EnabledPacks -contains 'batman-aa-skip-videos') { throw 'Skip-videos pack must remain inactive for the graphics shell checkpoint.' }
 
 Write-Output 'PASS'

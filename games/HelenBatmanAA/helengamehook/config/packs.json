@@ -2,7 +2,7 @@
   "enabledPacksByExecutable": {
     "ShippingPC-BmGame.exe": [
       "batman-aa-subtitles",
-      "batman-aa-skip-videos"
+      "batman-aa-graphics-options"
     ]
   }
 }
