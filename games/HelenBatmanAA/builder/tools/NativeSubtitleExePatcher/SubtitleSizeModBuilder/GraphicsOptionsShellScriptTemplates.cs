@@ -4,7 +4,7 @@ namespace SubtitleSizeModBuilder;
 /// Provides the static ActionScript shell used to display the graphics-options screen without
 /// connecting the screen controls to any native settings service.
 /// </summary>
-public static class GraphicsOptionsShellScriptTemplates
+internal static class GraphicsOptionsShellScriptTemplates
 {
     /// <summary>
     /// Registers the graphics-options screen with the stock screen implementation so the
@@ -138,10 +138,37 @@ public static class GraphicsOptionsShellScriptTemplates
 
         return $$"""
         onClipEvent(load){
-           this.Label.Label.Text.text = "{{escapedLabel}}";
-           this.ItemText.text = "{{escapedValue}}";
-           this.LeftClicker._visible = false;
-           this.RightClicker._visible = false;
+           this.Names = new Array("{{escapedValue}}");
+           this.State = 0;
+           this.Initial = 0;
+           this.Default = 0;
+           this.Update = function()
+           {
+              if(this.Label != undefined && this.Label.Label != undefined && this.Label.Label.Text != undefined)
+              {
+                 this.Label.Label.Text.text = "{{escapedLabel}}";
+              }
+              else if(this.Label != undefined && this.Label.Text != undefined)
+              {
+                 this.Label.Text.text = "{{escapedLabel}}";
+              }
+              else if(this.Label != undefined)
+              {
+                 this.Label.text = "{{escapedLabel}}";
+              }
+              if(this.ItemText != undefined)
+              {
+                 this.ItemText.text = "{{escapedValue}}";
+              }
+              if(this.LeftClicker != undefined)
+              {
+                 this.LeftClicker._visible = false;
+              }
+              if(this.RightClicker != undefined)
+              {
+                 this.RightClicker._visible = false;
+              }
+           };
            this.RunAction = function()
            {
            };
@@ -151,30 +178,61 @@ public static class GraphicsOptionsShellScriptTemplates
            this.Decrement = function()
            {
            };
-           this._visible = {{visibility}};
-           this.Update = function()
+           this.ShowPrompt = function()
            {
-              this.Label.Label.Text.text = "{{escapedLabel}}";
-              this.ItemText.text = "{{escapedValue}}";
-              this.LeftClicker._visible = false;
-              this.RightClicker._visible = false;
            };
+           this.Destroy = function()
+           {
+              if(this.Names != undefined)
+              {
+                 while(this.Names.length > 0)
+                 {
+                    this.Names.pop();
+                 }
+              }
+           };
+           this._visible = {{visibility}};
            this.Update();
         }
         """;
     }
 
     /// <summary>
-    /// Escapes an ActionScript string value by protecting backslashes before protecting quotes,
-    /// preserving literal labels and values when they are inserted into generated source.
+    /// Rejects control characters that cannot be represented safely by the ActionScript string
+    /// literal format, while allowing the three controls with explicit ActionScript escapes.
     /// </summary>
-    /// <param name="value">The unescaped value to place inside an ActionScript string literal.</param>
-    /// <returns>The value with backslashes and double quotes escaped for ActionScript.</returns>
-    public static string EscapeActionScriptString(string value)
+    /// <param name="value">The value whose characters must be validated.</param>
+    /// <exception cref="ArgumentException">Thrown when an unsupported control character is found.</exception>
+    public static void ValidateActionScriptString(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
+
+        foreach (char character in value)
+        {
+            if (character < '\u0020' && character != '\r' && character != '\n' && character != '\t')
+            {
+                throw new ArgumentException(
+                    $"ActionScript string contains unsupported control character U+{(int)character:X4}.",
+                    nameof(value));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Escapes an ActionScript string value by protecting backslashes before protecting quotes,
+    /// converting supported control characters to ActionScript escapes, and rejecting controls
+    /// for which ActionScript has no safe literal representation.
+    /// </summary>
+    /// <param name="value">The unescaped value to place inside an ActionScript string literal.</param>
+    /// <returns>The value with special characters escaped for ActionScript.</returns>
+    public static string EscapeActionScriptString(string value)
+    {
+        ValidateActionScriptString(value);
         return value
             .Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("\"", "\\\"", StringComparison.Ordinal);
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal)
+            .Replace("\t", "\\t", StringComparison.Ordinal);
     }
 }
