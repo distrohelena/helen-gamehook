@@ -1,7 +1,9 @@
 param(
     [string]$BatmanRoot,
     [string]$BuilderRoot,
-    [string]$Configuration = 'Release'
+    [string]$Configuration = 'Release',
+    [string]$PackRootOverride,
+    [string]$TargetPathOverride
 )
 
 $ErrorActionPreference = 'Stop'
@@ -69,7 +71,140 @@ function Read-UInt32LittleEndian {
 
 function Read-UInt64LittleEndian {
     param([byte[]]$Bytes, [int]$Offset)
+    if ($Offset -lt 0 -or $Offset -gt ($Bytes.Length - 8)) { throw "HGDL read exceeded the byte buffer at offset $Offset." }
     return [BitConverter]::ToUInt64($Bytes, $Offset)
+}
+
+function Assert-ExactPackFileSet {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Root,
+        [Parameter(Mandatory = $true)] [string]$BuildDirectoryName
+    )
+
+    $expected = @(
+        'pack.json',
+        "builds\$BuildDirectoryName\build.json",
+        "builds\$BuildDirectoryName\bindings.json",
+        "builds\$BuildDirectoryName\commands.json",
+        "builds\$BuildDirectoryName\files.json",
+        "builds\$BuildDirectoryName\assets\deltas\Frontend-graphics-options.hgdelta"
+    ) | Sort-Object
+    $rootPrefix = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    $actual = @(Get-ChildItem -LiteralPath $Root -Recurse -File | ForEach-Object {
+        $_.FullName.Substring($rootPrefix.Length).Replace('/', '\')
+    } | Sort-Object)
+    if (($actual -join '|') -cne ($expected -join '|')) {
+        throw "Graphics-options pack file set drifted. Expected '$($expected -join ', ')' but found '$($actual -join ', ')'."
+    }
+}
+
+function Assert-RebuildAtomicSourceContract {
+    param([Parameter(Mandatory = $true)] [string]$ScriptPath)
+
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    foreach ($token in @(
+        '$stagedPackRoot', '$stagedTargetPath', '$stagedDeltaPath', '$packBackupRoot', '$targetBackupPath',
+        'Move-Item -LiteralPath', '-OutputFile $stagedDeltaPath', 'Restore-AtomicRebuild', 'catch', 'finally'
+    )) {
+        Assert-ContainsOrdinal -Text $source -Token $token -Context 'atomic graphics-options rebuild source'
+    }
+    if ($source.IndexOf('-OutputFile $deltaPath', [StringComparison]::Ordinal) -ge 0) {
+        throw 'Rebuild must never write hgdelta output directly into the checked-in pack.'
+    }
+    if ($source.IndexOf('$stagedPackRoot = $packRoot', [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $source.IndexOf('$stagedTargetPath = $targetPath', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        throw 'Rebuild staging paths must differ from live pack and target paths.'
+    }
+    if ($source -notmatch '(?s)catch\s*\{.*Restore-AtomicRebuild') {
+        throw 'Rebuild catch path must restore the live pack and target after activation failure.'
+    }
+}
+
+function Get-HgdeltaFunctionBody {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Text,
+        [Parameter(Mandatory = $true)] [string]$FunctionAssignment
+    )
+
+    $match = [regex]::Match($Text, [regex]::Escape($FunctionAssignment) + '\s*=\s*function\s*\(\s*\)\s*\{(?<body>.*?)\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $match.Success) { throw "Missing no-op function '$FunctionAssignment'." }
+    return $match.Groups['body'].Value.Trim()
+}
+
+function Assert-NoOpRowActions {
+    param([Parameter(Mandatory = $true)] [string]$Text, [Parameter(Mandatory = $true)] [string]$Context)
+    foreach ($action in @('RunAction', 'Increment', 'Decrement', 'ShowPrompt')) {
+        if ((Get-HgdeltaFunctionBody -Text $Text -FunctionAssignment "this.$action") -ne '') {
+            throw "$Context action $action must be a no-op."
+        }
+    }
+}
+
+function Assert-ScopedExportedShellContract {
+    param([Parameter(Mandatory = $true)] [string]$ExportRoot)
+
+    $scriptsRoot = Join-Path $ExportRoot 'scripts'
+    $scriptFiles = @(Get-ChildItem -LiteralPath $scriptsRoot -Recurse -Filter *.as -File)
+    if ($scriptFiles.Count -eq 0) { throw 'FFDec exported no ActionScript files.' }
+    $screenDirectories = @(Get-ChildItem -LiteralPath $scriptsRoot -Recurse -Directory | Where-Object { $_.Name -eq 'DefineSprite_600_ScreenOptionsGraphics' })
+    if ($screenDirectories.Count -ne 1) { throw "Expected exactly one DefineSprite_600_ScreenOptionsGraphics directory, found $($screenDirectories.Count)." }
+    $screenDirectory = $screenDirectories[0]
+    $screenScriptPath = Join-Path $screenDirectory.FullName 'frame_1\DoAction.as'
+    if (-not (Test-Path -LiteralPath $screenScriptPath)) { throw "Missing known Options Graphics screen script: $screenScriptPath" }
+    $screenText = Get-Content -LiteralPath $screenScriptPath -Raw
+
+    $menuScriptPath = Join-Path $scriptsRoot 'DefineSprite_333_ScreenOptionsMenu\frame_1\PlaceObject2_117_GenericButton_37\CLIPACTIONRECORD onClipEvent(load).as'
+    if (-not (Test-Path -LiteralPath $menuScriptPath)) { throw "Missing known Options menu script: $menuScriptPath" }
+    $menuText = Get-Content -LiteralPath $menuScriptPath -Raw
+    Assert-ContainsOrdinal -Text $menuText -Token 'GotoScreen("OptionsGraphics")' -Context 'Options menu script'
+    Assert-ContainsOrdinal -Text $menuText -Token 'Graphics Options' -Context 'Options menu script'
+
+    foreach ($token in @('Graphics Options', 'CancelScreen', 'ReturnFromScreen', 'FE_SetActiveScreenName","Graphics Options')) {
+        Assert-ContainsOrdinal -Text $screenText -Token $token -Context 'Options Graphics screen script'
+    }
+
+    $rowDepths = @('141', '133', '125', '117', '109', '101', '93', '85', '77', '69', '61', '53', '45', '37', '29')
+    $rowLabels = @('Fullscreen', 'Resolution', 'VSync', 'MSAA', 'Detail Level', 'Bloom', 'Dynamic Shadows', 'Motion Blur', 'Distortion', 'Fog Volumes', 'Spherical Harmonic Lighting', 'Ambient Occlusion', 'PhysX', 'Stereo 3D', '')
+    for ($index = 0; $index -lt $rowDepths.Count; $index++) {
+        $rowPath = Join-Path $screenDirectory.FullName "frame_1\PlaceObject2_290_List_Template_$($rowDepths[$index])\CLIPACTIONRECORD onClipEvent(load).as"
+        if (-not (Test-Path -LiteralPath $rowPath)) { throw "Missing known Graphics Options row script: $rowPath" }
+        $rowText = Get-Content -LiteralPath $rowPath -Raw
+        if ($index -lt 14) {
+            Assert-ContainsOrdinal -Text $rowText -Token 'this.Names = new Array("Not active");' -Context "Graphics row $($index + 1)"
+            if ($rowText -notmatch 'this\.(?:Label\.)?Label\.Text\.text\s*=\s*"' -and $rowText -notmatch 'this\.Label\.Text\.text\s*=\s*"') { throw "Graphics row $($index + 1) is missing its fixed label assignment." }
+            Assert-ContainsOrdinal -Text $rowText -Token $rowLabels[$index] -Context "Graphics row $($index + 1) label"
+            Assert-ContainsOrdinal -Text $rowText -Token 'this._visible = true;' -Context "Graphics row $($index + 1) visibility"
+        } else {
+            Assert-ContainsOrdinal -Text $rowText -Token 'this.Names = new Array("");' -Context 'Graphics row 15 names'
+            Assert-ContainsOrdinal -Text $rowText -Token 'this._visible = false;' -Context 'Graphics row 15 visibility'
+            Assert-ContainsOrdinal -Text $rowText -Token 'this.ItemText.text = "";' -Context 'Graphics row 15 value'
+        }
+        Assert-NoOpRowActions -Text $rowText -Context "Graphics row $($index + 1)"
+    }
+}
+
+function Set-HgdeltaUInt32Fixture {
+    param([byte[]]$Bytes, [int]$Offset, [uint32]$Value)
+    [Buffer]::BlockCopy([BitConverter]::GetBytes($Value), 0, $Bytes, $Offset, 4)
+}
+
+function Set-HgdeltaUInt64Fixture {
+    param([byte[]]$Bytes, [int]$Offset, [uint64]$Value)
+    [Buffer]::BlockCopy([BitConverter]::GetBytes($Value), 0, $Bytes, $Offset, 8)
+}
+
+function Assert-HgdeltaRejected {
+    param(
+        [Parameter(Mandatory = $true)] [string]$BasePath,
+        [Parameter(Mandatory = $true)] [byte[]]$Bytes,
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [Parameter(Mandatory = $true)] [string]$CaseName
+    )
+    [IO.File]::WriteAllBytes($Path, $Bytes)
+    $rejected = $false
+    try { $null = Reconstruct-HgdeltaTarget -BasePath $BasePath -DeltaPath $Path } catch { $rejected = $true }
+    finally { if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force } }
+    if (-not $rejected) { throw "HGDL verifier accepted invalid $CaseName fixture." }
 }
 
 function Reconstruct-HgdeltaTarget {
@@ -81,28 +216,66 @@ function Reconstruct-HgdeltaTarget {
     $base = [System.IO.File]::ReadAllBytes($BasePath)
     $delta = [System.IO.File]::ReadAllBytes($DeltaPath)
     if ($delta.Length -lt 116 -or [Text.Encoding]::ASCII.GetString($delta, 0, 4) -cne 'HGDL') { throw "Invalid HGDL delta: $DeltaPath" }
-    $chunkCount = [int](Read-UInt32LittleEndian $delta 96)
-    $chunkTableOffset = [int](Read-UInt64LittleEndian $delta 100)
-    $payloadOffset = [int](Read-UInt64LittleEndian $delta 108)
-    $targetSize = [int](Read-UInt64LittleEndian $delta 24)
+    $majorVersion = Read-UInt32LittleEndian $delta 4
+    $minorVersion = Read-UInt32LittleEndian $delta 8
+    $chunkSize = Read-UInt32LittleEndian $delta 12
+    $baseSize = Read-UInt64LittleEndian $delta 16
+    $targetSize64 = Read-UInt64LittleEndian $delta 24
+    $baseHash = Convert-BytesToLowerHex -Bytes @($delta[32..63])
+    $targetHash = Convert-BytesToLowerHex -Bytes @($delta[64..95])
+    $chunkCount64 = Read-UInt32LittleEndian $delta 96
+    $chunkTableOffset = Read-UInt64LittleEndian $delta 100
+    $payloadOffset = Read-UInt64LittleEndian $delta 108
+    if ($majorVersion -ne 1 -or $minorVersion -ne 0) { throw "HGDL version must be 1.0, found $majorVersion.$minorVersion." }
+    if ($chunkSize -ne 65536) { throw "HGDL chunk size must be 65536, found $chunkSize." }
+    if ($baseSize -ne [uint64]$base.Length) { throw "HGDL base size mismatch: header $baseSize, actual $($base.Length)." }
+    if ($targetSize64 -gt [uint64][int]::MaxValue) { throw 'HGDL target is too large for verifier memory.' }
+    if ($chunkCount64 -gt [uint64][int]::MaxValue) { throw 'HGDL chunk count is too large for verifier memory.' }
+    $targetSize = [int]$targetSize64
+    $chunkCount = [int]$chunkCount64
+    $expectedChunkCount = [uint64][Math]::Ceiling($targetSize64 / [double]$chunkSize)
+    if ($chunkCount64 -ne $expectedChunkCount) { throw "HGDL chunk count mismatch: expected $expectedChunkCount, found $chunkCount64." }
+    if ($chunkTableOffset -lt 116) { throw "HGDL chunk table overlaps header at offset $chunkTableOffset." }
+    $tableLength = $chunkCount64 * 20
+    if ($tableLength -gt [uint64]$delta.Length - $chunkTableOffset) { throw 'HGDL chunk table exceeds delta file bounds.' }
+    $tableEnd = $chunkTableOffset + $tableLength
+    if ($payloadOffset -lt $tableEnd -or $payloadOffset -gt [uint64]$delta.Length) { throw 'HGDL payload offset is outside the delta file bounds.' }
+    $actualBaseHash = (Get-FileHash -LiteralPath $BasePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($baseHash -cne $actualBaseHash) { throw "HGDL base SHA mismatch: header $baseHash, actual $actualBaseHash." }
     $result = [System.IO.MemoryStream]::new($targetSize)
+    [uint64]$written = 0
     try {
         for ($index = 0; $index -lt $chunkCount; $index++) {
-            $entry = $chunkTableOffset + ($index * 20)
+            $entry64 = $chunkTableOffset + ([uint64]$index * 20)
+            if ($entry64 -gt [uint64][int]::MaxValue) { throw 'HGDL chunk entry offset exceeds verifier limits.' }
+            $entry = [int]$entry64
             $kind = Read-UInt32LittleEndian $delta $entry
-            $size = [int](Read-UInt32LittleEndian $delta ($entry + 4))
-            $entryPayloadOffset = [int](Read-UInt64LittleEndian $delta ($entry + 8))
-            $entryPayloadSize = [int](Read-UInt32LittleEndian $delta ($entry + 16))
+            $size64 = Read-UInt32LittleEndian $delta ($entry + 4)
+            $entryPayloadOffset = Read-UInt64LittleEndian $delta ($entry + 8)
+            $entryPayloadSize = Read-UInt32LittleEndian $delta ($entry + 16)
+            if ($size64 -eq 0 -or $size64 -gt [uint64]$chunkSize) { throw "HGDL chunk $index has invalid reconstructed size $size64." }
+            if ($written + $size64 -gt $targetSize64) { throw "HGDL chunk $index exceeds reconstructed target size." }
+            $size = [int]$size64
             if ($kind -eq 0) {
-                if ($size -gt 0) { $result.Write($base, $index * 65536, $size) }
+                if ($entryPayloadOffset -ne 0 -or $entryPayloadSize -ne 0) { throw "HGDL base chunk $index contains replacement payload metadata." }
+                $baseOffset = [uint64]$index * [uint64]$chunkSize
+                if ($baseOffset + $size64 -gt [uint64]$base.Length) { throw "HGDL base chunk $index exceeds base file bounds." }
+                $result.Write($base, [int]$baseOffset, $size)
             } elseif ($kind -eq 1) {
-                if ($entryPayloadSize -ne $size) { throw "HGDL replacement size mismatch at chunk $index." }
-                if ($size -gt 0) { $result.Write($delta, $payloadOffset + $entryPayloadOffset, $size) }
+                if ($entryPayloadSize -ne $size64) { throw "HGDL replacement size mismatch at chunk $index." }
+                if ($payloadOffset + $entryPayloadOffset -lt $payloadOffset -or $payloadOffset + $entryPayloadOffset + $size64 -gt [uint64]$delta.Length) { throw "HGDL replacement chunk $index exceeds payload bounds." }
+                $sourceOffset = $payloadOffset + $entryPayloadOffset
+                $result.Write($delta, [int]$sourceOffset, $size)
             } else {
                 throw "HGDL contains unsupported chunk kind $kind at chunk $index."
             }
+            $written += $size64
         }
-        return ,$result.ToArray()
+        if ($written -ne $targetSize64 -or $result.Length -ne $targetSize) { throw "HGDL reconstructed size mismatch: expected $targetSize64, wrote $written." }
+        $reconstructed = $result.ToArray()
+        $actualTargetHash = (Get-FileHash -InputStream ([IO.MemoryStream]::new($reconstructed)) -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($targetHash -cne $actualTargetHash) { throw "HGDL reconstructed SHA mismatch: header $targetHash, actual $actualTargetHash." }
+        return ,$reconstructed
     }
     finally {
         $result.Dispose()
@@ -124,7 +297,7 @@ if ([string]::IsNullOrWhiteSpace($BuilderRoot)) {
     $BuilderRoot = [IO.Path]::GetFullPath((Join-Path $BatmanRoot $BuilderRoot))
 }
 
-$packRoot = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-graphics-options'
+$packRoot = if ([string]::IsNullOrWhiteSpace($PackRootOverride)) { Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-graphics-options' } else { [IO.Path]::GetFullPath($PackRootOverride) }
 $buildRoot = Join-Path $packRoot 'builds\steam-goty-1.0'
 $packJsonPath = Join-Path $packRoot 'pack.json'
 $buildJsonPath = Join-Path $buildRoot 'build.json'
@@ -135,13 +308,15 @@ $deltaPath = Join-Path $buildRoot 'assets\deltas\Frontend-graphics-options.hgdel
 $hooksJsonPath = Join-Path $buildRoot 'hooks.json'
 $texturesJsonPath = Join-Path $buildRoot 'textures.json'
 $basePath = Join-Path $BuilderRoot 'extracted\frontend-retail\Frontend.umap'
-$targetPath = Join-Path $BuilderRoot 'generated\graphics-options-experiment\Frontend-graphics-options.umap'
+$targetPath = if ([string]::IsNullOrWhiteSpace($TargetPathOverride)) { Join-Path $BuilderRoot 'generated\graphics-options-experiment\Frontend-graphics-options.umap' } else { [IO.Path]::GetFullPath($TargetPathOverride) }
 $ffdecPath = Join-Path $BuilderRoot 'extracted\ffdec\ffdec-cli.exe'
 $patcherProjectPath = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\BmGameGfxPatcher\BmGameGfxPatcher.csproj'
 
 foreach ($requiredPath in @($packJsonPath, $buildJsonPath, $bindingsJsonPath, $commandsJsonPath, $filesJsonPath, $deltaPath, $basePath, $targetPath, $ffdecPath, $patcherProjectPath)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Batman graphics-options package input not found: $requiredPath" }
 }
+Assert-RebuildAtomicSourceContract -ScriptPath (Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1')
+Assert-ExactPackFileSet -Root $packRoot -BuildDirectoryName 'steam-goty-1.0'
 if (Test-Path -LiteralPath $hooksJsonPath) { throw 'Graphics-options shell must not contain hooks.json.' }
 if (Test-Path -LiteralPath $texturesJsonPath) { throw 'Graphics-options shell must not contain textures.json.' }
 
@@ -195,12 +370,8 @@ try {
     $exports = @(@($document.SelectNodes("/swf/tags/item[@type='ExportAssetsTag']")) | Where-Object { @($_.names.item | Where-Object { $_ -eq 'ScreenOptionsGraphics' }).Count -gt 0 })
     if ($exports.Count -ne 1 -or @($exports[0].tags.item | Where-Object { $_ -eq '600' }).Count -ne 1) { throw 'Shell target must export exactly sprite 600 as ScreenOptionsGraphics.' }
 
+    Assert-ScopedExportedShellContract -ExportRoot $exportRoot
     $scriptFiles = @(Get-ChildItem -LiteralPath (Join-Path $exportRoot 'scripts') -Recurse -Filter *.as -File)
-    if ($scriptFiles.Count -eq 0) { throw 'FFDec exported no ActionScript files.' }
-    $screenScripts = @($scriptFiles | Where-Object { $_.FullName -like '*DefineSprite_600_ScreenOptionsGraphics*' })
-    $screenScript = (($screenScripts | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join [Environment]::NewLine)
-    $allScriptText = (($scriptFiles | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join [Environment]::NewLine)
-    foreach ($token in @('Graphics Options', 'GotoScreen("OptionsGraphics")', 'CancelScreen', 'ReturnFromScreen', 'Not active')) { Assert-ContainsOrdinal -Text $allScriptText -Token $token -Context 'exported graphics shell' }
     foreach ($forbidden in @('Helen_', 'ApplyChanges', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft', 'Unsaved graphics changes', 'Some changes require a restart')) {
         foreach ($scriptFile in $scriptFiles) { Assert-NotContainsOrdinal -Text (Get-Content -LiteralPath $scriptFile.FullName -Raw) -Token $forbidden -Context "exported script $($scriptFile.Name)" }
     }
@@ -208,6 +379,48 @@ try {
     $reconstructed = Reconstruct-HgdeltaTarget -BasePath $basePath -DeltaPath $deltaPath
     $targetBytes = [IO.File]::ReadAllBytes($targetPath)
     if ($reconstructed.Length -ne $targetBytes.Length -or -not [Linq.Enumerable]::SequenceEqual($reconstructed, $targetBytes)) { throw 'HGDL delta reconstruction does not match the current-run target byte-for-byte.' }
+    $deltaBytes = [IO.File]::ReadAllBytes($deltaPath)
+    $invalidDeltaPath = Join-Path $verificationRoot 'invalid.hgdelta'
+    [byte[]]$badBytes = $deltaBytes.Clone()
+    $badBytes[0] = [byte][char]'X'
+    Assert-HgdeltaRejected -BasePath $basePath -Bytes $badBytes -Path $invalidDeltaPath -CaseName 'header magic'
+    [byte[]]$badBytes = $deltaBytes.Clone()
+    Set-HgdeltaUInt32Fixture -Bytes $badBytes -Offset 4 -Value 2
+    Assert-HgdeltaRejected -BasePath $basePath -Bytes $badBytes -Path $invalidDeltaPath -CaseName 'version'
+    [byte[]]$badBytes = $deltaBytes.Clone()
+    Set-HgdeltaUInt32Fixture -Bytes $badBytes -Offset 12 -Value 1
+    Assert-HgdeltaRejected -BasePath $basePath -Bytes $badBytes -Path $invalidDeltaPath -CaseName 'chunk size'
+    [byte[]]$badBytes = $deltaBytes.Clone()
+    Set-HgdeltaUInt32Fixture -Bytes $badBytes -Offset 96 -Value 0
+    Assert-HgdeltaRejected -BasePath $basePath -Bytes $badBytes -Path $invalidDeltaPath -CaseName 'chunk count'
+    [byte[]]$badBytes = $deltaBytes.Clone()
+    Set-HgdeltaUInt64Fixture -Bytes $badBytes -Offset 100 -Value 115
+    Assert-HgdeltaRejected -BasePath $basePath -Bytes $badBytes -Path $invalidDeltaPath -CaseName 'chunk-table bounds'
+    [byte[]]$badBytes = $deltaBytes.Clone()
+    Set-HgdeltaUInt64Fixture -Bytes $badBytes -Offset 108 -Value ([uint64]$deltaBytes.Length + 1)
+    Assert-HgdeltaRejected -BasePath $basePath -Bytes $badBytes -Path $invalidDeltaPath -CaseName 'payload bounds'
+    [byte[]]$badBytes = $deltaBytes.Clone()
+    Set-HgdeltaUInt32Fixture -Bytes $badBytes -Offset 116 -Value 9
+    Assert-HgdeltaRejected -BasePath $basePath -Bytes $badBytes -Path $invalidDeltaPath -CaseName 'unsupported chunk kind'
+    [byte[]]$badBytes = $deltaBytes.Clone()
+    Set-HgdeltaUInt32Fixture -Bytes $badBytes -Offset 120 -Value 65537
+    Assert-HgdeltaRejected -BasePath $basePath -Bytes $badBytes -Path $invalidDeltaPath -CaseName 'chunk size/count bounds'
+    [byte[]]$badBytes = $deltaBytes.Clone()
+    Set-HgdeltaUInt64Fixture -Bytes $badBytes -Offset 124 -Value ([uint64]$deltaBytes.Length)
+    Assert-HgdeltaRejected -BasePath $basePath -Bytes $badBytes -Path $invalidDeltaPath -CaseName 'replacement payload bounds'
+    [byte[]]$badBytes = $deltaBytes.Clone()
+    Set-HgdeltaUInt32Fixture -Bytes $badBytes -Offset 116 -Value 1
+    Set-HgdeltaUInt64Fixture -Bytes $badBytes -Offset 124 -Value ([uint64]::MaxValue)
+    Assert-HgdeltaRejected -BasePath $basePath -Bytes $badBytes -Path $invalidDeltaPath -CaseName 'chunk offset overflow'
+    [byte[]]$badBytes = $deltaBytes.Clone()
+    Set-HgdeltaUInt32Fixture -Bytes $badBytes -Offset 116 -Value 0
+    Set-HgdeltaUInt32Fixture -Bytes $badBytes -Offset 120 -Value 65535
+    Set-HgdeltaUInt64Fixture -Bytes $badBytes -Offset 124 -Value 0
+    Set-HgdeltaUInt32Fixture -Bytes $badBytes -Offset 132 -Value 0
+    Assert-HgdeltaRejected -BasePath $basePath -Bytes $badBytes -Path $invalidDeltaPath -CaseName 'reconstructed size'
+    [byte[]]$badBytes = $deltaBytes.Clone()
+    $badBytes[64] = $badBytes[64] -bxor 255
+    Assert-HgdeltaRejected -BasePath $basePath -Bytes $badBytes -Path $invalidDeltaPath -CaseName 'reconstructed SHA'
 }
 finally {
     if (Test-Path -LiteralPath $verificationRoot) { Remove-Item -LiteralPath $verificationRoot -Recurse -Force }

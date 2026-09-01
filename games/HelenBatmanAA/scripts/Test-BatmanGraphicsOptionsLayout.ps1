@@ -24,6 +24,37 @@ function Assert-NotContainsOrdinal {
     if ($Text.IndexOf($Token, [StringComparison]::Ordinal) -ge 0) { throw "$Context contains forbidden '$Token'." }
 }
 
+function Get-ActionFunctionBody {
+    param([string]$Text, [string]$Assignment)
+    $match = [regex]::Match($Text, [regex]::Escape($Assignment) + '\s*=\s*function\s*\(\s*\)\s*\{(?<body>.*?)\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $match.Success) { throw "Missing expected row action $Assignment." }
+    return $match.Groups['body'].Value.Trim()
+}
+
+function Assert-RowShellContract {
+    param([string]$ScreenDirectory)
+    $depths = @('141', '133', '125', '117', '109', '101', '93', '85', '77', '69', '61', '53', '45', '37', '29')
+    $labels = @('Fullscreen', 'Resolution', 'VSync', 'MSAA', 'Detail Level', 'Bloom', 'Dynamic Shadows', 'Motion Blur', 'Distortion', 'Fog Volumes', 'Spherical Harmonic Lighting', 'Ambient Occlusion', 'PhysX', 'Stereo 3D', '')
+    for ($index = 0; $index -lt $depths.Count; $index++) {
+        $rowPath = Join-Path $ScreenDirectory "frame_1\PlaceObject2_290_List_Template_$($depths[$index])\CLIPACTIONRECORD onClipEvent(load).as"
+        if (-not (Test-Path -LiteralPath $rowPath)) { throw "Missing known row script $rowPath." }
+        $rowText = Get-Content -LiteralPath $rowPath -Raw
+        if ($index -lt 14) {
+            Assert-ContainsOrdinal $rowText 'this.Names = new Array("Not active");' "row $($index + 1)"
+            if ($rowText -notmatch 'this\.(?:Label\.)?Label\.Text\.text\s*=\s*"' -and $rowText -notmatch 'this\.Label\.Text\.text\s*=\s*"') { throw "row $($index + 1) is missing its fixed label assignment." }
+            Assert-ContainsOrdinal $rowText $labels[$index] "row $($index + 1) label"
+            Assert-ContainsOrdinal $rowText 'this._visible = true;' "row $($index + 1) visibility"
+        } else {
+            Assert-ContainsOrdinal $rowText 'this.Names = new Array("");' 'row 15 names'
+            Assert-ContainsOrdinal $rowText 'this._visible = false;' 'row 15 visibility'
+            Assert-ContainsOrdinal $rowText 'this.ItemText.text = "";' 'row 15 value'
+        }
+        foreach ($action in @('RunAction', 'Increment', 'Decrement', 'ShowPrompt')) {
+            if ((Get-ActionFunctionBody $rowText "this.$action") -ne '') { throw "row $($index + 1) action $action must be a no-op." }
+        }
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($BatmanRoot)) { $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path } else { $BatmanRoot = (Resolve-Path $BatmanRoot).Path }
 if ([string]::IsNullOrWhiteSpace($BuilderRoot)) { $BuilderRoot = Join-Path $BatmanRoot 'builder' } elseif ([IO.Path]::IsPathRooted($BuilderRoot)) { $BuilderRoot = [IO.Path]::GetFullPath($BuilderRoot) } elseif (Test-Path -LiteralPath $BuilderRoot) { $BuilderRoot = (Resolve-Path $BuilderRoot).Path } else { $BuilderRoot = [IO.Path]::GetFullPath((Join-Path $BatmanRoot $BuilderRoot)) }
 
@@ -81,20 +112,22 @@ try {
         if ($null -eq $matrix -or $matrix.translateX -ne $expected.X -or $matrix.translateY -ne $expected.Y) { throw "Shell placement depth $($expected.Depth) has unexpected geometry." }
     }
 
-    $scripts = @(Get-ChildItem -LiteralPath (Join-Path $exportRoot 'scripts') -Recurse -Filter *.as -File)
-    $screenScripts = @($scripts | Where-Object { $_.FullName -like '*DefineSprite_600_ScreenOptionsGraphics*' })
-    $screenText = (($screenScripts | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join [Environment]::NewLine)
-    $allScriptText = (($scripts | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join [Environment]::NewLine)
-    foreach ($required in @('Graphics Options', 'GotoScreen("OptionsGraphics")', 'CancelScreen', 'ReturnFromScreen', 'Not active', 'GraphicsRow15._visible = false;', 'this.AddItem(GraphicsRow14,12,0,-1,-1);')) { Assert-ContainsOrdinal -Text $allScriptText -Token $required -Context 'graphics shell screen script' }
+    $scriptsRoot = Join-Path $exportRoot 'scripts'
+    $scripts = @(Get-ChildItem -LiteralPath $scriptsRoot -Recurse -Filter *.as -File)
+    $screenDirectories = @(Get-ChildItem -LiteralPath $scriptsRoot -Recurse -Directory | Where-Object { $_.Name -eq 'DefineSprite_600_ScreenOptionsGraphics' })
+    if ($screenDirectories.Count -ne 1) { throw "Expected exactly one DefineSprite_600_ScreenOptionsGraphics directory, found $($screenDirectories.Count)." }
+    $screenDirectory = $screenDirectories[0]
+    $screenScriptPath = Join-Path $screenDirectory.FullName 'frame_1\DoAction.as'
+    if (-not (Test-Path -LiteralPath $screenScriptPath)) { throw 'Known Options Graphics screen script was not exported.' }
+    $screenText = Get-Content -LiteralPath $screenScriptPath -Raw
+    $menuScriptPath = Join-Path $scriptsRoot 'DefineSprite_333_ScreenOptionsMenu\frame_1\PlaceObject2_117_GenericButton_37\CLIPACTIONRECORD onClipEvent(load).as'
+    if (-not (Test-Path -LiteralPath $menuScriptPath)) { throw 'Known Options menu script was not exported.' }
+    $menuText = Get-Content -LiteralPath $menuScriptPath -Raw
+    Assert-ContainsOrdinal $menuText 'GotoScreen("OptionsGraphics")' 'Options menu script'
+    Assert-ContainsOrdinal $menuText 'Graphics Options' 'Options menu script'
+    foreach ($required in @('Graphics Options', 'CancelScreen', 'ReturnFromScreen', 'FE_SetActiveScreenName","Graphics Options', 'GraphicsRow15._visible = false;', 'this.AddItem(GraphicsRow14,12,0,-1,-1);')) { Assert-ContainsOrdinal $screenText $required 'Options Graphics screen script' }
+    Assert-RowShellContract -ScreenDirectory $screenDirectory.FullName
     foreach ($forbidden in @('GraphicsController', 'ExitPrompt', 'Helen_', 'ApplyChanges', 'Unsaved graphics changes', 'Some changes require a restart')) { Assert-NotContainsOrdinal -Text $screenText -Token $forbidden -Context 'graphics shell screen script' }
-    $rowsWithNotActive = 0
-    foreach ($script in $screenScripts) {
-        $text = Get-Content -LiteralPath $script.FullName -Raw
-        if ($text.IndexOf('this.Names = new Array("Not active");', [StringComparison]::Ordinal) -ge 0) { $rowsWithNotActive++ }
-        Assert-NotContainsOrdinal -Text $text -Token 'GraphicsController' -Context $script.Name
-        Assert-NotContainsOrdinal -Text $text -Token 'ExitPrompt' -Context $script.Name
-    }
-    if ($rowsWithNotActive -ne 14) { throw "Expected 14 fixed Not active rows, found $rowsWithNotActive." }
     foreach ($script in $scripts) { foreach ($forbidden in @('Helen_', 'ApplyChanges', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft')) { Assert-NotContainsOrdinal -Text (Get-Content -LiteralPath $script.FullName -Raw) -Token $forbidden -Context $script.Name } }
 }
 finally {
