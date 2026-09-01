@@ -254,6 +254,8 @@ internal static class GraphicsOptionsAssetBuilder
     /// <param name="paths">The resolved shell build paths.</param>
     private static void ValidateShellInputs(GraphicsOptionsShellBuildPaths paths)
     {
+        ValidateShellOutputPaths(paths);
+
         string[] requiredPaths =
         {
             paths.FrontendXmlPath,
@@ -269,6 +271,103 @@ internal static class GraphicsOptionsAssetBuilder
                 throw new InvalidOperationException($"Required path not found: {requiredPath}");
             }
         }
+    }
+
+    /// <summary>
+    /// Rejects shell output locations that could recursively delete the workspace or an extracted input.
+    /// The check runs before output preparation and therefore before any recursive deletion. A shell
+    /// temporary directory is also required to be a strict descendant of the validated output directory.
+    /// </summary>
+    /// <param name="paths">The resolved shell build paths to validate.</param>
+    private static void ValidateShellOutputPaths(GraphicsOptionsShellBuildPaths paths)
+    {
+        string outputDirectory = Path.GetFullPath(paths.OutputDirectory);
+        string rootPath = Path.GetFullPath(paths.RootPath);
+
+        if (IsPathEqualOrAncestor(outputDirectory, rootPath))
+        {
+            throw new InvalidOperationException(
+                $"Unsafe shell output directory '{outputDirectory}' conflicts with protected path '{rootPath}'.");
+        }
+
+        string[] requiredInputPaths =
+        {
+            paths.FrontendXmlPath,
+            paths.FrontendSourceGfxPath,
+            paths.FrontendScriptsPath,
+            paths.FfdecPath
+        };
+
+        foreach (string requiredInputPath in requiredInputPaths)
+        {
+            string protectedPath = Path.GetFullPath(requiredInputPath);
+            if (IsPathEqualOrAncestor(outputDirectory, protectedPath))
+            {
+                throw new InvalidOperationException(
+                    $"Unsafe shell output directory '{outputDirectory}' conflicts with protected path '{protectedPath}'.");
+            }
+
+            if (IsPathStrictlyUnder(protectedPath, outputDirectory))
+            {
+                throw new InvalidOperationException(
+                    $"Unsafe shell output directory '{outputDirectory}' is inside protected path '{protectedPath}'.");
+            }
+        }
+
+        string tempDirectory = Path.GetFullPath(paths.TempDirectory);
+        if (!IsPathStrictlyUnder(outputDirectory, tempDirectory))
+        {
+            throw new InvalidOperationException(
+                $"Unsafe shell output directory '{outputDirectory}' requires temporary directory '{tempDirectory}' to be strictly beneath it.");
+        }
+    }
+
+    /// <summary>
+    /// Determines whether a candidate path is equal to or an ancestor of a protected path.
+    /// Canonical trailing separators prevent a name such as <c>build</c> from matching a sibling
+    /// such as <c>builder</c>, while ordinal case-insensitive comparison matches Windows path rules.
+    /// </summary>
+    /// <param name="candidatePath">The candidate output or parent path.</param>
+    /// <param name="protectedPath">The path that must remain protected.</param>
+    /// <returns><see langword="true" /> when the candidate equals or contains the protected path.</returns>
+    private static bool IsPathEqualOrAncestor(string candidatePath, string protectedPath)
+    {
+        string candidateCanonical = EnsureTrailingDirectorySeparator(candidatePath);
+        string protectedCanonical = EnsureTrailingDirectorySeparator(protectedPath);
+        return protectedCanonical.StartsWith(candidateCanonical, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Determines whether a candidate path is a strict descendant of a parent path.
+    /// Both paths are fully resolved and compared with trailing separators so lexical containment
+    /// cannot confuse similarly prefixed sibling directories.
+    /// </summary>
+    /// <param name="parentPath">The expected containing directory.</param>
+    /// <param name="candidatePath">The path whose containment should be checked.</param>
+    /// <returns><see langword="true" /> when the candidate is strictly below the parent.</returns>
+    private static bool IsPathStrictlyUnder(string parentPath, string candidatePath)
+    {
+        string parentCanonical = EnsureTrailingDirectorySeparator(parentPath);
+        string candidateCanonical = EnsureTrailingDirectorySeparator(candidatePath);
+        return !string.Equals(parentCanonical, candidateCanonical, StringComparison.OrdinalIgnoreCase) &&
+               candidateCanonical.StartsWith(parentCanonical, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Canonicalizes a path and appends one directory separator for safe lexical prefix comparisons.
+    /// Existing trailing slash characters are retained so filesystem roots remain valid paths.
+    /// </summary>
+    /// <param name="path">The path to canonicalize.</param>
+    /// <returns>The fully qualified path ending in a directory separator.</returns>
+    private static string EnsureTrailingDirectorySeparator(string path)
+    {
+        string fullPath = Path.GetFullPath(path);
+        if (fullPath.EndsWith(Path.DirectorySeparatorChar) || fullPath.EndsWith(Path.AltDirectorySeparatorChar))
+        {
+            return fullPath;
+        }
+
+        return fullPath + Path.DirectorySeparatorChar;
     }
 
     /// <summary>

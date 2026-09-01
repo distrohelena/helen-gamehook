@@ -45,6 +45,67 @@ function Assert-SourceTokens {
     }
 }
 
+function Get-CSharpMethodBody {
+    param(
+        [string]$Text,
+        [string]$MethodSignature,
+        [string]$Context
+    )
+
+    $MethodIndex = $Text.IndexOf($MethodSignature, [System.StringComparison]::Ordinal)
+    if ($MethodIndex -lt 0) {
+        throw "$Context is missing method signature: $MethodSignature"
+    }
+
+    $BodyStart = $Text.IndexOf('{', $MethodIndex)
+    if ($BodyStart -lt 0) {
+        throw "$Context method has no body: $MethodSignature"
+    }
+
+    $BraceDepth = 0
+    for ($Index = $BodyStart; $Index -lt $Text.Length; $Index++) {
+        if ($Text[$Index] -eq '{') {
+            $BraceDepth++
+        } elseif ($Text[$Index] -eq '}') {
+            $BraceDepth--
+            if ($BraceDepth -eq 0) {
+                return $Text.Substring($BodyStart + 1, $Index - $BodyStart - 1)
+            }
+        }
+    }
+
+    throw "$Context method has an unterminated body: $MethodSignature"
+}
+
+$ShellForbiddenSourceTokens = @(
+    'BatmanGraphicsIniBootstrapLoader',
+    'GraphicsOptionsScriptTemplates',
+    'GraphicsExitPrompt',
+    'YesNoPrompt',
+    '601',
+    'PatchFrontendScripts'
+)
+
+$ShellMethodChecks = @(
+    @{ Text = $ProgramText; Signature = 'private static int RunBuildMainMenuGraphicsShell(string[] args)'; Context = 'Program shell command' },
+    @{ Text = $AssetBuilderText; Signature = 'public static void BuildShell(GraphicsOptionsShellBuildPaths paths)'; Context = 'AssetBuilder BuildShell' },
+    @{ Text = $AssetBuilderText; Signature = 'private static void ValidateShellInputs(GraphicsOptionsShellBuildPaths paths)'; Context = 'AssetBuilder ValidateShellInputs' },
+    @{ Text = $AssetBuilderText; Signature = 'private static void ValidateShellOutputPaths(GraphicsOptionsShellBuildPaths paths)'; Context = 'AssetBuilder ValidateShellOutputPaths' },
+    @{ Text = $AssetBuilderText; Signature = 'private static void PatchFrontendShellScripts(string scriptsRoot)'; Context = 'AssetBuilder PatchFrontendShellScripts' },
+    @{ Text = $AssetBuilderText; Signature = 'private static void WriteGraphicsShellRowClipActions(string scriptsRoot)'; Context = 'AssetBuilder WriteGraphicsShellRowClipActions' },
+    @{ Text = $XmlPatcherText; Signature = 'public static void PatchShell(string inputXmlPath, string outputXmlPath)'; Context = 'XmlPatcher PatchShell' },
+    @{ Text = $XmlPatcherText; Signature = 'private static void AppendGraphicsShellSpriteAndExport(XmlElement tags, XmlElement optionsGamePcSprite)'; Context = 'XmlPatcher AppendGraphicsShellSpriteAndExport' }
+)
+
+foreach ($ShellMethodCheck in $ShellMethodChecks) {
+    $MethodBody = Get-CSharpMethodBody -Text $ShellMethodCheck.Text -MethodSignature $ShellMethodCheck.Signature -Context $ShellMethodCheck.Context
+    foreach ($ForbiddenSourceToken in $ShellForbiddenSourceTokens) {
+        if ($MethodBody.IndexOf($ForbiddenSourceToken, [System.StringComparison]::Ordinal) -ge 0) {
+            throw "$($ShellMethodCheck.Context) references forbidden token in shell-specific method body: $ForbiddenSourceToken"
+        }
+    }
+}
+
 Assert-SourceTokens -Text $ProgramText -Context 'Program.cs' -Tokens @(
     '"build-main-menu-graphics-shell" => RunBuildMainMenuGraphicsShell(tail)',
     'GraphicsOptionsShellBuildPaths.FromRoot(root, ffdecPath, outputDirectory)',
@@ -176,6 +237,10 @@ BindingFlags staticFlags = BindingFlags.Static | BindingFlags.Public | BindingFl
 FieldInfo rowClipActionsField = templateType.GetField("RowClipActions", staticFlags)
     ?? throw new MissingFieldException(templateType.FullName, "RowClipActions");
 string[] rowClipActions = (string[])rowClipActionsField.GetValue(null)!;
+Type builderType = assembly.GetType("SubtitleSizeModBuilder.GraphicsOptionsAssetBuilder", throwOnError: true)!;
+FieldInfo graphicsRowDepthsField = builderType.GetField("GraphicsRowDepths", staticFlags)
+    ?? throw new MissingFieldException(builderType.FullName, "GraphicsRowDepths");
+int[] graphicsRowDepths = (int[])graphicsRowDepthsField.GetValue(null)!;
 MethodInfo escapeMethod = templateType.GetMethod(
     "EscapeActionScriptString",
     staticFlags,
@@ -196,9 +261,9 @@ catch (TargetInvocationException exception)
     nulInnerException = exception.InnerException?.GetType().FullName;
 }
 
-Console.WriteLine(JsonSerializer.Serialize(new ReflectionContract(rowClipActions, escapedValue, nulInnerException)));
+Console.WriteLine(JsonSerializer.Serialize(new ReflectionContract(rowClipActions, graphicsRowDepths, escapedValue, nulInnerException)));
 
-public sealed record ReflectionContract(string[] RowClipActions, string EscapedValue, string? NulInnerException);
+public sealed record ReflectionContract(string[] RowClipActions, int[] GraphicsRowDepths, string EscapedValue, string? NulInnerException);
 '@
 
 function Get-ReflectionContract {
@@ -221,6 +286,13 @@ function Get-ReflectionContract {
         }
 
         $RowClipActions = @($RowClipActionsField.GetValue($null))
+        $BuilderType = $Assembly.GetType('SubtitleSizeModBuilder.GraphicsOptionsAssetBuilder', $true)
+        $GraphicsRowDepthsField = $BuilderType.GetField('GraphicsRowDepths', $StaticFlags)
+        if ($null -eq $GraphicsRowDepthsField) {
+            throw 'Graphics-options asset builder type is missing GraphicsRowDepths.'
+        }
+
+        $GraphicsRowDepths = @($GraphicsRowDepthsField.GetValue($null))
         $EscapeInput = 'slash\quote"' + [char]13 + [char]10 + [char]9
         $EscapedValue = [string]$EscapeMethod.Invoke($null, @($EscapeInput))
         $NulInnerException = $null
@@ -232,6 +304,7 @@ function Get-ReflectionContract {
 
         return [pscustomobject]@{
             RowClipActions = $RowClipActions
+            GraphicsRowDepths = $GraphicsRowDepths
             EscapedValue = $EscapedValue
             NulInnerException = $NulInnerException
         }
@@ -279,6 +352,162 @@ $ReflectionContract = Get-ReflectionContract -AssemblyPath $DebugAssemblyPath
 $RowClipActions = @($ReflectionContract.RowClipActions)
 if ($RowClipActions.Count -ne 15) {
     throw "Expected exactly 15 graphics row clip actions, found $($RowClipActions.Count)."
+}
+
+$ExpectedGraphicsRowDepths = @(141, 133, 125, 117, 109, 101, 93, 85, 77, 69, 61, 53, 45, 37, 29)
+$GraphicsRowDepths = @($ReflectionContract.GraphicsRowDepths)
+if ($GraphicsRowDepths.Count -ne $ExpectedGraphicsRowDepths.Count) {
+    throw "Expected exactly $($ExpectedGraphicsRowDepths.Count) graphics row depths, found $($GraphicsRowDepths.Count)."
+}
+
+for ($DepthIndex = 0; $DepthIndex -lt $ExpectedGraphicsRowDepths.Count; $DepthIndex++) {
+    if ([int]$GraphicsRowDepths[$DepthIndex] -ne $ExpectedGraphicsRowDepths[$DepthIndex]) {
+        throw "Graphics row depth $($DepthIndex + 1) was $($GraphicsRowDepths[$DepthIndex]), expected $($ExpectedGraphicsRowDepths[$DepthIndex])."
+    }
+}
+
+$ValidationBridgeSource = @'
+using System.Reflection;
+using System.Text.Json;
+
+if (args.Length != 5)
+{
+    throw new ArgumentException("Expected assembly, builder root, repository root, generated output, and temp output paths.");
+}
+
+Assembly assembly = Assembly.LoadFrom(args[0]);
+Type pathsType = assembly.GetType("SubtitleSizeModBuilder.GraphicsOptionsShellBuildPaths", throwOnError: true)!;
+Type builderType = assembly.GetType("SubtitleSizeModBuilder.GraphicsOptionsAssetBuilder", throwOnError: true)!;
+BindingFlags staticFlags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+MethodInfo validateMethod = builderType.GetMethod("ValidateShellInputs", staticFlags)
+    ?? throw new MissingMethodException(builderType.FullName, "ValidateShellInputs");
+
+ValidationResult[] results =
+[
+    RunValidation("repository-root", args[1], args[2], expectValid: false),
+    RunValidation("frontend-scripts", args[1], Path.Combine(args[1], "extracted", "frontend", "mainv2", "frontend-mainv2-export", "scripts"), expectValid: false),
+    RunValidation("generated-child", args[1], args[3], expectValid: true),
+    RunValidation("unrelated-temp", args[1], args[4], expectValid: true)
+];
+
+Console.WriteLine(JsonSerializer.Serialize(results));
+
+ValidationResult RunValidation(string name, string root, string outputDirectory, bool expectValid)
+{
+    object shellPaths = CreatePaths(root, outputDirectory);
+    try
+    {
+        _ = validateMethod.Invoke(null, new[] { shellPaths });
+        return new ValidationResult(name, expectValid, false, null);
+    }
+    catch (TargetInvocationException exception)
+    {
+        string message = exception.InnerException?.Message ?? exception.Message;
+        return new ValidationResult(name, !expectValid, true, message);
+    }
+}
+
+object CreatePaths(string root, string outputDirectory)
+{
+    string frontendRoot = Path.Combine(root, "extracted", "frontend", "mainv2");
+    string tempDirectory = Path.Combine(outputDirectory, "_build");
+
+    return Activator.CreateInstance(pathsType, new object?[]
+    {
+        root,
+        outputDirectory,
+        tempDirectory,
+        Path.Combine(frontendRoot, "frontend-mainv2.xml"),
+        Path.Combine(frontendRoot, "frontend-mainv2.gfx"),
+        Path.Combine(frontendRoot, "frontend-mainv2-export", "scripts"),
+        Path.Combine(root, "extracted", "ffdec", "ffdec-cli.exe"),
+        Path.Combine(tempDirectory, "frontend-scripts"),
+        Path.Combine(tempDirectory, "MainV2-graphics-options-shell.xml"),
+        Path.Combine(tempDirectory, "MainV2-graphics-options-shell-structural.gfx"),
+        Path.Combine(outputDirectory, "MainV2-graphics-options.gfx")
+    })!;
+}
+
+public sealed record ValidationResult(string Name, bool ValidationPassed, bool Rejected, string? Error);
+'@
+
+function Get-ShellOutputValidationContract {
+    param(
+        [string]$AssemblyPath,
+        [string]$BuilderRootPath,
+        [string]$RepositoryRootPath,
+        [string]$GeneratedOutputPath,
+        [string]$TempOutputPath
+    )
+
+    $BridgeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("BatmanGraphicsShellValidation-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $BridgeRoot -Force | Out-Null
+    try {
+        $BridgeProjectPath = Join-Path $BridgeRoot 'ValidationBridge.csproj'
+        $BridgeSourcePath = Join-Path $BridgeRoot 'Program.cs'
+        $BridgeProject = @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+'@
+        Set-Content -LiteralPath $BridgeProjectPath -Value $BridgeProject -Encoding UTF8
+        Set-Content -LiteralPath $BridgeSourcePath -Value $ValidationBridgeSource -Encoding UTF8
+
+        $BridgeBuildOutput = & dotnet build $BridgeProjectPath -c Debug --nologo 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Validation bridge failed to build:`n$($BridgeBuildOutput -join [Environment]::NewLine)"
+        }
+
+        $BridgeAssemblyPath = Join-Path $BridgeRoot 'bin\Debug\net8.0\ValidationBridge.dll'
+        $ReflectionOutput = & dotnet $BridgeAssemblyPath $AssemblyPath $BuilderRootPath $RepositoryRootPath $GeneratedOutputPath $TempOutputPath 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Validation bridge failed:`n$($ReflectionOutput -join [Environment]::NewLine)"
+        }
+
+        $ReflectionJson = [string]($ReflectionOutput | Select-Object -Last 1)
+        return ($ReflectionJson | ConvertFrom-Json)
+    } finally {
+        if (Test-Path -LiteralPath $BridgeRoot) {
+            Remove-Item -LiteralPath $BridgeRoot -Recurse -Force
+        }
+    }
+}
+
+$BuilderRootPath = (Resolve-Path (Join-Path $BatmanRoot 'builder')).Path
+$RepositoryRootPath = (Resolve-Path (Join-Path $BatmanRoot '..\..')).Path
+$GeneratedOutputPath = Join-Path $BuilderRootPath 'generated\graphics-options-shell-contract-safety'
+$TempOutputPath = Join-Path ([System.IO.Path]::GetTempPath()) ("BatmanGraphicsShellOutput-" + [guid]::NewGuid().ToString('N'))
+$ValidationContract = @(Get-ShellOutputValidationContract `
+    -AssemblyPath $DebugAssemblyPath `
+    -BuilderRootPath $BuilderRootPath `
+    -RepositoryRootPath $RepositoryRootPath `
+    -GeneratedOutputPath $GeneratedOutputPath `
+    -TempOutputPath $TempOutputPath)
+
+$RepositoryRootValidation = $ValidationContract | Where-Object Name -eq 'repository-root'
+if (-not $RepositoryRootValidation.ValidationPassed -or -not $RepositoryRootValidation.Rejected) {
+    throw "Repository root output safety validation did not reject the unsafe output: $($RepositoryRootValidation.Error)"
+}
+Assert-ContainsOrdinal -Text ([string]$RepositoryRootValidation.Error) -Token 'Unsafe shell output directory' -Context 'Repository root output safety validation'
+Assert-ContainsOrdinal -Text ([string]$RepositoryRootValidation.Error) -Token $BuilderRootPath -Context 'Repository root output safety validation'
+
+$FrontendScriptsValidation = $ValidationContract | Where-Object Name -eq 'frontend-scripts'
+if (-not $FrontendScriptsValidation.ValidationPassed -or -not $FrontendScriptsValidation.Rejected) {
+    throw "Frontend scripts output safety validation did not reject the unsafe output: $($FrontendScriptsValidation.Error)"
+}
+Assert-ContainsOrdinal -Text ([string]$FrontendScriptsValidation.Error) -Token 'Unsafe shell output directory' -Context 'Frontend scripts output safety validation'
+Assert-ContainsOrdinal -Text ([string]$FrontendScriptsValidation.Error) -Token (Join-Path $BuilderRootPath 'extracted\frontend\mainv2\frontend-mainv2-export\scripts') -Context 'Frontend scripts output safety validation'
+
+foreach ($AcceptedValidationName in @('generated-child', 'unrelated-temp')) {
+    $AcceptedValidation = $ValidationContract | Where-Object Name -eq $AcceptedValidationName
+    if (-not $AcceptedValidation.ValidationPassed -or $AcceptedValidation.Rejected) {
+        throw "$AcceptedValidationName output safety validation rejected a safe output: $($AcceptedValidation.Error)"
+    }
 }
 
 $ExpectedRows = @(
