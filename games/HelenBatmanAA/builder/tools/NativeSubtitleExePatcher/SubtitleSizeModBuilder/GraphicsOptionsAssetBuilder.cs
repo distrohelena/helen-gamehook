@@ -72,13 +72,42 @@ internal static class GraphicsOptionsAssetBuilder
     }
 
     /// <summary>
+    /// Builds the graphics-options shell frontend using fixed placeholder rows and no user-INI bootstrap.
+    /// The shell stages the extracted script tree, replaces only the screen and row scripts needed by
+    /// the stock navigation path, patches sprite 600 into the frontend XML, and imports that result.
+    /// </summary>
+    /// <param name="paths">The resolved shell build paths.</param>
+    public static void BuildShell(GraphicsOptionsShellBuildPaths paths)
+    {
+        ValidateShellInputs(paths);
+        PrepareOutputDirectories(paths.OutputDirectory, paths.TempDirectory);
+
+        CopyDirectory(paths.FrontendScriptsPath, paths.FrontendWorkingScriptsPath);
+        PatchFrontendShellScripts(paths.FrontendWorkingScriptsPath);
+        GraphicsOptionsXmlPatcher.PatchShell(paths.FrontendXmlPath, paths.FrontendPatchedXmlPath);
+
+        RunProcess(paths.FfdecPath, "-xml2swf", paths.FrontendPatchedXmlPath, paths.FrontendStructuralGfxPath);
+        RunProcess(paths.FfdecPath, "-importScript", paths.FrontendStructuralGfxPath, paths.FrontendOutputGfxPath, paths.FrontendWorkingScriptsPath);
+    }
+
+    /// <summary>
     /// Recreates output directories so each build starts from a clean state.
     /// </summary>
     /// <param name="paths">The resolved graphics build paths.</param>
     private static void PrepareOutputDirectories(GraphicsOptionsBuildPaths paths)
     {
-        RecreateDirectory(paths.OutputDirectory);
-        Directory.CreateDirectory(paths.TempDirectory);
+        PrepareOutputDirectories(paths.OutputDirectory, paths.TempDirectory);
+    }
+
+    /// <summary>
+    /// Recreates a generated output directory and its temporary staging directory before a build.
+    /// </summary>
+    /// <param name="outputDirectory">The generated output directory to recreate.</param>
+    /// <param name="tempDirectory">The temporary staging directory to create below the output.</param>
+    private static void PrepareOutputDirectories(string outputDirectory, string tempDirectory)
+    {
+        RecreateDirectory(outputDirectory);
+        Directory.CreateDirectory(tempDirectory);
     }
 
     /// <summary>
@@ -155,6 +184,46 @@ internal static class GraphicsOptionsAssetBuilder
     }
 
     /// <summary>
+    /// Writes only the stock-facing graphics shell scripts into a staged frontend script tree.
+    /// The duplicate ScreenOptionsAudio_2 registration is retained because the current FFDec
+    /// import pipeline resolves the cloned screen class through both registration paths.
+    /// </summary>
+    /// <param name="scriptsRoot">The staged writable frontend script root.</param>
+    private static void PatchFrontendShellScripts(string scriptsRoot)
+    {
+        WriteAllText(
+            Path.Combine(scriptsRoot, "ScreenOptionsGraphics.as"),
+            GraphicsOptionsShellScriptTemplates.ScreenRegistration);
+
+        WriteAllText(
+            Path.Combine(scriptsRoot, "ScreenOptionsAudio_2.as"),
+            GraphicsOptionsShellScriptTemplates.ScreenRegistration);
+
+        WriteAllText(
+            Path.Combine(scriptsRoot, "DefineSprite_333_ScreenOptionsMenu", "frame_1", "DoAction_2.as"),
+            GraphicsOptionsShellScriptTemplates.OptionsMenuFrame1);
+
+        WriteAllText(
+            Path.Combine(
+                scriptsRoot,
+                "DefineSprite_333_ScreenOptionsMenu",
+                "frame_1",
+                "PlaceObject2_117_GenericButton_37",
+                "CLIPACTIONRECORD onClipEvent(load).as"),
+            GraphicsOptionsShellScriptTemplates.OptionsMenuGraphicsButtonClipAction);
+
+        WriteAllText(
+            Path.Combine(scriptsRoot, "DefineSprite_600_ScreenOptionsGraphics", "frame_1", "DoAction.as"),
+            GraphicsOptionsShellScriptTemplates.ScreenFrame1);
+
+        WriteAllText(
+            Path.Combine(scriptsRoot, "DefineSprite_600_ScreenOptionsGraphics", "frame_15", "DoAction.as"),
+            GraphicsOptionsShellScriptTemplates.ScreenFrame15);
+
+        WriteGraphicsShellRowClipActions(scriptsRoot);
+    }
+
+    /// <summary>
     /// Validates required files and directories before invoking FFDec.
     /// </summary>
     /// <param name="paths">The resolved graphics build paths.</param>
@@ -167,6 +236,30 @@ internal static class GraphicsOptionsAssetBuilder
             paths.FrontendScriptsPath,
             paths.FfdecPath,
             paths.BatmanUserIniPath
+        };
+
+        foreach (string requiredPath in requiredPaths)
+        {
+            if (!File.Exists(requiredPath) && !Directory.Exists(requiredPath))
+            {
+                throw new InvalidOperationException($"Required path not found: {requiredPath}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Validates the XML, source GFX, script tree, and FFDec inputs required by the shell build.
+    /// Unlike the full graphics build, this validation intentionally does not require a user INI file.
+    /// </summary>
+    /// <param name="paths">The resolved shell build paths.</param>
+    private static void ValidateShellInputs(GraphicsOptionsShellBuildPaths paths)
+    {
+        string[] requiredPaths =
+        {
+            paths.FrontendXmlPath,
+            paths.FrontendSourceGfxPath,
+            paths.FrontendScriptsPath,
+            paths.FfdecPath
         };
 
         foreach (string requiredPath in requiredPaths)
@@ -193,6 +286,35 @@ internal static class GraphicsOptionsAssetBuilder
         {
             int depth = GraphicsRowDepths[rowIndex];
             string clipAction = GraphicsRowClipActions[rowIndex];
+
+            WriteAllText(
+                Path.Combine(
+                    scriptsRoot,
+                    "DefineSprite_600_ScreenOptionsGraphics",
+                    "frame_1",
+                    $"PlaceObject2_290_List_Template_{depth}",
+                    "CLIPACTIONRECORD onClipEvent(load).as"),
+                clipAction);
+        }
+    }
+
+    /// <summary>
+    /// Writes the fifteen fixed shell row clip actions in one-to-one order with the graphics row depths.
+    /// A mismatch is rejected before any row is written so depth/action drift cannot produce a malformed shell.
+    /// </summary>
+    /// <param name="scriptsRoot">The staged writable frontend script root.</param>
+    private static void WriteGraphicsShellRowClipActions(string scriptsRoot)
+    {
+        string[] rowClipActions = GraphicsOptionsShellScriptTemplates.RowClipActions;
+        if (GraphicsRowDepths.Length != rowClipActions.Length)
+        {
+            throw new InvalidOperationException("Graphics shell row depth/action arrays must be aligned.");
+        }
+
+        for (int rowIndex = 0; rowIndex < GraphicsRowDepths.Length; rowIndex++)
+        {
+            int depth = GraphicsRowDepths[rowIndex];
+            string clipAction = rowClipActions[rowIndex];
 
             WriteAllText(
                 Path.Combine(

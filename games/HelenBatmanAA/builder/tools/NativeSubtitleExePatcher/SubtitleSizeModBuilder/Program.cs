@@ -28,6 +28,7 @@ internal static class Program
                 "build-assets" => RunBuildAssets(tail),
                 "build-main-menu-audio" => RunBuildMainMenuAudio(tail),
                 "build-main-menu-graphics" => RunBuildMainMenuGraphics(tail),
+                "build-main-menu-graphics-shell" => RunBuildMainMenuGraphicsShell(tail),
                 "build-main-menu-version-label" => RunBuildMainMenuVersionLabel(tail),
                 "build-pause-runtime-scale" => RunBuildPauseRuntimeScale(tail),
                 "build-hud-font-boost" => RunBuildHudFontBoost(tail),
@@ -146,6 +147,26 @@ internal static class Program
     }
 
     /// <summary>
+    /// Builds the frontend MainV2 graphics-options shell without reading a user INI file or
+    /// emitting the interactive settings and exit-prompt scripts used by the full prototype build.
+    /// </summary>
+    /// <param name="args">The command arguments, limited to root, output directory, and FFDec.</param>
+    /// <returns>The process exit code.</returns>
+    private static int RunBuildMainMenuGraphicsShell(string[] args)
+    {
+        var options = new ArgumentReader(args);
+        string root = Path.GetFullPath(options.RequireValue("--root"));
+        string outputDirectory = Path.GetFullPath(options.GetValue("--output-dir") ?? Path.Combine(root, "generated", "main-menu-graphics-shell"));
+        string ffdecPath = Path.GetFullPath(options.GetValue("--ffdec") ?? Path.Combine(root, "extracted", "ffdec", "ffdec-cli.exe"));
+        options.ThrowIfAnyUnknown();
+
+        GraphicsOptionsShellBuildPaths paths = GraphicsOptionsShellBuildPaths.FromRoot(root, ffdecPath, outputDirectory);
+        GraphicsOptionsAssetBuilder.BuildShell(paths);
+        Console.WriteLine($"Built shell frontend: {paths.FrontendOutputGfxPath}");
+        return 0;
+    }
+
+    /// <summary>
     /// Builds the pause runtime-scale assets.
     /// </summary>
     /// <param name="args">The command arguments.</param>
@@ -255,6 +276,7 @@ internal static class Program
         Console.WriteLine("  build-assets --root <batman-builder-root> [--output-dir <generated\\subtitle-size>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>] [--build-version <label>]");
         Console.WriteLine("  build-main-menu-audio --root <batman-builder-root> [--output-dir <generated\\main-menu-audio>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>] [--build-version <label>]");
         Console.WriteLine("  build-main-menu-graphics --root <batman-builder-root> [--output-dir <generated\\main-menu-graphics>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>] [--ini <Batman user BmEngine.ini>]");
+        Console.WriteLine("  build-main-menu-graphics-shell --root <batman-builder-root> [--output-dir <generated\\main-menu-graphics-shell>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>]");
         Console.WriteLine("  build-main-menu-version-label --root <batman-builder-root> [--output-dir <generated\\main-menu-version-label>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>] [--build-version <label>]");
         Console.WriteLine("  build-pause-runtime-scale --root <batman-builder-root> [--output-dir <generated\\pause-runtime-scale>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>]");
         Console.WriteLine("  build-hud-font-boost --root <batman-builder-root> [--output-dir <generated\\hud-font-boost>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>]");

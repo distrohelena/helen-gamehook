@@ -311,6 +311,49 @@ internal static class GraphicsOptionsXmlPatcher
     }
 
     /// <summary>
+    /// Patches a frontend XML file for the stock-facing graphics-options shell.
+    /// This variant reserves and remaps only sprite id 600, rebalances the options menu,
+    /// and appends the cloned graphics screen; it intentionally does not create the full
+    /// prototype's graphics exit prompt or any prompt registration.
+    /// </summary>
+    /// <param name="inputXmlPath">Path to the extracted MainV2 XML source.</param>
+    /// <param name="outputXmlPath">Path that receives the patched shell MainV2 XML.</param>
+    public static void PatchShell(string inputXmlPath, string outputXmlPath)
+    {
+        var document = new XmlDocument
+        {
+            PreserveWhitespace = false
+        };
+        document.Load(inputXmlPath);
+
+        XmlElement tags = GetSingleElement(document.DocumentElement, "tags");
+        XmlElement optionsMenuSprite = FindSpriteById(tags, ScreenOptionsMenuSpriteId);
+        XmlElement optionsGamePcSprite = FindSpriteById(tags, ScreenOptionsGamePcSpriteId);
+
+        HashSet<int> reservedIds =
+        [
+            ScreenOptionsGraphicsSpriteId
+        ];
+
+        RemapExistingCharacterId(tags, ScreenOptionsGraphicsSpriteId, reservedIds);
+
+        PatchOptionsMenu(optionsMenuSprite);
+        AppendGraphicsShellSpriteAndExport(tags, optionsGamePcSprite);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(outputXmlPath)!);
+
+        var settings = new XmlWriterSettings
+        {
+            Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            Indent = true,
+            NewLineHandling = NewLineHandling.Entitize
+        };
+
+        using var writer = XmlWriter.Create(outputXmlPath, settings);
+        document.Save(writer);
+    }
+
+    /// <summary>
     /// Rebalances the options-menu stack to five rows by cloning the Game button to depth 39 and converting depth 37 into Graphics.
     /// </summary>
     /// <param name="optionsMenuSprite">The options-menu sprite node.</param>
@@ -489,6 +532,23 @@ internal static class GraphicsOptionsXmlPatcher
         tags.AppendChild(CreateExportAssetsTag(tags, GraphicsExitPromptSpriteId, "GraphicsExitPrompt"));
         tags.AppendChild(CloneDoInitActionTagForSprite(tags, ScreenOptionsGamePcSpriteId, ScreenOptionsGraphicsSpriteId));
         tags.AppendChild(CloneDoInitActionTagForSprite(tags, YesNoPromptSpriteId, GraphicsExitPromptSpriteId));
+    }
+
+    /// <summary>
+    /// Appends the shell's cloned graphics sprite, stock-facing export, and matching Game Options
+    /// initialization action. The source export name remains <c>ScreenOptionsGraphics</c> so stock
+    /// frontend routing can construct the shell without introducing a prompt or alternate symbol.
+    /// </summary>
+    /// <param name="tags">The frontend root tags node.</param>
+    /// <param name="optionsGamePcSprite">The source Game Options sprite used for cloning.</param>
+    private static void AppendGraphicsShellSpriteAndExport(XmlElement tags, XmlElement optionsGamePcSprite)
+    {
+        XmlElement graphicsSprite = CloneSpriteWithNewId(optionsGamePcSprite, ScreenOptionsGraphicsSpriteId);
+        PatchGraphicsScreenSprite(graphicsSprite);
+
+        tags.AppendChild(graphicsSprite);
+        tags.AppendChild(CreateExportAssetsTag(tags, ScreenOptionsGraphicsSpriteId, "ScreenOptionsGraphics"));
+        tags.AppendChild(CloneDoInitActionTagForSprite(tags, ScreenOptionsGamePcSpriteId, ScreenOptionsGraphicsSpriteId));
     }
 
     /// <summary>

@@ -17,6 +17,52 @@ if (-not (Test-Path -LiteralPath $TemplatePath -PathType Leaf)) {
 
 $TemplateText = Get-Content -LiteralPath $TemplatePath -Raw
 
+$BuilderSourceRoot = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder'
+$ProgramPath = Join-Path $BuilderSourceRoot 'Program.cs'
+$AssetBuilderPath = Join-Path $BuilderSourceRoot 'GraphicsOptionsAssetBuilder.cs'
+$XmlPatcherPath = Join-Path $BuilderSourceRoot 'GraphicsOptionsXmlPatcher.cs'
+foreach ($SourcePath in @($ProgramPath, $AssetBuilderPath, $XmlPatcherPath)) {
+    if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
+        throw "Batman graphics-options shell source file was not found: $SourcePath"
+    }
+}
+
+$ProgramText = Get-Content -LiteralPath $ProgramPath -Raw
+$AssetBuilderText = Get-Content -LiteralPath $AssetBuilderPath -Raw
+$XmlPatcherText = Get-Content -LiteralPath $XmlPatcherPath -Raw
+
+function Assert-SourceTokens {
+    param(
+        [string]$Text,
+        [string[]]$Tokens,
+        [string]$Context
+    )
+
+    foreach ($Token in $Tokens) {
+        if ($Text.IndexOf($Token, [System.StringComparison]::Ordinal) -lt 0) {
+            throw "$Context is missing required token: $Token"
+        }
+    }
+}
+
+Assert-SourceTokens -Text $ProgramText -Context 'Program.cs' -Tokens @(
+    '"build-main-menu-graphics-shell" => RunBuildMainMenuGraphicsShell(tail)',
+    'GraphicsOptionsShellBuildPaths.FromRoot(root, ffdecPath, outputDirectory)',
+    'GraphicsOptionsAssetBuilder.BuildShell(paths)'
+)
+Assert-SourceTokens -Text $AssetBuilderText -Context 'GraphicsOptionsAssetBuilder.cs' -Tokens @(
+    'public static void BuildShell(GraphicsOptionsShellBuildPaths paths)',
+    'PatchFrontendShellScripts(paths.FrontendWorkingScriptsPath)',
+    'GraphicsOptionsXmlPatcher.PatchShell(paths.FrontendXmlPath, paths.FrontendPatchedXmlPath)'
+)
+Assert-SourceTokens -Text $XmlPatcherText -Context 'GraphicsOptionsXmlPatcher.cs' -Tokens @(
+    'public static void PatchShell(string inputXmlPath, string outputXmlPath)',
+    'AppendGraphicsShellSpriteAndExport(tags, optionsGamePcSprite)'
+)
+Assert-SourceTokens -Text $AssetBuilderText -Context 'GraphicsOptionsAssetBuilder.cs' -Tokens @(
+    'GraphicsOptionsShellScriptTemplates.RowClipActions'
+)
+
 $BuilderProjectPath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj'
 $DebugAssemblyPath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\bin\Debug\net8.0\SubtitleSizeModBuilder.dll'
 if (-not (Test-Path -LiteralPath $BuilderProjectPath -PathType Leaf)) {
