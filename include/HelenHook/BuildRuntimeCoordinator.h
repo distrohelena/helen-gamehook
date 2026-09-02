@@ -68,8 +68,9 @@ namespace helen
         /**
          * @brief Applies one mapped observer update through the generic config and command surfaces.
          * @param update Observer update emitted by the live-state scanner.
+         * @return True only when the config update and optional follow-up command both succeed.
          */
-        void HandleObserverUpdate(const MemoryStateObserverUpdate& update);
+        bool HandleObserverUpdate(const MemoryStateObserverUpdate& update);
 
         /** @brief Startup command identifiers that must run once after runtime services are ready. */
         std::vector<std::string> startup_command_ids_;

@@ -152,6 +152,24 @@ namespace
     }
 
     /**
+     * @brief Builds a command definition that always fails before mutating a runtime slot.
+     * @return Deliberately invalid live-write command used to verify coordinator failure propagation.
+     */
+    helen::CommandDefinition CreateFailingObserverCommand()
+    {
+        helen::CommandDefinition command;
+        command.Id = "failObserverCommand";
+        command.Name = "Fail Observer Command";
+
+        helen::CommandStepDefinition step;
+        step.Kind = "set-live-double";
+        step.Target = "missing.slot";
+        step.ValueName = "unresolvedValue";
+        command.Steps.push_back(step);
+        return command;
+    }
+
+    /**
      * @brief Builds the bounded subtitle-size observer used to verify live menu updates.
      * @param scan_start Inclusive scan start address.
      * @param scan_end Exclusive scan end address.
@@ -237,6 +255,100 @@ namespace
             throw std::runtime_error("Failed to write the Batman subtitle INI fixture.");
         }
     }
+
+    /**
+     * @brief Verifies coordinator observer transactions return exact config/command success and failure outcomes.
+     */
+    void RunBuildRuntimeCoordinatorTransactionTests()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for coordinator transaction tests.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 64;
+        ConfigureStateBlock(candidate_address, 4103);
+
+        helen::CommandDispatcher dispatcher;
+        dispatcher.RegisterConfigInt("ui.subtitleSize", 1);
+
+        helen::RuntimeValueStore runtime_values;
+        Expect(runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the coordinator transaction runtime slot.");
+
+        const std::filesystem::path graphics_ini_path = CreateTemporaryBatmanGraphicsIniPath();
+        helen::BatmanGraphicsConfigService graphics_config_service(graphics_ini_path);
+        helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
+        Expect(executor.RegisterCommand(CreateApplySubtitleSizeCommand("applySubtitleSize")), "Failed to register the successful observer command.");
+        Expect(executor.RegisterCommand(CreateFailingObserverCommand()), "Failed to register the failing observer command.");
+
+        try
+        {
+            helen::MemoryStateObserverDefinition config_failure_definition = CreateSubtitleObserver(page_address, page_address + page_size);
+            config_failure_definition.TargetConfigKey = "missing.config";
+            helen::BuildRuntimeCoordinator config_failure_coordinator(
+                {},
+                { config_failure_definition },
+                dispatcher,
+                executor);
+            Expect(!config_failure_coordinator.PollStateObserversOnce(), "Coordinator reported success when observer config update failed.");
+            const std::optional<double> initial_slot_value = runtime_values.TryGetDouble("subtitle.scale");
+            Expect(initial_slot_value.has_value() && std::fabs(*initial_slot_value - 1.5) < 0.001, "Coordinator ran the optional command after observer config update failure.");
+
+            ConfigureStateBlock(candidate_address, 4103);
+            helen::MemoryStateObserverDefinition command_failure_definition = CreateSubtitleObserver(page_address, page_address + page_size);
+            command_failure_definition.CommandId = "failObserverCommand";
+            helen::BuildRuntimeCoordinator command_failure_coordinator(
+                {},
+                { command_failure_definition },
+                dispatcher,
+                executor);
+            Expect(!command_failure_coordinator.PollStateObserversOnce(), "Coordinator reported success when the optional observer command failed.");
+            const std::optional<int> failed_command_config = dispatcher.TryGetInt("ui.subtitleSize");
+            Expect(failed_command_config.has_value() && *failed_command_config == 2, "Coordinator did not retain the successful config update before optional command failure.");
+            const std::optional<double> failed_command_slot_value = runtime_values.TryGetDouble("subtitle.scale");
+            Expect(failed_command_slot_value.has_value() && std::fabs(*failed_command_slot_value - 1.5) < 0.001, "Failed observer command changed the runtime slot unexpectedly.");
+
+            ConfigureStateBlock(candidate_address, 4103);
+            helen::MemoryStateObserverDefinition success_definition = CreateSubtitleObserver(page_address, page_address + page_size);
+            helen::BuildRuntimeCoordinator success_coordinator(
+                {},
+                { success_definition },
+                dispatcher,
+                executor);
+            Expect(success_coordinator.PollStateObserversOnce(), "Coordinator rejected a successful config and optional command update.");
+            const std::optional<double> successful_slot_value = runtime_values.TryGetDouble("subtitle.scale");
+            Expect(successful_slot_value.has_value() && std::fabs(*successful_slot_value - 2.0) < 0.001, "Coordinator did not run the successful optional observer command.");
+
+            ConfigureStateBlock(candidate_address, 4103);
+            helen::MemoryStateObserverDefinition config_only_definition = CreateSubtitleObserver(page_address, page_address + page_size);
+            config_only_definition.CommandId.reset();
+            helen::BuildRuntimeCoordinator config_only_coordinator(
+                {},
+                { config_only_definition },
+                dispatcher,
+                executor);
+            Expect(config_only_coordinator.PollStateObserversOnce(), "Coordinator rejected a successful config-only observer update.");
+            const std::optional<int> config_only_value = dispatcher.TryGetInt("ui.subtitleSize");
+            Expect(config_only_value.has_value() && *config_only_value == 2, "Coordinator did not apply the successful config-only observer update.");
+
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release coordinator transaction allocation.");
+        }
+        catch (...)
+        {
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+    }
 }
 
 /**
@@ -244,6 +356,7 @@ namespace
  */
 void RunBuildRuntimeCoordinatorTests()
 {
+    RunBuildRuntimeCoordinatorTransactionTests();
     SYSTEM_INFO system_info{};
     GetSystemInfo(&system_info);
     const std::size_t page_size = system_info.dwPageSize;

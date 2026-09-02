@@ -234,6 +234,25 @@ namespace
     }
 
     /**
+     * @brief Maps one transactional observer raw request to its declared native success acknowledgement code.
+     * @param definition Observer definition whose acknowledgement mappings should be searched.
+     * @param raw_request_value Raw request value carried by the emitted transaction update.
+     * @return Native success acknowledgement code when the raw request has a declared mapping; otherwise no value.
+     */
+    std::optional<int> TryMapAcknowledgementValue(const helen::MemoryStateObserverDefinition& definition, int raw_request_value)
+    {
+        for (const helen::MemoryStateObserverMapEntryDefinition& mapping : definition.AcknowledgementMappings)
+        {
+            if (mapping.Match == raw_request_value)
+            {
+                return mapping.Value;
+            }
+        }
+
+        return std::nullopt;
+    }
+
+    /**
      * @brief Returns whether one raw value is eligible to identify an observer's carrier address.
      * @param definition Observer definition whose explicit or legacy recognition values should be used.
      * @param raw_value Raw integer read from a candidate value offset.
@@ -328,6 +347,7 @@ namespace helen
     {
         debug_views_.reserve(definitions_.size());
         last_poll_ticks_.assign(definitions_.size(), 0);
+        pending_transaction_requests_.assign(definitions_.size(), std::nullopt);
 
         for (const MemoryStateObserverDefinition& definition : definitions_)
         {
@@ -530,6 +550,8 @@ namespace helen
     {
         const MemoryStateObserverDefinition& definition = definitions_[observer_index];
         const std::uintptr_t cached_address = GetCachedAddress(observer_index);
+        const bool is_transactional =
+            !definition.AcknowledgementMappings.empty() && definition.FailureResponseValue.has_value();
         std::optional<int> previous_mapped_value;
         std::uint64_t previous_rescan_count = 0;
         {
@@ -716,14 +738,40 @@ namespace helen
             std::lock_guard<std::mutex> lock(mutex_);
             MemoryStateObserverDebugView& debug_view = debug_views_[observer_index];
             debug_view.CachedAddress = resolved_address.value_or(0);
-            if (raw_value.has_value())
+            if (!resolved_address.has_value())
             {
-                debug_view.LastRawValue = raw_value;
+                pending_transaction_requests_[observer_index].reset();
+            }
+            else if (is_transactional &&
+                     (!mapped_value.has_value() ||
+                      !raw_value.has_value() ||
+                      (pending_transaction_requests_[observer_index].has_value() &&
+                       *pending_transaction_requests_[observer_index] != *raw_value)))
+            {
+                pending_transaction_requests_[observer_index].reset();
             }
 
             if (mapped_value.has_value() && !response_written)
             {
-                if (!previous_mapped_value.has_value() || *previous_mapped_value != *mapped_value)
+                bool should_emit_update = false;
+                if (is_transactional)
+                {
+                    const bool same_pending_request =
+                        pending_transaction_requests_[observer_index].has_value() &&
+                        raw_value.has_value() &&
+                        *pending_transaction_requests_[observer_index] == *raw_value;
+                    if (!same_pending_request)
+                    {
+                        pending_transaction_requests_[observer_index] = raw_value;
+                        should_emit_update = true;
+                    }
+                }
+                else if (!previous_mapped_value.has_value() || *previous_mapped_value != *mapped_value)
+                {
+                    should_emit_update = true;
+                }
+
+                if (should_emit_update)
                 {
                     debug_view.LastMappedValue = mapped_value;
                     ++debug_view.UpdateCount;
@@ -736,6 +784,11 @@ namespace helen
                     emitted_update.CommandId = definition.CommandId;
                     update = std::move(emitted_update);
                 }
+            }
+
+            if (raw_value.has_value() && (!is_transactional || !mapped_value.has_value() || response_written))
+            {
+                debug_view.LastRawValue = raw_value;
             }
         }
 
@@ -769,11 +822,81 @@ namespace helen
                 definition.ValueOffset);
         }
 
-        if (update.has_value() && update_callback_)
+        if (!update.has_value())
         {
-            update_callback_(*update);
+            return true;
         }
 
-        return true;
+        bool update_succeeded = true;
+        if (update_callback_)
+        {
+            update_succeeded = update_callback_(*update);
+        }
+        else if (is_transactional)
+        {
+            update_succeeded = false;
+        }
+
+        if (!is_transactional)
+        {
+            return update_succeeded;
+        }
+
+        std::optional<int> response_value;
+        if (update_succeeded)
+        {
+            response_value = TryMapAcknowledgementValue(definition, update->RawValue);
+            if (!response_value.has_value())
+            {
+                Logf(
+                    L"[observer] acknowledgement failed id=%hs raw=%d result=1 reason=success-mapping-missing",
+                    definition.Id.c_str(),
+                    update->RawValue);
+                return false;
+            }
+        }
+        else
+        {
+            response_value = definition.FailureResponseValue;
+        }
+
+        std::uintptr_t response_address = 0;
+        if (!TryApplyOffset(*resolved_address, definition.ValueOffset, response_address))
+        {
+            Logf(
+                L"[observer] acknowledgement failed id=%hs raw=%d result=%d reason=address-overflow",
+                definition.Id.c_str(),
+                update->RawValue,
+                static_cast<int>(update_succeeded));
+            return false;
+        }
+
+        if (!TryWriteInt32(response_address, *response_value))
+        {
+            Logf(
+                L"[observer] acknowledgement failed id=%hs raw=%d result=%d response=%d address=0x%08llX reason=write-failed",
+                definition.Id.c_str(),
+                update->RawValue,
+                static_cast<int>(update_succeeded),
+                *response_value,
+                static_cast<unsigned long long>(response_address));
+            return false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            debug_views_[observer_index].LastRawValue = response_value;
+            pending_transaction_requests_[observer_index].reset();
+        }
+
+        Logf(
+            L"[observer] acknowledgement id=%hs raw=%d result=%d response=%d address=0x%08llX",
+            definition.Id.c_str(),
+            update->RawValue,
+            static_cast<int>(update_succeeded),
+            *response_value,
+            static_cast<unsigned long long>(response_address));
+
+        return update_succeeded;
     }
 }

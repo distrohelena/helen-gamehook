@@ -23,7 +23,7 @@ namespace helen
                 std::move(state_observers),
                 [this](const MemoryStateObserverUpdate& update)
                 {
-                    HandleObserverUpdate(update);
+                    return HandleObserverUpdate(update);
                 },
                 [this](const std::string& config_key)
                 {
@@ -81,7 +81,7 @@ namespace helen
         return observer_service_->PollOnce();
     }
 
-    void BuildRuntimeCoordinator::HandleObserverUpdate(const MemoryStateObserverUpdate& update)
+    bool BuildRuntimeCoordinator::HandleObserverUpdate(const MemoryStateObserverUpdate& update)
     {
         const bool set_succeeded = command_dispatcher_.TrySetInt(update.ConfigKey, update.MappedValue);
         if (!set_succeeded)
@@ -92,7 +92,7 @@ namespace helen
                 update.RawValue,
                 update.MappedValue,
                 update.ConfigKey.c_str());
-            return;
+            return false;
         }
 
         bool command_succeeded = true;
@@ -109,5 +109,6 @@ namespace helen
             update.ConfigKey.c_str(),
             update.CommandId.has_value() ? update.CommandId->c_str() : "<none>",
             static_cast<int>(command_succeeded));
+        return set_succeeded && command_succeeded;
     }
 }

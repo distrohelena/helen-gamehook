@@ -226,6 +226,264 @@ namespace
     }
 
     /**
+     * @brief Builds a transactional MSAA observer that maps request 4324 to config value 5 and acknowledges native work.
+     * @param scan_start Inclusive scan start address.
+     * @param scan_end Exclusive scan end address.
+     * @return Observer definition with success, failure, and read-response carrier protocols enabled.
+     */
+    helen::MemoryStateObserverDefinition CreateTransactionalMsaaObserverDefinition(
+        std::uintptr_t scan_start,
+        std::uintptr_t scan_end)
+    {
+        helen::MemoryStateObserverDefinition definition = CreateGraphicsCarrierObserverDefinition(
+            "graphicsObserverMsaa",
+            scan_start,
+            scan_end,
+            "msaa",
+            { 4324 });
+        definition.Mappings[0].Value = 5;
+        definition.AddressMatchValues.push_back(4300);
+        definition.AddressMatchValues.push_back(4324);
+        definition.AddressMatchValues.push_back(4334);
+        definition.AddressMatchValues.push_back(4399);
+        definition.AcknowledgementMappings.push_back(
+            helen::MemoryStateObserverMapEntryDefinition{ .Match = 4324, .Value = 4334 });
+        definition.FailureResponseValue = 4399;
+        definition.ResponseRequestValue = 4300;
+        definition.ResponseMappings.push_back(
+            helen::MemoryStateObserverMapEntryDefinition{ .Match = 5, .Value = 4314 });
+        return definition;
+    }
+
+    /**
+     * @brief Verifies a successful transactional MSAA update observes the request before acknowledging it and can retry identically.
+     */
+    void RunTransactionalObserverAcknowledgementTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for the transactional acknowledgement test.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 128;
+        ConfigureGraphicsCarrierStateBlock(candidate_address, 4324);
+
+        std::vector<int> callback_carrier_values;
+        helen::MemoryStateObserverService service(
+            { CreateTransactionalMsaaObserverDefinition(page_address, page_address + page_size) },
+            [&callback_carrier_values, candidate_address](const helen::MemoryStateObserverUpdate& update)
+            {
+                callback_carrier_values.push_back(ReadInt32(candidate_address + 12));
+                Expect(update.RawValue == 4324, "Transactional callback received an acknowledged response instead of the raw request.");
+                return true;
+            });
+
+        try
+        {
+            Expect(service.PollOnce(), "Successful transactional MSAA update unexpectedly failed.");
+            Expect(ReadInt32(candidate_address + 12) == 4334, "Successful transactional MSAA update did not write the success acknowledgement.");
+            Expect(callback_carrier_values.size() == 1 && callback_carrier_values[0] == 4324, "Transactional callback did not observe the request carrier before acknowledgement.");
+
+            ConfigureGraphicsCarrierStateBlock(candidate_address, 4324);
+            Expect(service.PollOnce(), "Identical transactional MSAA retry unexpectedly failed.");
+            Expect(ReadInt32(candidate_address + 12) == 4334, "Identical transactional MSAA retry did not write a second success acknowledgement.");
+            Expect(callback_carrier_values.size() == 2, "Identical transactional MSAA request was suppressed instead of retried.");
+
+            const std::vector<helen::MemoryStateObserverDebugView> debug_views = service.GetDebugViews();
+            Expect(debug_views.size() == 1, "Transactional MSAA debug view count mismatch.");
+            Expect(debug_views[0].UpdateCount == 2, "Transactional MSAA update count did not increment once per emitted request.");
+            Expect(debug_views[0].LastRawValue.has_value() && *debug_views[0].LastRawValue == 4334, "Transactional MSAA debug raw value did not retain the successful acknowledgement.");
+            Expect(debug_views[0].LastMappedValue.has_value() && *debug_views[0].LastMappedValue == 5, "Transactional MSAA debug mapped value was not retained for diagnostics.");
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release the transactional acknowledgement allocation.");
+        }
+        catch (...)
+        {
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+    }
+
+    /**
+     * @brief Verifies a failed transactional callback writes the declared failure response and returns the poll failure.
+     */
+    void RunTransactionalObserverFailureAcknowledgementTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for the transactional failure acknowledgement test.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 128;
+        ConfigureGraphicsCarrierStateBlock(candidate_address, 4324);
+
+        int callback_count = 0;
+        helen::MemoryStateObserverService service(
+            { CreateTransactionalMsaaObserverDefinition(page_address, page_address + page_size) },
+            [&callback_count](const helen::MemoryStateObserverUpdate& update)
+            {
+                ++callback_count;
+                Expect(update.RawValue == 4324, "Failed transactional callback received the wrong raw request.");
+                return false;
+            });
+
+        try
+        {
+            Expect(!service.PollOnce(), "Failed transactional callback unexpectedly reported a successful poll.");
+            Expect(ReadInt32(candidate_address + 12) == 4399, "Failed transactional callback did not write the declared failure response.");
+            Expect(callback_count == 1, "Failed transactional callback invocation count mismatch.");
+
+            ConfigureGraphicsCarrierStateBlock(candidate_address, 4324);
+            Expect(!service.PollOnce(), "Repeated failed transactional callback unexpectedly reported a successful poll.");
+            Expect(ReadInt32(candidate_address + 12) == 4399, "Repeated failed transactional callback did not rearm the failure response.");
+            Expect(callback_count == 2, "Failed transactional request was suppressed instead of rearmed after failure acknowledgement.");
+
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release the transactional failure acknowledgement allocation.");
+        }
+        catch (...)
+        {
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+    }
+
+    /**
+     * @brief Verifies a transactional read request answers from config without emitting an observer update.
+     */
+    void RunTransactionalObserverReadResponseTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for the transactional read-response test.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 128;
+        ConfigureGraphicsCarrierStateBlock(candidate_address, 4300);
+
+        std::vector<helen::MemoryStateObserverUpdate> updates;
+        helen::MemoryStateObserverService service(
+            { CreateTransactionalMsaaObserverDefinition(page_address, page_address + page_size) },
+            [&updates](const helen::MemoryStateObserverUpdate& update)
+            {
+                updates.push_back(update);
+                return true;
+            },
+            [](const std::string& config_key) -> std::optional<int>
+            {
+                Expect(config_key == "msaa", "Transactional read response queried the wrong config key.");
+                return 5;
+            });
+
+        try
+        {
+            Expect(service.PollOnce(), "Transactional read-response poll unexpectedly failed.");
+            Expect(ReadInt32(candidate_address + 12) == 4314, "Transactional read request did not write its mapped config response.");
+            Expect(updates.empty(), "Transactional read request emitted an observer update.");
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release the transactional read-response allocation.");
+        }
+        catch (...)
+        {
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+    }
+
+    /**
+     * @brief Verifies an acknowledgement write failure returns false without claiming a success response.
+     */
+    void RunTransactionalObserverWriteFailureTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for the transactional write-failure test.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 128;
+        ConfigureGraphicsCarrierStateBlock(candidate_address, 4324);
+        bool protection_changed = false;
+        DWORD original_protection = 0;
+        helen::MemoryStateObserverService service(
+            { CreateTransactionalMsaaObserverDefinition(page_address, page_address + page_size) },
+            [&protection_changed, &original_protection, page_address, page_size](const helen::MemoryStateObserverUpdate& update)
+            {
+                Expect(update.RawValue == 4324, "Write-failure callback received the wrong raw request.");
+                protection_changed = VirtualProtect(
+                    reinterpret_cast<void*>(page_address),
+                    page_size,
+                    PAGE_READONLY,
+                    &original_protection) != FALSE;
+                return true;
+            });
+
+        try
+        {
+            Expect(!service.PollOnce(), "Transactional acknowledgement write failure unexpectedly reported success.");
+            Expect(protection_changed, "Transactional write-failure callback did not make the carrier read-only.");
+            Expect(ReadInt32(candidate_address + 12) == 4324, "Transactional write-failure poll changed the carrier despite rejecting the acknowledgement write.");
+            const std::vector<helen::MemoryStateObserverDebugView> debug_views = service.GetDebugViews();
+            Expect(debug_views.size() == 1, "Transactional write-failure debug view count mismatch.");
+            Expect(!debug_views[0].LastRawValue.has_value() || *debug_views[0].LastRawValue != 4334, "Transactional write-failure debug state claimed an unwritten success acknowledgement.");
+
+            DWORD restored_protection = 0;
+            Expect(
+                VirtualProtect(reinterpret_cast<void*>(page_address), page_size, PAGE_READWRITE, &restored_protection) != FALSE,
+                "Failed to restore writable protection after the transactional write-failure test.");
+            protection_changed = false;
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release the transactional write-failure allocation.");
+        }
+        catch (...)
+        {
+            if (protection_changed)
+            {
+                DWORD restored_protection = 0;
+                VirtualProtect(reinterpret_cast<void*>(page_address), page_size, PAGE_READWRITE, &restored_protection);
+            }
+
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+    }
+
+    /**
      * @brief Verifies disjoint observer mappings share one cached structural carrier without repeated rescans.
      * @remarks The initial subtitle-like raw code is intentionally unmapped by either observer, exercising the combined subtitle/graphics no-collision case.
      */
@@ -263,6 +521,7 @@ namespace
             [&updates](const helen::MemoryStateObserverUpdate& update)
             {
                 updates.push_back(update);
+                return true;
             },
             [](const std::string& config_key) -> std::optional<int>
             {
@@ -385,6 +644,7 @@ namespace
             [&updates](const helen::MemoryStateObserverUpdate& update)
             {
                 updates.push_back(update);
+                return true;
             },
             [](const std::string& config_key) -> std::optional<int>
             {
@@ -476,6 +736,7 @@ namespace
             { vsync_definition, msaa_definition },
             [](const helen::MemoryStateObserverUpdate&)
             {
+                return true;
             });
 
         try
@@ -562,6 +823,7 @@ namespace
                             return callback_release_requested;
                         });
                 }
+                return true;
             });
 
         std::thread manual_poll_thread;
@@ -676,6 +938,10 @@ namespace
  */
 void RunMemoryStateObserverServiceTests()
 {
+    RunTransactionalObserverAcknowledgementTest();
+    RunTransactionalObserverFailureAcknowledgementTest();
+    RunTransactionalObserverReadResponseTest();
+    RunTransactionalObserverWriteFailureTest();
     RunGraphicsCarrierObserverCoexistenceTest();
     RunGroupedGraphicsCarrierObserverReuseTest();
     RunGroupedGraphicsCarrierObserverStaleCacheTest();
@@ -698,6 +964,7 @@ void RunMemoryStateObserverServiceTests()
         [&updates](const helen::MemoryStateObserverUpdate& update)
         {
             updates.push_back(update);
+            return true;
         });
 
     try
@@ -709,6 +976,7 @@ void RunMemoryStateObserverServiceTests()
         Expect(updates[0].RawValue == 4101, "Observer raw value mismatch.");
         Expect(updates[0].MappedValue == 0, "Observer mapped value mismatch.");
         Expect(updates[0].CommandId.has_value() && *updates[0].CommandId == "applySubtitleSize", "Observer command mismatch.");
+        Expect(ReadInt32(candidate_address) == 4101, "Legacy subtitle observer unexpectedly wrote a transaction response.");
 
         std::vector<helen::MemoryStateObserverDebugView> debug_views = service.GetDebugViews();
         Expect(debug_views.size() == 1, "Observer debug view count mismatch after the first poll.");
@@ -725,6 +993,7 @@ void RunMemoryStateObserverServiceTests()
         Expect(updates.size() == 2, "Changed observer poll did not emit the second update.");
         Expect(updates[1].RawValue == 4103, "Changed observer raw value mismatch.");
         Expect(updates[1].MappedValue == 2, "Changed observer mapped value mismatch.");
+        Expect(ReadInt32(candidate_address) == 4103, "Legacy subtitle observer unexpectedly wrote an acknowledgement or failure response.");
 
         debug_views = service.GetDebugViews();
         Expect(debug_views[0].CachedAddress == candidate_address, "Observer cached address changed unexpectedly after the second update.");

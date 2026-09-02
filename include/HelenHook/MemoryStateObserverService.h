@@ -23,10 +23,11 @@ namespace helen
     {
     public:
         /**
-         * @brief Receives mapped observer updates detected by the service synchronously inside the serialized poll pass.
+         * @brief Applies one mapped observer update synchronously inside the serialized poll pass and reports whether all required native work succeeded.
+         * @return True when all required native work for the update completed; false when the update could not be applied fully.
          * @remarks The implementation must not call PollOnce(), Start(), Stop(), or another observer lifecycle method on the same service from this callback because poll_mutex_ remains held until the callback returns.
          */
-        using UpdateCallback = std::function<void(const MemoryStateObserverUpdate&)>;
+        using UpdateCallback = std::function<bool(const MemoryStateObserverUpdate&)>;
 
         /**
          * @brief Resolves the current integer value for a registered config key synchronously during a serialized carrier response.
@@ -128,6 +129,8 @@ namespace helen
         std::unordered_map<std::string, std::uintptr_t> grouped_addresses_;
         /** @brief Last tick count recorded for each observer by the timed polling loop. */
         std::vector<std::uint64_t> last_poll_ticks_;
+        /** @brief Raw transactional request remembered while its response has not yet been written, so identical pending polls are suppressed safely. */
+        std::vector<std::optional<int>> pending_transaction_requests_;
         /** @brief Callback invoked for newly mapped observer updates. */
         UpdateCallback update_callback_;
         /** @brief Optional callback that supplies current config values for bidirectional carrier responses. */
