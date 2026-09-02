@@ -466,15 +466,72 @@ namespace helen
         return true;
     }
 
+    std::uintptr_t MemoryStateObserverService::GetCachedAddress(std::size_t observer_index) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const std::optional<std::string>& address_group = definitions_[observer_index].AddressGroup;
+        if (address_group.has_value())
+        {
+            const auto grouped_address = grouped_addresses_.find(*address_group);
+            if (grouped_address != grouped_addresses_.end())
+            {
+                return grouped_address->second;
+            }
+
+            return 0;
+        }
+
+        return debug_views_[observer_index].CachedAddress;
+    }
+
+    void MemoryStateObserverService::CacheResolvedAddress(std::size_t observer_index, std::uintptr_t address)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const std::optional<std::string>& address_group = definitions_[observer_index].AddressGroup;
+        if (!address_group.has_value())
+        {
+            debug_views_[observer_index].CachedAddress = address;
+            return;
+        }
+
+        grouped_addresses_[*address_group] = address;
+        for (std::size_t matching_index = 0; matching_index < definitions_.size(); ++matching_index)
+        {
+            if (definitions_[matching_index].AddressGroup == address_group)
+            {
+                debug_views_[matching_index].CachedAddress = address;
+            }
+        }
+    }
+
+    void MemoryStateObserverService::ClearCachedAddress(std::size_t observer_index)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const std::optional<std::string>& address_group = definitions_[observer_index].AddressGroup;
+        if (!address_group.has_value())
+        {
+            debug_views_[observer_index].CachedAddress = 0;
+            return;
+        }
+
+        grouped_addresses_.erase(*address_group);
+        for (std::size_t matching_index = 0; matching_index < definitions_.size(); ++matching_index)
+        {
+            if (definitions_[matching_index].AddressGroup == address_group)
+            {
+                debug_views_[matching_index].CachedAddress = 0;
+            }
+        }
+    }
+
     bool MemoryStateObserverService::PollObserver(std::size_t observer_index)
     {
         const MemoryStateObserverDefinition& definition = definitions_[observer_index];
-        std::uintptr_t cached_address = 0;
+        const std::uintptr_t cached_address = GetCachedAddress(observer_index);
         std::optional<int> previous_mapped_value;
         std::uint64_t previous_rescan_count = 0;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            cached_address = debug_views_[observer_index].CachedAddress;
             previous_mapped_value = debug_views_[observer_index].LastMappedValue;
             previous_rescan_count = debug_views_[observer_index].RescanCount;
         }
@@ -513,6 +570,11 @@ namespace helen
 
         if (!resolved_address.has_value())
         {
+            if (cached_address != 0)
+            {
+                ClearCachedAddress(observer_index);
+            }
+
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 ++debug_views_[observer_index].RescanCount;
@@ -640,6 +702,11 @@ namespace helen
                 *config_value,
                 *response_value,
                 static_cast<unsigned long long>(response_address));
+        }
+
+        if (resolved_address.has_value())
+        {
+            CacheResolvedAddress(observer_index, *resolved_address);
         }
 
         std::optional<MemoryStateObserverUpdate> update;

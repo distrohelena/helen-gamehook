@@ -342,6 +342,176 @@ namespace
             throw;
         }
     }
+
+    /**
+     * @brief Verifies grouped VSync and MSAA observers reuse the first structurally resolved graphics carrier.
+     * @remarks The VSync response is resolved first, then an MSAA request is written into that same carrier before the next complete poll.
+     */
+    void RunGroupedGraphicsCarrierObserverReuseTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for the grouped graphics carrier reuse test.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 128;
+        ConfigureGraphicsCarrierStateBlock(candidate_address, 4200);
+
+        helen::MemoryStateObserverDefinition vsync_definition = CreateGraphicsCarrierObserverDefinition(
+            "graphicsObserverVsync",
+            page_address,
+            page_address + page_size,
+            "vsync",
+            { 4210, 4211 });
+        vsync_definition.AddressGroup = "batmanFrontendControlType";
+
+        helen::MemoryStateObserverDefinition msaa_definition = CreateGraphicsCarrierObserverDefinition(
+            "graphicsObserverMsaa",
+            page_address,
+            page_address + page_size,
+            "msaa",
+            { 4990, 4991 },
+            "applyBatmanMsaa");
+        msaa_definition.AddressGroup = "batmanFrontendControlType";
+
+        std::vector<helen::MemoryStateObserverUpdate> updates;
+        helen::MemoryStateObserverService service(
+            { vsync_definition, msaa_definition },
+            [&updates](const helen::MemoryStateObserverUpdate& update)
+            {
+                updates.push_back(update);
+            },
+            [](const std::string& config_key) -> std::optional<int>
+            {
+                if (config_key == "vsync")
+                {
+                    return 1;
+                }
+
+                return std::nullopt;
+            });
+
+        try
+        {
+            Expect(service.PollOnce(), "Expected the grouped graphics carrier resolution poll to succeed.");
+            Expect(ReadInt32(candidate_address + 12) == 4211, "VSync resolution did not write its configured response into the carrier.");
+
+            std::vector<helen::MemoryStateObserverDebugView> debug_views = service.GetDebugViews();
+            Expect(debug_views.size() == 2, "Grouped graphics carrier debug view count mismatch after resolution.");
+            Expect(debug_views[0].CachedAddress == candidate_address, "VSync did not resolve the verified graphics carrier.");
+            Expect(debug_views[1].CachedAddress == candidate_address, "MSAA did not mirror the grouped graphics carrier address.");
+            Expect(debug_views[0].RescanCount == 1, "VSync initial rescan count mismatch for grouped graphics carrier.");
+            Expect(debug_views[1].RescanCount == 0, "MSAA rescanned instead of reusing the grouped graphics carrier address.");
+
+            ConfigureGraphicsCarrierStateBlock(candidate_address, 4990);
+            Expect(service.PollOnce(), "Expected the grouped MSAA request poll to succeed.");
+
+            debug_views = service.GetDebugViews();
+            Expect(debug_views[0].CachedAddress == candidate_address, "VSync lost the grouped graphics carrier address after an MSAA request.");
+            Expect(debug_views[1].CachedAddress == candidate_address, "MSAA lost the grouped graphics carrier address after its request.");
+            Expect(debug_views[0].RescanCount == 1, "VSync rescanned after the grouped MSAA request.");
+            Expect(debug_views[1].RescanCount == 0, "MSAA rescanned after the grouped MSAA request.");
+            Expect(updates.size() == 1, "Grouped MSAA request did not emit exactly one mapped update.");
+            Expect(updates[0].ObserverId == "graphicsObserverMsaa", "Grouped MSAA request update observer mismatch.");
+            Expect(updates[0].RawValue == 4990 && updates[0].MappedValue == 0, "Grouped MSAA request update values mismatch.");
+            Expect(updates[0].CommandId.has_value() && *updates[0].CommandId == "applyBatmanMsaa", "Grouped MSAA request command mismatch.");
+
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release the grouped graphics carrier reuse allocation.");
+        }
+        catch (...)
+        {
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+    }
+
+    /**
+     * @brief Verifies a stale grouped carrier clears shared state and lets the first observer rescan every group member onto a new carrier.
+     * @remarks Carrier A is structurally invalidated before carrier B is activated, so the scan cannot retain stale group state.
+     */
+    void RunGroupedGraphicsCarrierObserverStaleCacheTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for the grouped graphics carrier stale-cache test.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t carrier_a_address = page_address + 128;
+        const std::uintptr_t carrier_b_address = page_address + 256;
+        ConfigureGraphicsCarrierStateBlock(carrier_a_address, 4210);
+
+        helen::MemoryStateObserverDefinition vsync_definition = CreateGraphicsCarrierObserverDefinition(
+            "graphicsObserverVsync",
+            page_address,
+            page_address + page_size,
+            "vsync",
+            { 4210, 4211 });
+        vsync_definition.AddressGroup = "batmanFrontendControlType";
+
+        helen::MemoryStateObserverDefinition msaa_definition = CreateGraphicsCarrierObserverDefinition(
+            "graphicsObserverMsaa",
+            page_address,
+            page_address + page_size,
+            "msaa",
+            { 4990, 4991 },
+            "applyBatmanMsaa");
+        msaa_definition.AddressGroup = "batmanFrontendControlType";
+
+        helen::MemoryStateObserverService service(
+            { vsync_definition, msaa_definition },
+            [](const helen::MemoryStateObserverUpdate&)
+            {
+            });
+
+        try
+        {
+            Expect(service.PollOnce(), "Expected grouped graphics carrier A resolution to succeed.");
+            std::vector<helen::MemoryStateObserverDebugView> debug_views = service.GetDebugViews();
+            Expect(debug_views.size() == 2, "Grouped graphics carrier stale-cache debug view count mismatch after carrier A resolution.");
+            Expect(debug_views[0].CachedAddress == carrier_a_address, "VSync did not resolve grouped graphics carrier A.");
+            Expect(debug_views[1].CachedAddress == carrier_a_address, "MSAA did not mirror grouped graphics carrier A.");
+            Expect(debug_views[0].RescanCount == 1, "VSync initial rescan count mismatch before stale grouped carrier invalidation.");
+            Expect(debug_views[1].RescanCount == 0, "MSAA rescanned before stale grouped carrier invalidation.");
+
+            WriteInt32(carrier_a_address + 4, 7);
+            ConfigureGraphicsCarrierStateBlock(carrier_b_address, 4990);
+
+            Expect(service.PollOnce(), "Expected grouped graphics carrier stale-cache replacement poll to succeed.");
+            debug_views = service.GetDebugViews();
+            Expect(debug_views[0].CachedAddress == carrier_b_address, "VSync retained stale grouped graphics carrier A instead of resolving B.");
+            Expect(debug_views[1].CachedAddress == carrier_b_address, "MSAA did not receive the replacement grouped graphics carrier B address.");
+            Expect(debug_views[0].CachedAddress != carrier_a_address && debug_views[1].CachedAddress != carrier_a_address, "A stale grouped graphics carrier address remained visible after invalidation.");
+            Expect(debug_views[0].RescanCount == 2, "VSync did not perform the grouped replacement rescan.");
+            Expect(debug_views[1].RescanCount == 0, "MSAA performed an independent rescan after grouped replacement.");
+
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release the grouped graphics carrier stale-cache allocation.");
+        }
+        catch (...)
+        {
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+    }
 }
 
 /**
@@ -350,6 +520,8 @@ namespace
 void RunMemoryStateObserverServiceTests()
 {
     RunGraphicsCarrierObserverCoexistenceTest();
+    RunGroupedGraphicsCarrierObserverReuseTest();
+    RunGroupedGraphicsCarrierObserverStaleCacheTest();
 
     SYSTEM_INFO system_info{};
     GetSystemInfo(&system_info);
