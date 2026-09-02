@@ -18,6 +18,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <system_error>
 
@@ -162,9 +163,9 @@ namespace
         command.Id = "failObserverCommand";
         command.Name = "Fail Observer Command";
 
-        helen::CommandStepDefinition load_step;
-        load_step.Kind = "load-batman-subtitle-size-into-config";
-        command.Steps.push_back(load_step);
+        helen::CommandStepDefinition persist_step;
+        persist_step.Kind = "apply-batman-subtitle-size-config";
+        command.Steps.push_back(persist_step);
 
         helen::CommandStepDefinition failing_step;
         failing_step.Kind = "set-live-double";
@@ -262,6 +263,24 @@ namespace
     }
 
     /**
+     * @brief Reads all bytes from one test fixture file for exact persistence assertions.
+     * @param path Source file path whose contents should be returned.
+     * @return Complete file contents, or an empty string when the file cannot be opened.
+     */
+    std::string ReadAllText(const std::filesystem::path& path)
+    {
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream)
+        {
+            return {};
+        }
+
+        return std::string(
+            std::istreambuf_iterator<char>(stream),
+            std::istreambuf_iterator<char>());
+    }
+
+    /**
      * @brief Verifies coordinator observer transactions return exact config/command success and failure outcomes.
      */
     void RunBuildRuntimeCoordinatorTransactionTests()
@@ -285,8 +304,7 @@ namespace
 
         const std::filesystem::path graphics_ini_path =
             CreateTemporaryBatmanGraphicsIniPath().parent_path() / "Task3Transactions" / "BmEngine.ini";
-        const std::filesystem::path graphics_test_directory = graphics_ini_path.parent_path().parent_path();
-        WriteAllText(graphics_ini_path, "[Engine.HUD]\r\nConsoleFontSize=5\r\n");
+        const std::filesystem::path graphics_test_directory = graphics_ini_path.parent_path();
         helen::BatmanGraphicsConfigService graphics_config_service(graphics_ini_path);
         helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
         Expect(executor.RegisterCommand(CreateApplySubtitleSizeCommand("applySubtitleSize")), "Failed to register the successful observer command.");
@@ -306,6 +324,8 @@ namespace
             Expect(initial_slot_value.has_value() && std::fabs(*initial_slot_value - 1.5) < 0.001, "Coordinator ran the optional command after observer config update failure.");
 
             ConfigureStateBlock(candidate_address, 4103);
+            Expect(dispatcher.TrySetInt("ui.subtitleSize", 1), "Failed to seed the command-failure config fixture.");
+            WriteAllText(graphics_ini_path, "[Engine.HUD]\r\nConsoleFontSize=6\r\n");
             helen::MemoryStateObserverDefinition command_failure_definition = CreateSubtitleObserver(page_address, page_address + page_size);
             command_failure_definition.CommandId = "failObserverCommand";
             helen::BuildRuntimeCoordinator command_failure_coordinator(
@@ -315,7 +335,9 @@ namespace
                 executor);
             Expect(!command_failure_coordinator.PollStateObserversOnce(), "Coordinator reported success when the optional observer command failed.");
             const std::optional<int> failed_command_config = dispatcher.TryGetInt("ui.subtitleSize");
-            Expect(failed_command_config.has_value() && *failed_command_config == 0, "Coordinator did not observe the valid first command step before optional command failure.");
+            Expect(failed_command_config.has_value() && *failed_command_config == 2, "Coordinator did not apply the observer config update before optional command failure.");
+            const std::string persisted_command_config = ReadAllText(graphics_ini_path);
+            Expect(persisted_command_config.find("ConsoleFontSize=7") != std::string::npos, "Optional command did not persist the coordinator-updated config before failing.");
             const std::optional<double> failed_command_slot_value = runtime_values.TryGetDouble("subtitle.scale");
             Expect(failed_command_slot_value.has_value() && std::fabs(*failed_command_slot_value - 1.5) < 0.001, "Failed observer command changed the runtime slot unexpectedly.");
 
