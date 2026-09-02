@@ -145,13 +145,51 @@ function Get-HgdeltaFunctionBody {
     return $match.Groups['body'].Value.Trim()
 }
 
-function Assert-NoOpRowActions {
-    param([Parameter(Mandatory = $true)] [string]$Text, [Parameter(Mandatory = $true)] [string]$Context)
+function Get-VsyncSliceRowActionBody {
+    param([string]$Text, [string]$Assignment)
+    return Get-HgdeltaFunctionBody -Text $Text -FunctionAssignment $Assignment
+}
+
+function Assert-NoOpVsyncSliceRowActions {
+    param([string]$Text, [string]$Context)
     foreach ($action in @('RunAction', 'Increment', 'Decrement', 'ShowPrompt')) {
-        if ((Get-HgdeltaFunctionBody -Text $Text -FunctionAssignment "this.$action") -ne '') {
-            throw "$Context action $action must be a no-op."
-        }
+        if ((Get-VsyncSliceRowActionBody -Text $Text -Assignment "this.$action") -ne '') { throw "$Context action $action must be a no-op." }
     }
+}
+
+function Assert-VsyncSliceRowContract {
+    param([string]$Text, [int]$Index, [string]$Context)
+
+    $labels = @('Fullscreen', 'Resolution', 'VSync', 'MSAA', 'Detail Level', 'Bloom', 'Dynamic Shadows', 'Motion Blur', 'Distortion', 'Fog Volumes', 'Spherical Harmonic Lighting', 'Ambient Occlusion', 'PhysX', 'Stereo 3D', 'Apply Changes')
+    if ($Index -eq 2) {
+        Assert-ContainsOrdinal -Text $Text -Token 'this.Names = new Array("Off","On");' -Context "$Context names"
+        Assert-ContainsOrdinal -Text $Text -Token 'this.State = _parent.GraphicsVsyncController.DraftVsync;' -Context "$Context initial state"
+        Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsVsyncController.ToggleVsync();' -Context "$Context RunAction"
+        Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsVsyncController.IncrementVsync();' -Context "$Context Increment"
+        Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsVsyncController.DecrementVsync();' -Context "$Context Decrement"
+        Assert-ContainsOrdinal -Text $Text -Token $labels[$Index] -Context "$Context label"
+        Assert-ContainsOrdinal -Text $Text -Token 'this._visible = true;' -Context "$Context visibility"
+        return
+    }
+
+    if ($Index -eq 14) {
+        Assert-ContainsOrdinal -Text $Text -Token 'this.Names = new Array("");' -Context "$Context names"
+        Assert-ContainsOrdinal -Text $Text -Token 'Apply Changes' -Context "$Context label"
+        Assert-ContainsOrdinal -Text $Text -Token 'this.ItemText.text = "";' -Context "$Context value"
+        Assert-ContainsOrdinal -Text $Text -Token 'this._visible = true;' -Context "$Context visibility"
+        Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsVsyncController.ApplyChanges();' -Context "$Context RunAction"
+        foreach ($action in @('Increment', 'Decrement')) {
+            if ((Get-VsyncSliceRowActionBody -Text $Text -Assignment "this.$action") -ne '') { throw "$Context action $action must be a no-op." }
+        }
+        return
+    }
+
+    Assert-ContainsOrdinal -Text $Text -Token 'this.Names = new Array("Not active");' -Context "$Context names"
+    Assert-ContainsOrdinal -Text $Text -Token 'if(this.ItemText != undefined)' -Context "$Context ItemText guard"
+    Assert-ContainsOrdinal -Text $Text -Token 'this.ItemText.text = "Not active";' -Context "$Context visible value"
+    Assert-ContainsOrdinal -Text $Text -Token $labels[$Index] -Context "$Context label"
+    Assert-ContainsOrdinal -Text $Text -Token 'this._visible = true;' -Context "$Context visibility"
+    Assert-NoOpVsyncSliceRowActions -Text $Text -Context $Context
 }
 
 function Assert-ScopedExportedShellContract {
@@ -176,24 +214,35 @@ function Assert-ScopedExportedShellContract {
     foreach ($token in @('Graphics Options', 'CancelScreen', 'ReturnFromScreen', 'FE_SetActiveScreenName","Graphics Options')) {
         Assert-ContainsOrdinal -Text $screenText -Token $token -Context 'Options Graphics screen script'
     }
+    foreach ($token in @('rs.ui.BatmanGraphicsVsyncController', 'InitialVsync', 'DraftVsync', 'ApplyWasDispatched = false')) {
+        Assert-ContainsOrdinal -Text $screenText -Token $token -Context 'Options Graphics screen script'
+    }
+    if ($screenText -notmatch 'IncrementVsync\s*=\s*function\s*\(\)\s*\{\s*this\.SetVsync\(this\.DraftVsync\s*==\s*0\s*\?\s*1\s*:\s*0,true\);\s*\}') { throw 'IncrementVsync must wrap DraftVsync through the guarded setter.' }
+    if ($screenText -notmatch 'DecrementVsync\s*=\s*function\s*\(\)\s*\{\s*this\.SetVsync\(this\.DraftVsync\s*==\s*0\s*\?\s*1\s*:\s*0,false\);\s*\}') { throw 'DecrementVsync must wrap DraftVsync through the guarded setter.' }
+    Assert-ContainsOrdinal -Text $screenText -Token 'setInterval(this,"CompleteApply",100)' -Context 'Options Graphics screen timer'
+    Assert-ContainsOrdinal -Text $screenText -Token 'this.Screen.BlockInput(true);' -Context 'Options Graphics apply input block'
+    Assert-ContainsOrdinal -Text $screenText -Token 'this.Screen.BlockInput(false);' -Context 'Options Graphics apply input unblock'
+    if ($screenText -notmatch 'FE_SetControlType",4210\s*\+\s*this\.DraftVsync') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4210 plus DraftVsync.' }
+    if ($screenText -notmatch 'FE_SetControlType",4990\s*\+\s*this\.ApplySignalToggle') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4990 plus ApplySignalToggle.' }
 
     $rowDepths = @('141', '133', '125', '117', '109', '101', '93', '85', '77', '69', '61', '53', '45', '37', '29')
-    $rowLabels = @('Fullscreen', 'Resolution', 'VSync', 'MSAA', 'Detail Level', 'Bloom', 'Dynamic Shadows', 'Motion Blur', 'Distortion', 'Fog Volumes', 'Spherical Harmonic Lighting', 'Ambient Occlusion', 'PhysX', 'Stereo 3D', '')
     for ($index = 0; $index -lt $rowDepths.Count; $index++) {
         $rowPath = Join-Path $screenDirectory.FullName "frame_1\PlaceObject2_290_List_Template_$($rowDepths[$index])\CLIPACTIONRECORD onClipEvent(load).as"
         if (-not (Test-Path -LiteralPath $rowPath)) { throw "Missing known Graphics Options row script: $rowPath" }
         $rowText = Get-Content -LiteralPath $rowPath -Raw
-        if ($index -lt 14) {
-            Assert-ContainsOrdinal -Text $rowText -Token 'this.Names = new Array("Not active");' -Context "Graphics row $($index + 1)"
+        if ($index -lt 15) {
             if ($rowText -notmatch 'this\.(?:Label\.)?Label\.Text\.text\s*=\s*"' -and $rowText -notmatch 'this\.Label\.Text\.text\s*=\s*"') { throw "Graphics row $($index + 1) is missing its fixed label assignment." }
-            Assert-ContainsOrdinal -Text $rowText -Token $rowLabels[$index] -Context "Graphics row $($index + 1) label"
-            Assert-ContainsOrdinal -Text $rowText -Token 'this._visible = true;' -Context "Graphics row $($index + 1) visibility"
+            Assert-VsyncSliceRowContract -Text $rowText -Index $index -Context "Graphics row $($index + 1)"
         } else {
-            Assert-ContainsOrdinal -Text $rowText -Token 'this.Names = new Array("");' -Context 'Graphics row 15 names'
-            Assert-ContainsOrdinal -Text $rowText -Token 'this._visible = false;' -Context 'Graphics row 15 visibility'
-            Assert-ContainsOrdinal -Text $rowText -Token 'this.ItemText.text = "";' -Context 'Graphics row 15 value'
+            throw 'Unexpected graphics row index.'
         }
-        Assert-NoOpRowActions -Text $rowText -Context "Graphics row $($index + 1)"
+    }
+
+    foreach ($forbidden in @('Helen_GetInt', 'Helen_SetInt', 'Helen_RunCommand', 'Helen_ApplyBatmanGraphicsDraft', 'GraphicsExitPrompt', 'CaptureInitialState')) {
+        Assert-NotContainsOrdinal -Text $screenText -Token $forbidden -Context 'Options Graphics screen script'
+    }
+    foreach ($forbidden in @('Helen_', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft', 'Unsaved graphics changes', 'Some changes require a restart')) {
+        foreach ($scriptFile in $scriptFiles) { Assert-NotContainsOrdinal -Text (Get-Content -LiteralPath $scriptFile.FullName -Raw) -Token $forbidden -Context "exported script $($scriptFile.Name)" }
     }
 }
 
@@ -464,10 +513,6 @@ try {
     if ($exports.Count -ne 1 -or @($exports[0].tags.item | Where-Object { $_ -eq '600' }).Count -ne 1) { throw 'Shell target must export exactly sprite 600 as ScreenOptionsGraphics.' }
 
     Assert-ScopedExportedShellContract -ExportRoot $exportRoot
-    $scriptFiles = @(Get-ChildItem -LiteralPath (Join-Path $exportRoot 'scripts') -Recurse -Filter *.as -File)
-    foreach ($forbidden in @('Helen_', 'ApplyChanges', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft', 'Unsaved graphics changes', 'Some changes require a restart')) {
-        foreach ($scriptFile in $scriptFiles) { Assert-NotContainsOrdinal -Text (Get-Content -LiteralPath $scriptFile.FullName -Raw) -Token $forbidden -Context "exported script $($scriptFile.Name)" }
-    }
 
     $reconstructed = Reconstruct-HgdeltaTarget -BasePath $basePath -DeltaPath $deltaPath
     $targetBytes = [IO.File]::ReadAllBytes($targetPath)

@@ -1,5 +1,6 @@
 param(
-    [string]$BatmanRoot
+    [string]$BatmanRoot,
+    [string]$BatmanUserIniPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,6 +10,13 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
 } else {
     $BatmanRoot = (Resolve-Path $BatmanRoot).Path
 }
+if ([string]::IsNullOrWhiteSpace($BatmanUserIniPath)) {
+    $documentsPath = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments)
+    $BatmanUserIniPath = Join-Path $documentsPath 'Square Enix\Batman Arkham Asylum GOTY\BmGame\Config\BmEngine.ini'
+} else {
+    $BatmanUserIniPath = [IO.Path]::GetFullPath($BatmanUserIniPath)
+}
+if (-not (Test-Path -LiteralPath $BatmanUserIniPath -PathType Leaf)) { throw "Batman user INI was not found as a file: $BatmanUserIniPath" }
 
 $TemplatePath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsShellScriptTemplates.cs'
 if (-not (Test-Path -LiteralPath $TemplatePath -PathType Leaf)) {
@@ -18,15 +26,17 @@ if (-not (Test-Path -LiteralPath $TemplatePath -PathType Leaf)) {
 $TemplateText = Get-Content -LiteralPath $TemplatePath -Raw
 
 $BuilderSourceRoot = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder'
+$BuildPathsPath = Join-Path $BuilderSourceRoot 'GraphicsOptionsShellBuildPaths.cs'
 $ProgramPath = Join-Path $BuilderSourceRoot 'Program.cs'
 $AssetBuilderPath = Join-Path $BuilderSourceRoot 'GraphicsOptionsAssetBuilder.cs'
 $XmlPatcherPath = Join-Path $BuilderSourceRoot 'GraphicsOptionsXmlPatcher.cs'
-foreach ($SourcePath in @($ProgramPath, $AssetBuilderPath, $XmlPatcherPath)) {
+foreach ($SourcePath in @($BuildPathsPath, $ProgramPath, $AssetBuilderPath, $XmlPatcherPath)) {
     if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
         throw "Batman graphics-options shell source file was not found: $SourcePath"
     }
 }
 
+$BuildPathsText = Get-Content -LiteralPath $BuildPathsPath -Raw
 $ProgramText = Get-Content -LiteralPath $ProgramPath -Raw
 $AssetBuilderText = Get-Content -LiteralPath $AssetBuilderPath -Raw
 $XmlPatcherText = Get-Content -LiteralPath $XmlPatcherPath -Raw
@@ -78,8 +88,6 @@ function Get-CSharpMethodBody {
 }
 
 $ShellForbiddenSourceTokens = @(
-    'BatmanGraphicsIniBootstrapLoader',
-    'GraphicsOptionsScriptTemplates',
     'GraphicsExitPrompt',
     'YesNoPrompt',
     '601',
@@ -87,14 +95,15 @@ $ShellForbiddenSourceTokens = @(
 )
 
 $ShellMethodChecks = @(
+    @{ Text = $BuildPathsText; Signature = 'public static GraphicsOptionsShellBuildPaths FromRoot(string root, string ffdecPath, string outputDirectory, string batmanUserIniPath)'; Context = 'Shell build paths FromRoot' },
     @{ Text = $ProgramText; Signature = 'private static int RunBuildMainMenuGraphicsShell(string[] args)'; Context = 'Program shell command' },
     @{ Text = $AssetBuilderText; Signature = 'public static void BuildShell(GraphicsOptionsShellBuildPaths paths)'; Context = 'AssetBuilder BuildShell' },
     @{ Text = $AssetBuilderText; Signature = 'private static void ValidateShellInputs(GraphicsOptionsShellBuildPaths paths)'; Context = 'AssetBuilder ValidateShellInputs' },
     @{ Text = $AssetBuilderText; Signature = 'private static void ValidateShellOutputPaths(GraphicsOptionsShellBuildPaths paths)'; Context = 'AssetBuilder ValidateShellOutputPaths' },
     @{ Text = $AssetBuilderText; Signature = 'private static void ValidateShellOutputDomains(string outputDirectory, string rootPath)'; Context = 'AssetBuilder ValidateShellOutputDomains' },
     @{ Text = $AssetBuilderText; Signature = 'private static void ValidateShellOutputPathComponents(string outputDirectory, string allowedRoot)'; Context = 'AssetBuilder ValidateShellOutputPathComponents' },
-    @{ Text = $AssetBuilderText; Signature = 'private static void PatchFrontendShellScripts(string scriptsRoot)'; Context = 'AssetBuilder PatchFrontendShellScripts' },
-    @{ Text = $AssetBuilderText; Signature = 'private static void WriteGraphicsShellRowClipActions(string scriptsRoot)'; Context = 'AssetBuilder WriteGraphicsShellRowClipActions' },
+    @{ Text = $AssetBuilderText; Signature = 'private static void PatchFrontendShellScripts(string scriptsRoot, BatmanGraphicsIniBootstrapSnapshot bootstrapSnapshot)'; Context = 'AssetBuilder PatchFrontendShellScripts' },
+    @{ Text = $AssetBuilderText; Signature = 'private static void WriteGraphicsShellRowClipActions(string scriptsRoot, BatmanGraphicsIniBootstrapSnapshot bootstrapSnapshot)'; Context = 'AssetBuilder WriteGraphicsShellRowClipActions' },
     @{ Text = $XmlPatcherText; Signature = 'public static void PatchShell(string inputXmlPath, string outputXmlPath)'; Context = 'XmlPatcher PatchShell' },
     @{ Text = $XmlPatcherText; Signature = 'private static void AppendGraphicsShellSpriteAndExport(XmlElement tags, XmlElement optionsGamePcSprite)'; Context = 'XmlPatcher AppendGraphicsShellSpriteAndExport' }
 )
@@ -110,12 +119,19 @@ foreach ($ShellMethodCheck in $ShellMethodChecks) {
 
 Assert-SourceTokens -Text $ProgramText -Context 'Program.cs' -Tokens @(
     '"build-main-menu-graphics-shell" => RunBuildMainMenuGraphicsShell(tail)',
-    'GraphicsOptionsShellBuildPaths.FromRoot(root, ffdecPath, outputDirectory)',
+    'string batmanUserIniPath = Path.GetFullPath(options.GetValue("--ini") ?? BatmanGraphicsIniBootstrapLoader.GetDefaultIniPath())',
+    'GraphicsOptionsShellBuildPaths.FromRoot(root, ffdecPath, outputDirectory, batmanUserIniPath)',
     'GraphicsOptionsAssetBuilder.BuildShell(paths)'
+)
+Assert-SourceTokens -Text $BuildPathsText -Context 'GraphicsOptionsShellBuildPaths.cs' -Tokens @(
+    'string BatmanUserIniPath',
+    'string batmanUserIniPath',
+    'BatmanUserIniPath: Path.GetFullPath(batmanUserIniPath)'
 )
 Assert-SourceTokens -Text $AssetBuilderText -Context 'GraphicsOptionsAssetBuilder.cs' -Tokens @(
     'public static void BuildShell(GraphicsOptionsShellBuildPaths paths)',
-    'PatchFrontendShellScripts(paths.FrontendWorkingScriptsPath)',
+    'BatmanGraphicsIniBootstrapSnapshot bootstrapSnapshot = BatmanGraphicsIniBootstrapLoader.Load(paths.BatmanUserIniPath)',
+    'PatchFrontendShellScripts(paths.FrontendWorkingScriptsPath, bootstrapSnapshot)',
     'GraphicsOptionsXmlPatcher.PatchShell(paths.FrontendXmlPath, paths.FrontendPatchedXmlPath)'
 )
 Assert-SourceTokens -Text $XmlPatcherText -Context 'GraphicsOptionsXmlPatcher.cs' -Tokens @(
@@ -123,7 +139,8 @@ Assert-SourceTokens -Text $XmlPatcherText -Context 'GraphicsOptionsXmlPatcher.cs
     'AppendGraphicsShellSpriteAndExport(tags, optionsGamePcSprite)'
 )
 Assert-SourceTokens -Text $AssetBuilderText -Context 'GraphicsOptionsAssetBuilder.cs' -Tokens @(
-    'GraphicsOptionsShellScriptTemplates.RowClipActions',
+    'GraphicsOptionsShellScriptTemplates.CreateScreenFrame1(bootstrapSnapshot)',
+    'GraphicsOptionsShellScriptTemplates.CreateRowClipActions(bootstrapSnapshot)',
     'FileAttributes.ReparsePoint',
     'ValidateShellOutputDomains',
     'ValidateShellOutputPathComponents',
@@ -175,11 +192,12 @@ foreach ($RequiredToken in $RequiredTokens) {
 
 $ForbiddenTokens = @(
     'Helen_',
-    'ApplyChanges',
     'GraphicsExitPrompt',
+    'YesNoPrompt',
+    'CaptureInitialState',
+    '601',
     'Unsaved',
-    'RestartRequired',
-    'BmEngine.ini'
+    'RestartRequired'
 )
 
 foreach ($ForbiddenToken in $ForbiddenTokens) {
@@ -302,9 +320,14 @@ if (args.Length != 1)
 Assembly assembly = Assembly.LoadFrom(args[0]);
 Type templateType = assembly.GetType("SubtitleSizeModBuilder.GraphicsOptionsShellScriptTemplates", throwOnError: true)!;
 BindingFlags staticFlags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
-FieldInfo rowClipActionsField = templateType.GetField("RowClipActions", staticFlags)
-    ?? throw new MissingFieldException(templateType.FullName, "RowClipActions");
-string[] rowClipActions = (string[])rowClipActionsField.GetValue(null)!;
+Type snapshotType = assembly.GetType("SubtitleSizeModBuilder.BatmanGraphicsIniBootstrapSnapshot", throwOnError: true)!;
+object snapshot = Activator.CreateInstance(snapshotType, new object?[] { 0, 1920, 1080, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 })!;
+MethodInfo screenFrameMethod = templateType.GetMethod("CreateScreenFrame1", staticFlags)
+    ?? throw new MissingMethodException(templateType.FullName, "CreateScreenFrame1");
+MethodInfo rowClipActionsMethod = templateType.GetMethod("CreateRowClipActions", staticFlags)
+    ?? throw new MissingMethodException(templateType.FullName, "CreateRowClipActions");
+string screenFrame = (string)screenFrameMethod.Invoke(null, new[] { snapshot })!;
+string[] rowClipActions = (string[])rowClipActionsMethod.Invoke(null, new[] { snapshot })!;
 Type builderType = assembly.GetType("SubtitleSizeModBuilder.GraphicsOptionsAssetBuilder", throwOnError: true)!;
 FieldInfo graphicsRowDepthsField = builderType.GetField("GraphicsRowDepths", staticFlags)
     ?? throw new MissingFieldException(builderType.FullName, "GraphicsRowDepths");
@@ -333,9 +356,9 @@ catch (TargetInvocationException exception)
     nulInnerException = exception.InnerException?.GetType().FullName;
 }
 
-Console.WriteLine(JsonSerializer.Serialize(new ReflectionContract(rowClipActions, graphicsRowDepths, xmlGraphicsRowDepths, escapedValue, nulInnerException)));
+Console.WriteLine(JsonSerializer.Serialize(new ReflectionContract(screenFrame, rowClipActions, graphicsRowDepths, xmlGraphicsRowDepths, escapedValue, nulInnerException)));
 
-public sealed record ReflectionContract(string[] RowClipActions, int[] GraphicsRowDepths, int[] XmlGraphicsRowDepths, string EscapedValue, string? NulInnerException);
+public sealed record ReflectionContract(string ScreenFrame, string[] RowClipActions, int[] GraphicsRowDepths, int[] XmlGraphicsRowDepths, string EscapedValue, string? NulInnerException);
 '@
 
 function Get-ReflectionContract {
@@ -347,9 +370,15 @@ function Get-ReflectionContract {
         $Assembly = [System.Reflection.Assembly]::LoadFrom($AssemblyPath)
         $TemplateType = $Assembly.GetType('SubtitleSizeModBuilder.GraphicsOptionsShellScriptTemplates', $true)
         $StaticFlags = [System.Reflection.BindingFlags]::Static -bor [System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::NonPublic
-        $RowClipActionsField = $TemplateType.GetField('RowClipActions', $StaticFlags)
-        if ($null -eq $RowClipActionsField) {
-            throw 'Graphics-options shell template type is missing RowClipActions.'
+        $SnapshotType = $Assembly.GetType('SubtitleSizeModBuilder.BatmanGraphicsIniBootstrapSnapshot', $true)
+        $Snapshot = [Activator]::CreateInstance($SnapshotType, @([object]0, [object]1920, [object]1080, [object]0, [object]0, [object]0, [object]0, [object]0, [object]0, [object]0, [object]0, [object]0, [object]0, [object]0, [object]0))
+        $ScreenFrameMethod = $TemplateType.GetMethod('CreateScreenFrame1', $StaticFlags)
+        if ($null -eq $ScreenFrameMethod) {
+            throw 'Graphics-options shell template type is missing CreateScreenFrame1.'
+        }
+        $RowClipActionsMethod = $TemplateType.GetMethod('CreateRowClipActions', $StaticFlags)
+        if ($null -eq $RowClipActionsMethod) {
+            throw 'Graphics-options shell template type is missing CreateRowClipActions.'
         }
 
         $EscapeMethod = $TemplateType.GetMethod('EscapeActionScriptString', $StaticFlags, $null, [System.Reflection.CallingConventions]::Any, @([string]), $null)
@@ -357,7 +386,8 @@ function Get-ReflectionContract {
             throw 'Graphics-options shell template type is missing EscapeActionScriptString.'
         }
 
-        $RowClipActions = @($RowClipActionsField.GetValue($null))
+        $ScreenFrame = [string]$ScreenFrameMethod.Invoke($null, @($Snapshot))
+        $RowClipActions = @($RowClipActionsMethod.Invoke($null, @($Snapshot)))
         $BuilderType = $Assembly.GetType('SubtitleSizeModBuilder.GraphicsOptionsAssetBuilder', $true)
         $GraphicsRowDepthsField = $BuilderType.GetField('GraphicsRowDepths', $StaticFlags)
         if ($null -eq $GraphicsRowDepthsField) {
@@ -382,6 +412,7 @@ function Get-ReflectionContract {
         }
 
         return [pscustomobject]@{
+            ScreenFrame = $ScreenFrame
             RowClipActions = $RowClipActions
             GraphicsRowDepths = $GraphicsRowDepths
             XmlGraphicsRowDepths = $XmlGraphicsRowDepths
@@ -429,6 +460,29 @@ function Get-ReflectionContract {
 }
 
 $ReflectionContract = Get-ReflectionContract -AssemblyPath $DebugAssemblyPath
+$ScreenFrame = [string]$ReflectionContract.ScreenFrame
+foreach ($RequiredScreenToken in @(
+    'class rs.ui.BatmanGraphicsVsyncController',
+    'this.InitialVsync = this.NormalizeVsync(initialVsync);',
+    'this.DraftVsync = this.InitialVsync;',
+    'this.ApplyWasDispatched = false;',
+    'this.SetVsync(this.DraftVsync == 0 ? 1 : 0,true);',
+    'this.SetVsync(this.DraftVsync == 0 ? 1 : 0,false);',
+    'this.Screen.BlockInput(true);',
+    'this.Screen.BlockInput(false);',
+    'flash.external.ExternalInterface.call("FE_SetControlType",4210+this.DraftVsync);',
+    'this.ApplyTimerId = setInterval(this,"CompleteApply",100);',
+    'flash.external.ExternalInterface.call("FE_SetControlType",4990+this.ApplySignalToggle);',
+    'this.AddItem(GraphicsRow15,13,0,-1,-1);',
+    'GraphicsRow15._visible = true;'
+)) {
+    Assert-ContainsOrdinal -Text $ScreenFrame -Token $RequiredScreenToken -Context 'Graphics shell screen frame'
+}
+foreach ($ForbiddenScreenToken in @('Helen_', 'GraphicsExitPrompt', 'YesNoPrompt', 'CaptureInitialState', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft')) {
+    if ($ScreenFrame.IndexOf($ForbiddenScreenToken, [System.StringComparison]::Ordinal) -ge 0) {
+        throw "Graphics shell screen frame contains forbidden token: $ForbiddenScreenToken"
+    }
+}
 $RowClipActions = @($ReflectionContract.RowClipActions)
 if ($RowClipActions.Count -ne 15) {
     throw "Expected exactly 15 graphics row clip actions, found $($RowClipActions.Count)."
@@ -461,9 +515,9 @@ $ValidationBridgeSource = @'
 using System.Reflection;
 using System.Text.Json;
 
-if (args.Length < 5)
+if (args.Length < 6)
 {
-    throw new ArgumentException("Expected assembly, builder root, repository root, generated output, and temp output paths.");
+    throw new ArgumentException("Expected assembly, builder root, repository root, generated output, temp output, and Batman user INI paths.");
 }
 
 Assembly assembly = Assembly.LoadFrom(args[0]);
@@ -475,23 +529,23 @@ MethodInfo validateMethod = builderType.GetMethod("ValidateShellInputs", staticF
 
 ValidationResult[] results =
 [
-    RunValidation("repository-root", args[1], args[2], expectValid: false),
-    RunValidation("frontend-scripts", args[1], Path.Combine(args[1], "extracted", "frontend", "mainv2", "frontend-mainv2-export", "scripts"), expectValid: false),
-    RunValidation("generated-child", args[1], args[3], expectValid: true),
-    RunValidation("unrelated-temp", args[1], args[4], expectValid: true)
+    RunValidation("repository-root", args[1], args[2], args[5], expectValid: false),
+    RunValidation("frontend-scripts", args[1], Path.Combine(args[1], "extracted", "frontend", "mainv2", "frontend-mainv2-export", "scripts"), args[5], expectValid: false),
+    RunValidation("generated-child", args[1], args[3], args[5], expectValid: true),
+    RunValidation("unrelated-temp", args[1], args[4], args[5], expectValid: true)
 ];
 
 List<ValidationResult> allResults = results.ToList();
-for (int index = 5; index < args.Length; index++)
+for (int index = 6; index < args.Length; index++)
 {
-    allResults.Add(RunValidation($"additional-{index - 5}", args[1], args[index], expectValid: false));
+    allResults.Add(RunValidation($"additional-{index - 6}", args[1], args[index], args[5], expectValid: false));
 }
 
 Console.WriteLine(JsonSerializer.Serialize(allResults));
 
-ValidationResult RunValidation(string name, string root, string outputDirectory, bool expectValid)
+ValidationResult RunValidation(string name, string root, string outputDirectory, string iniPath, bool expectValid)
 {
-    object shellPaths = CreatePaths(root, outputDirectory);
+    object shellPaths = CreatePaths(root, outputDirectory, iniPath);
     try
     {
         _ = validateMethod.Invoke(null, new[] { shellPaths });
@@ -504,7 +558,7 @@ ValidationResult RunValidation(string name, string root, string outputDirectory,
     }
 }
 
-object CreatePaths(string root, string outputDirectory)
+object CreatePaths(string root, string outputDirectory, string iniPath)
 {
     string frontendRoot = Path.Combine(root, "extracted", "frontend", "mainv2");
     string tempDirectory = Path.Combine(outputDirectory, "_build");
@@ -518,6 +572,7 @@ object CreatePaths(string root, string outputDirectory)
         Path.Combine(frontendRoot, "frontend-mainv2.gfx"),
         Path.Combine(frontendRoot, "frontend-mainv2-export", "scripts"),
         Path.Combine(root, "extracted", "ffdec", "ffdec-cli.exe"),
+        iniPath,
         Path.Combine(tempDirectory, "frontend-scripts"),
         Path.Combine(tempDirectory, "MainV2-graphics-options-shell.xml"),
         Path.Combine(tempDirectory, "MainV2-graphics-options-shell-structural.gfx"),
@@ -535,6 +590,7 @@ function Get-ShellOutputValidationContract {
         [string]$RepositoryRootPath,
         [string]$GeneratedOutputPath,
         [string]$TempOutputPath,
+        [string]$BatmanUserIniPath,
         [string[]]$AdditionalOutputPaths
     )
 
@@ -562,7 +618,7 @@ function Get-ShellOutputValidationContract {
         }
 
         $BridgeAssemblyPath = Join-Path $BridgeRoot 'bin\Debug\net8.0\ValidationBridge.dll'
-        $BridgeArguments = @($AssemblyPath, $BuilderRootPath, $RepositoryRootPath, $GeneratedOutputPath, $TempOutputPath) + @($AdditionalOutputPaths)
+        $BridgeArguments = @($AssemblyPath, $BuilderRootPath, $RepositoryRootPath, $GeneratedOutputPath, $TempOutputPath, $BatmanUserIniPath) + @($AdditionalOutputPaths)
         $ReflectionOutput = & dotnet $BridgeAssemblyPath @BridgeArguments 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "Validation bridge failed:`n$($ReflectionOutput -join [Environment]::NewLine)"
@@ -622,6 +678,7 @@ try {
         -RepositoryRootPath $RepositoryRootPath `
         -GeneratedOutputPath $GeneratedOutputPath `
         -TempOutputPath $TempOutputPath `
+        -BatmanUserIniPath $BatmanUserIniPath `
         -AdditionalOutputPaths $AdditionalOutputPaths)
 
 $RepositoryRootValidation = $ValidationContract | Where-Object Name -eq 'repository-root'
@@ -708,7 +765,9 @@ try {
             '--output-dir',
             $PreservationOutputPath,
             '--ffdec',
-            $FfdecPath) `
+            $FfdecPath,
+            '--ini',
+            $BatmanUserIniPath) `
         -Context 'Graphics shell preservation build'
 
     if (-not (Test-Path -LiteralPath $PreservationOutputGfxPath -PathType Leaf)) {
@@ -729,7 +788,7 @@ try {
 $ExpectedRows = @(
     @{ Label = 'Fullscreen'; Value = 'Not active' },
     @{ Label = 'Resolution'; Value = 'Not active' },
-    @{ Label = 'VSync'; Value = 'Not active' },
+    @{ Label = 'VSync'; Value = $null },
     @{ Label = 'MSAA'; Value = 'Not active' },
     @{ Label = 'Detail Level'; Value = 'Not active' },
     @{ Label = 'Bloom'; Value = 'Not active' },
@@ -750,18 +809,31 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
     $RowContext = "Graphics row action $($RowIndex + 1)"
 
     Assert-ContainsOrdinal -Text $RowScript -Token "this.Label.Label.Text.text = `"$ExpectedLabel`";" -Context $RowContext
-    Assert-ContainsOrdinal -Text $RowScript -Token "this.ItemText.text = `"$ExpectedValue`";" -Context $RowContext
     Assert-ContainsOrdinal -Text $RowScript -Token 'this._visible = true;' -Context $RowContext
-    Assert-ContainsOrdinal -Text $RowScript -Token 'this.Names = new Array("Not active");' -Context $RowContext
     Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = 0;' -Context $RowContext
     Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = 0;' -Context $RowContext
     Assert-ContainsOrdinal -Text $RowScript -Token 'this.Default = 0;' -Context $RowContext
-    Assert-ContainsOrdinal -Text $RowScript -Token 'this.LeftClicker._visible = false;' -Context $RowContext
-    Assert-ContainsOrdinal -Text $RowScript -Token 'this.RightClicker._visible = false;' -Context $RowContext
-    Assert-NoOpActionScriptFunction -ScriptText $RowScript -FunctionName 'RunAction' -Context $RowContext
-    Assert-NoOpActionScriptFunction -ScriptText $RowScript -FunctionName 'Increment' -Context $RowContext
-    Assert-NoOpActionScriptFunction -ScriptText $RowScript -FunctionName 'Decrement' -Context $RowContext
     Assert-NoOpActionScriptFunction -ScriptText $RowScript -FunctionName 'ShowPrompt' -Context $RowContext
+
+    if ($RowIndex -eq 2) {
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Names = new Array("Off","On");' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.ItemText.text = this.Names[this.State];' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = _parent.GraphicsVsyncController.DraftVsync;' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.LeftClicker._visible = this.State > 0;' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.RightClicker._visible = this.State < this.Names.length - 1;' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsVsyncController.ToggleVsync();' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsVsyncController.IncrementVsync();' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsVsyncController.DecrementVsync();' -Context $RowContext
+    } else {
+        Assert-ContainsOrdinal -Text $RowScript -Token "this.ItemText.text = `"$ExpectedValue`";" -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Names = new Array("Not active");' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'if(this.ItemText != undefined)' -Context "$RowContext ItemText guard"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.LeftClicker._visible = false;' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.RightClicker._visible = false;' -Context $RowContext
+        Assert-NoOpActionScriptFunction -ScriptText $RowScript -FunctionName 'RunAction' -Context $RowContext
+        Assert-NoOpActionScriptFunction -ScriptText $RowScript -FunctionName 'Increment' -Context $RowContext
+        Assert-NoOpActionScriptFunction -ScriptText $RowScript -FunctionName 'Decrement' -Context $RowContext
+    }
 
     $DestroyBody = Get-ActionScriptFunctionBody -ScriptText $RowScript -FunctionName 'Destroy' -Context $RowContext
     Assert-ContainsOrdinal -Text $DestroyBody -Token 'this.Names' -Context "$RowContext Destroy"
@@ -777,22 +849,21 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
     }
 }
 
-$HiddenRowScript = [string]$RowClipActions[14]
-Assert-ContainsOrdinal -Text $HiddenRowScript -Token 'this._visible = false;' -Context 'Graphics row action 15'
-Assert-ContainsOrdinal -Text $HiddenRowScript -Token 'this.LeftClicker._visible = false;' -Context 'Graphics row action 15'
-Assert-ContainsOrdinal -Text $HiddenRowScript -Token 'this.RightClicker._visible = false;' -Context 'Graphics row action 15'
-Assert-NoOpActionScriptFunction -ScriptText $HiddenRowScript -FunctionName 'RunAction' -Context 'Graphics row action 15'
-Assert-NoOpActionScriptFunction -ScriptText $HiddenRowScript -FunctionName 'Increment' -Context 'Graphics row action 15'
-Assert-NoOpActionScriptFunction -ScriptText $HiddenRowScript -FunctionName 'Decrement' -Context 'Graphics row action 15'
-Assert-NoOpActionScriptFunction -ScriptText $HiddenRowScript -FunctionName 'ShowPrompt' -Context 'Graphics row action 15'
-$HiddenDestroyBody = Get-ActionScriptFunctionBody -ScriptText $HiddenRowScript -FunctionName 'Destroy' -Context 'Graphics row action 15'
-Assert-ContainsOrdinal -Text $HiddenDestroyBody -Token 'this.Names' -Context 'Graphics row action 15 Destroy'
-Assert-ContainsOrdinal -Text $HiddenDestroyBody -Token '.pop()' -Context 'Graphics row action 15 Destroy'
-if ($HiddenDestroyBody.IndexOf('ExternalInterface', [System.StringComparison]::Ordinal) -ge 0) {
+$ApplyRowScript = [string]$RowClipActions[14]
+Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this._visible = true;' -Context 'Graphics row action 15'
+Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this.ItemText.text = "";' -Context 'Graphics row action 15'
+Assert-ContainsOrdinal -Text $ApplyRowScript -Token '_parent.GraphicsVsyncController.ApplyChanges();' -Context 'Graphics row action 15'
+Assert-NoOpActionScriptFunction -ScriptText $ApplyRowScript -FunctionName 'Increment' -Context 'Graphics row action 15'
+Assert-NoOpActionScriptFunction -ScriptText $ApplyRowScript -FunctionName 'Decrement' -Context 'Graphics row action 15'
+Assert-NoOpActionScriptFunction -ScriptText $ApplyRowScript -FunctionName 'ShowPrompt' -Context 'Graphics row action 15'
+$ApplyDestroyBody = Get-ActionScriptFunctionBody -ScriptText $ApplyRowScript -FunctionName 'Destroy' -Context 'Graphics row action 15'
+Assert-ContainsOrdinal -Text $ApplyDestroyBody -Token 'this.Names' -Context 'Graphics row action 15 Destroy'
+Assert-ContainsOrdinal -Text $ApplyDestroyBody -Token '.pop()' -Context 'Graphics row action 15 Destroy'
+if ($ApplyDestroyBody.IndexOf('ExternalInterface', [System.StringComparison]::Ordinal) -ge 0) {
     throw 'Graphics row action 15 Destroy must not call an external interface.'
 }
 foreach ($ForbiddenToken in $ForbiddenTokens) {
-    if ($HiddenRowScript.IndexOf($ForbiddenToken, [System.StringComparison]::Ordinal) -ge 0) {
+    if ($ApplyRowScript.IndexOf($ForbiddenToken, [System.StringComparison]::Ordinal) -ge 0) {
         throw "Graphics row action 15 contains forbidden token: $ForbiddenToken"
     }
 }

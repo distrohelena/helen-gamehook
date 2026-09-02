@@ -102,7 +102,7 @@ internal static class GraphicsOptionsAssetBuilder
     }
 
     /// <summary>
-    /// Builds the graphics-options shell frontend using fixed placeholder rows and no user-INI bootstrap.
+    /// Builds the graphics-options shell frontend with an INI-bootstrapped VSync row.
     /// The shell stages the extracted script tree, replaces only the screen and row scripts needed by
     /// the stock navigation path, patches sprite 600 into the frontend XML, and imports that result.
     /// </summary>
@@ -111,8 +111,9 @@ internal static class GraphicsOptionsAssetBuilder
     {
         ValidateShellInputs(paths);
         PrepareOutputDirectories(paths.OutputDirectory, paths.TempDirectory);
+        BatmanGraphicsIniBootstrapSnapshot bootstrapSnapshot = BatmanGraphicsIniBootstrapLoader.Load(paths.BatmanUserIniPath);
 
-        PatchFrontendShellScripts(paths.FrontendWorkingScriptsPath);
+        PatchFrontendShellScripts(paths.FrontendWorkingScriptsPath, bootstrapSnapshot);
         ValidateShellPatchedScriptSet(paths.FrontendWorkingScriptsPath);
         GraphicsOptionsXmlPatcher.PatchShell(paths.FrontendXmlPath, paths.FrontendPatchedXmlPath);
 
@@ -214,12 +215,14 @@ internal static class GraphicsOptionsAssetBuilder
     }
 
     /// <summary>
-    /// Writes only the stock-facing graphics shell scripts into a staged frontend script tree.
+    /// Writes only the stock-facing graphics shell scripts into a staged frontend script tree,
+    /// injecting the normalized VSync bootstrap value into the focused controller.
     /// The duplicate ScreenOptionsAudio_2 registration is retained because the current FFDec
     /// import pipeline resolves the cloned screen class through both registration paths.
     /// </summary>
     /// <param name="scriptsRoot">The staged writable frontend script root.</param>
-    private static void PatchFrontendShellScripts(string scriptsRoot)
+    /// <param name="bootstrapSnapshot">The normalized user settings used to initialize VSync.</param>
+    private static void PatchFrontendShellScripts(string scriptsRoot, BatmanGraphicsIniBootstrapSnapshot bootstrapSnapshot)
     {
         WriteAllText(
             Path.Combine(scriptsRoot, "ScreenOptionsGraphics.as"),
@@ -244,13 +247,13 @@ internal static class GraphicsOptionsAssetBuilder
 
         WriteAllText(
             Path.Combine(scriptsRoot, "DefineSprite_600_ScreenOptionsGraphics", "frame_1", "DoAction.as"),
-            GraphicsOptionsShellScriptTemplates.ScreenFrame1);
+            GraphicsOptionsShellScriptTemplates.CreateScreenFrame1(bootstrapSnapshot));
 
         WriteAllText(
             Path.Combine(scriptsRoot, "DefineSprite_600_ScreenOptionsGraphics", "frame_15", "DoAction.as"),
             GraphicsOptionsShellScriptTemplates.ScreenFrame15);
 
-        WriteGraphicsShellRowClipActions(scriptsRoot);
+        WriteGraphicsShellRowClipActions(scriptsRoot, bootstrapSnapshot);
     }
 
     /// <summary>
@@ -278,8 +281,7 @@ internal static class GraphicsOptionsAssetBuilder
     }
 
     /// <summary>
-    /// Validates the XML, source GFX, script tree, and FFDec inputs required by the shell build.
-    /// Unlike the full graphics build, this validation intentionally does not require a user INI file.
+    /// Validates the XML, source GFX, script tree, FFDec, and user INI inputs required by the shell build.
     /// </summary>
     /// <param name="paths">The resolved shell build paths.</param>
     private static void ValidateShellInputs(GraphicsOptionsShellBuildPaths paths)
@@ -291,7 +293,8 @@ internal static class GraphicsOptionsAssetBuilder
             paths.FrontendXmlPath,
             paths.FrontendSourceGfxPath,
             paths.FrontendScriptsPath,
-            paths.FfdecPath
+            paths.FfdecPath,
+            paths.BatmanUserIniPath
         };
 
         foreach (string requiredPath in requiredPaths)
@@ -331,7 +334,8 @@ internal static class GraphicsOptionsAssetBuilder
             paths.FrontendXmlPath,
             paths.FrontendSourceGfxPath,
             paths.FrontendScriptsPath,
-            paths.FfdecPath
+            paths.FfdecPath,
+            paths.BatmanUserIniPath
         };
 
         foreach (string requiredInputPath in requiredInputPaths)
@@ -524,13 +528,15 @@ internal static class GraphicsOptionsAssetBuilder
     }
 
     /// <summary>
-    /// Writes the fifteen fixed shell row clip actions in one-to-one order with the graphics row depths.
+    /// Writes the fifteen shell row clip actions in one-to-one order with the graphics row depths,
+    /// using the normalized INI snapshot for the VSync row.
     /// A mismatch is rejected before any row is written so depth/action drift cannot produce a malformed shell.
     /// </summary>
     /// <param name="scriptsRoot">The staged writable frontend script root.</param>
-    private static void WriteGraphicsShellRowClipActions(string scriptsRoot)
+    /// <param name="bootstrapSnapshot">The normalized user settings used to initialize VSync.</param>
+    private static void WriteGraphicsShellRowClipActions(string scriptsRoot, BatmanGraphicsIniBootstrapSnapshot bootstrapSnapshot)
     {
-        string[] rowClipActions = GraphicsOptionsShellScriptTemplates.RowClipActions;
+        string[] rowClipActions = GraphicsOptionsShellScriptTemplates.CreateRowClipActions(bootstrapSnapshot);
         if (GraphicsRowDepths.Length != rowClipActions.Length)
         {
             throw new InvalidOperationException("Graphics shell row depth/action arrays must be aligned.");
