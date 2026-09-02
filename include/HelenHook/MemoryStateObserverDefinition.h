@@ -41,7 +41,7 @@ namespace helen
         std::vector<int> AddressMatchValues;
         /** @brief Raw-to-config mappings that translate observed state codes into Helen-owned config values. */
         std::vector<MemoryStateObserverMapEntryDefinition> Mappings;
-        /** @brief Raw request-to-success-response mappings written only after the associated config update completes successfully. */
+        /** @brief Raw request-to-success-response mappings whose response is written only after the associated config update and optional follow-up command both succeed. */
         std::vector<MemoryStateObserverMapEntryDefinition> AcknowledgementMappings;
         /** @brief Raw response value written when the associated config or command update fails. */
         std::optional<int> FailureResponseValue;

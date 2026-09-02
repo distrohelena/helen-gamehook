@@ -121,13 +121,23 @@ namespace
      */
     std::string ReplaceObserverManifestText(std::string text, std::string_view source, std::string_view replacement)
     {
-        const std::size_t position = text.find(source);
-        if (position == std::string::npos)
+        if (source.empty())
         {
-            throw std::runtime_error("Observer manifest test fragment was not found.");
+            throw std::runtime_error("Observer manifest test fragment must occur exactly once; the fragment is empty.");
         }
 
-        text.replace(position, source.size(), replacement);
+        const std::size_t first_position = text.find(source);
+        if (first_position == std::string::npos)
+        {
+            throw std::runtime_error("Observer manifest test fragment must occur exactly once; it was not found.");
+        }
+
+        if (text.find(source, first_position + 1) != std::string::npos)
+        {
+            throw std::runtime_error("Observer manifest test fragment must occur exactly once; it occurred more than once.");
+        }
+
+        text.replace(first_position, source.size(), replacement);
         return text;
     }
 
@@ -996,8 +1006,12 @@ void RunPackRepositoryTests()
 
         const std::string acknowledgement_input_without_mapping_hooks = ReplaceObserverManifestText(
             transactional_observer_hooks,
-            "\"match\": 4320,\n          \"value\": 0",
-            "\"match\": 4320,\n          \"value\": \"not-an-integer\"");
+            R"(        {
+          "match": 4320,
+          "value": 0
+        },
+)",
+            "");
         WriteObserverPackFixture(
             packs_root,
             "observer-ack-input-without-mapping-pack",
