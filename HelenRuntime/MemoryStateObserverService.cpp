@@ -588,6 +588,91 @@ namespace helen
         }
     }
 
+    void MemoryStateObserverService::ReconcilePendingTransaction(
+        std::size_t observer_index,
+        const std::optional<std::uintptr_t>& resolved_address,
+        const std::optional<int>& raw_value)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const bool pending_pair_present =
+            pending_transaction_requests_[observer_index].has_value() ||
+            pending_transaction_addresses_[observer_index].has_value();
+        const bool current_pair_matches =
+            resolved_address.has_value() &&
+            raw_value.has_value() &&
+            pending_transaction_requests_[observer_index].has_value() &&
+            pending_transaction_addresses_[observer_index].has_value() &&
+            *pending_transaction_requests_[observer_index] == *raw_value &&
+            *pending_transaction_addresses_[observer_index] == *resolved_address;
+        if (pending_pair_present && !current_pair_matches)
+        {
+            pending_transaction_requests_[observer_index].reset();
+            pending_transaction_addresses_[observer_index].reset();
+        }
+    }
+
+    bool MemoryStateObserverService::WriteReadFailureResponse(
+        std::size_t observer_index,
+        const MemoryStateObserverDefinition& definition,
+        std::uintptr_t resolved_address,
+        int raw_value,
+        const char* reason)
+    {
+        if (!definition.FailureResponseValue.has_value())
+        {
+            Logf(
+                L"[observer] response failed id=%hs key=%hs raw=%d reason=%hs-failure-response-missing",
+                definition.Id.c_str(),
+                definition.TargetConfigKey.c_str(),
+                raw_value,
+                reason);
+            return false;
+        }
+
+        std::uintptr_t response_address = 0;
+        if (!TryApplyOffset(resolved_address, definition.ValueOffset, response_address))
+        {
+            Logf(
+                L"[observer] response failed id=%hs key=%hs raw=%d response=%d reason=%hs-address-overflow",
+                definition.Id.c_str(),
+                definition.TargetConfigKey.c_str(),
+                raw_value,
+                *definition.FailureResponseValue,
+                reason);
+            return false;
+        }
+
+        if (!TryWriteInt32(response_address, *definition.FailureResponseValue))
+        {
+            Logf(
+                L"[observer] response failed id=%hs key=%hs raw=%d response=%d address=0x%08llX reason=%hs-write-failed",
+                definition.Id.c_str(),
+                definition.TargetConfigKey.c_str(),
+                raw_value,
+                *definition.FailureResponseValue,
+                static_cast<unsigned long long>(response_address),
+                reason);
+            return false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            debug_views_[observer_index].LastRawValue = definition.FailureResponseValue;
+            pending_transaction_requests_[observer_index].reset();
+            pending_transaction_addresses_[observer_index].reset();
+        }
+
+        Logf(
+            L"[observer] response failed handled id=%hs key=%hs raw=%d response=%d address=0x%08llX reason=%hs",
+            definition.Id.c_str(),
+            definition.TargetConfigKey.c_str(),
+            raw_value,
+            *definition.FailureResponseValue,
+            static_cast<unsigned long long>(response_address),
+            reason);
+        return true;
+    }
+
     bool MemoryStateObserverService::PollObserver(std::size_t observer_index)
     {
         const MemoryStateObserverDefinition& definition = definitions_[observer_index];
@@ -722,6 +807,8 @@ namespace helen
             }
         }
 
+        ReconcilePendingTransaction(observer_index, resolved_address, raw_value);
+
         bool response_written = false;
         if (resolved_address.has_value() &&
             raw_value.has_value() &&
@@ -734,7 +821,41 @@ namespace helen
                 return false;
             }
 
-            const std::optional<int> config_value = config_value_callback_(definition.TargetConfigKey);
+            std::optional<int> config_value;
+            try
+            {
+                config_value = config_value_callback_(definition.TargetConfigKey);
+            }
+            catch (const std::exception& exception)
+            {
+                Logf(
+                    L"[observer] response failed id=%hs key=%hs raw=%d reason=config-callback-exception message=%hs",
+                    definition.Id.c_str(),
+                    definition.TargetConfigKey.c_str(),
+                    *raw_value,
+                    exception.what());
+                return WriteReadFailureResponse(
+                    observer_index,
+                    definition,
+                    *resolved_address,
+                    *raw_value,
+                    "config-callback-exception");
+            }
+            catch (...)
+            {
+                Logf(
+                    L"[observer] response failed id=%hs key=%hs raw=%d reason=config-callback-exception-unknown",
+                    definition.Id.c_str(),
+                    definition.TargetConfigKey.c_str(),
+                    *raw_value);
+                return WriteReadFailureResponse(
+                    observer_index,
+                    definition,
+                    *resolved_address,
+                    *raw_value,
+                    "config-callback-exception-unknown");
+            }
+
             if (!config_value.has_value())
             {
                 Logf(
@@ -780,22 +901,6 @@ namespace helen
             std::lock_guard<std::mutex> lock(mutex_);
             MemoryStateObserverDebugView& debug_view = debug_views_[observer_index];
             debug_view.CachedAddress = resolved_address.value_or(0);
-            if (!resolved_address.has_value())
-            {
-                pending_transaction_requests_[observer_index].reset();
-                pending_transaction_addresses_[observer_index].reset();
-            }
-            else if (is_transactional &&
-                     (!mapped_value.has_value() ||
-                      !raw_value.has_value() ||
-                      (pending_transaction_requests_[observer_index].has_value() &&
-                       (!pending_transaction_addresses_[observer_index].has_value() ||
-                        *pending_transaction_requests_[observer_index] != *raw_value ||
-                        *pending_transaction_addresses_[observer_index] != *resolved_address))))
-            {
-                pending_transaction_requests_[observer_index].reset();
-                pending_transaction_addresses_[observer_index].reset();
-            }
 
             if (mapped_value.has_value() && !response_written)
             {

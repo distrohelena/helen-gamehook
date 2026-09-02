@@ -121,6 +121,35 @@ namespace helen
          */
         void ClearCachedAddress(std::size_t observer_index);
 
+        /**
+         * @brief Reconciles a pending transactional request with the currently resolved raw value and carrier address.
+         * @param observer_index Zero-based observer index whose pending transaction should be compared.
+         * @param resolved_address Current structurally validated carrier address, or no value when resolution failed.
+         * @param raw_value Current raw carrier value, or no value when it could not be read.
+         * @remarks The caller must not hold mutex_; a pending pair is retained only while both raw value and carrier address remain unchanged.
+         */
+        void ReconcilePendingTransaction(
+            std::size_t observer_index,
+            const std::optional<std::uintptr_t>& resolved_address,
+            const std::optional<int>& raw_value);
+
+        /**
+         * @brief Attempts to acknowledge a transactional read-response callback failure with the declared failure response.
+         * @param observer_index Zero-based observer index whose debug and pending state should be updated after a successful write.
+         * @param definition Observer definition declaring the failure response and value offset.
+         * @param resolved_address Structurally validated carrier base address receiving the failure response.
+         * @param raw_value Raw read request that caused the callback failure.
+         * @param reason Stable diagnostic reason recorded in the handled-failure log.
+         * @return True only when the declared failure response was written successfully; otherwise false.
+         * @remarks The caller must not hold mutex_; pending state and LastRawValue change only after the native write succeeds.
+         */
+        bool WriteReadFailureResponse(
+            std::size_t observer_index,
+            const MemoryStateObserverDefinition& definition,
+            std::uintptr_t resolved_address,
+            int raw_value,
+            const char* reason);
+
         /** @brief Declared observers evaluated by this service. */
         std::vector<MemoryStateObserverDefinition> definitions_;
         /** @brief Live debug state that mirrors the declared observer order. */

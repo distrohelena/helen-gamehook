@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -371,6 +372,7 @@ namespace
         }
         catch (...)
         {
+            const std::exception_ptr original_exception = std::current_exception();
             if (allocation != nullptr)
             {
                 MEMORY_BASIC_INFORMATION memory_info{};
@@ -382,8 +384,19 @@ namespace
 
             std::error_code cleanup_error;
             std::filesystem::remove_all(graphics_test_directory, cleanup_error);
+            if (cleanup_error)
+            {
+                try
+                {
+                    std::rethrow_exception(original_exception);
+                }
+                catch (...)
+                {
+                    std::throw_with_nested(std::runtime_error("Failed to clean up Task3Transactions fixture: " + cleanup_error.message()));
+                }
+            }
 
-            throw;
+            std::rethrow_exception(original_exception);
         }
     }
 }
