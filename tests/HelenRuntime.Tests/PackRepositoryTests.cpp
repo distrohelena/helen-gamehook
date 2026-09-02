@@ -996,8 +996,8 @@ void RunPackRepositoryTests()
 
         const std::string acknowledgement_input_without_mapping_hooks = ReplaceObserverManifestText(
             transactional_observer_hooks,
-            "\"match\": 4320,\n          \"value\": 4330",
-            "\"match\": 4340,\n          \"value\": 4330");
+            "\"match\": 4320,\n          \"value\": 0",
+            "\"match\": 4320,\n          \"value\": \"not-an-integer\"");
         WriteObserverPackFixture(
             packs_root,
             "observer-ack-input-without-mapping-pack",
@@ -1020,6 +1020,58 @@ void RunPackRepositoryTests()
             observer_hash,
             response_mappings_without_request_hooks);
 
+        const std::string wrong_type_command_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            "\"id\": \"graphicsObserverMsaa\",\n",
+            "\"id\": \"graphicsObserverMsaa\",\n      \"command\": 17,\n");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-wrong-command-type-pack",
+            "observer-wrong-command-type-build",
+            "ObserverWrongCommandTypeGame.exe",
+            5011,
+            observer_hash,
+            wrong_type_command_hooks);
+
+        const std::string wrong_type_address_group_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            "\"addressGroup\": \"batmanFrontendControlType\"",
+            "\"addressGroup\": 17");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-wrong-address-group-type-pack",
+            "observer-wrong-address-group-type-build",
+            "ObserverWrongAddressGroupTypeGame.exe",
+            5012,
+            observer_hash,
+            wrong_type_address_group_hooks);
+
+        const std::string wrong_type_response_request_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            "\"responseRequestValue\": 4300",
+            "\"responseRequestValue\": \"4300\"");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-wrong-response-request-type-pack",
+            "observer-wrong-response-request-type-build",
+            "ObserverWrongResponseRequestTypeGame.exe",
+            5013,
+            observer_hash,
+            wrong_type_response_request_hooks);
+
+        const std::string wrong_type_failure_response_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            "\"failureResponseValue\": 4399",
+            "\"failureResponseValue\": \"4399\"");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-wrong-failure-response-type-pack",
+            "observer-wrong-failure-response-type-build",
+            "ObserverWrongFailureResponseTypeGame.exe",
+            5014,
+            observer_hash,
+            wrong_type_failure_response_hooks);
+
         const std::string_view rejected_observer_executable_names[] = {
             "ObserverEmptyAddressGroupGame.exe",
             "ObserverAckWithoutFailureGame.exe",
@@ -1029,9 +1081,27 @@ void RunPackRepositoryTests()
             "ObserverFailureResponseAbsentGame.exe",
             "ObserverDuplicateAckInputGame.exe",
             "ObserverAckInputWithoutMappingGame.exe",
-            "ObserverResponseWithoutRequestGame.exe"
+            "ObserverResponseWithoutRequestGame.exe",
+            "ObserverWrongCommandTypeGame.exe",
+            "ObserverWrongAddressGroupTypeGame.exe",
+            "ObserverWrongResponseRequestTypeGame.exe",
+            "ObserverWrongFailureResponseTypeGame.exe"
         };
-        const std::uintmax_t rejected_observer_file_sizes[] = { 5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009, 5010 };
+        const std::uintmax_t rejected_observer_file_sizes[] = {
+            5002,
+            5003,
+            5004,
+            5005,
+            5006,
+            5007,
+            5008,
+            5009,
+            5010,
+            5011,
+            5012,
+            5013,
+            5014
+        };
         const char* rejected_observer_messages[] = {
             "Pack repository accepted an observer with an empty address group.",
             "Pack repository accepted acknowledgement mappings without a failure response.",
@@ -1041,7 +1111,11 @@ void RunPackRepositoryTests()
             "Pack repository accepted a failure response absent from address matches.",
             "Pack repository accepted duplicate acknowledgement inputs.",
             "Pack repository accepted an acknowledgement input with no config mapping.",
-            "Pack repository accepted response mappings without a response request value."
+            "Pack repository accepted response mappings without a response request value.",
+            "Pack repository accepted a command with the wrong JSON type.",
+            "Pack repository accepted an address group with the wrong JSON type.",
+            "Pack repository accepted a response request with the wrong JSON type.",
+            "Pack repository accepted a failure response with the wrong JSON type."
         };
         for (std::size_t index = 0; index < std::size(rejected_observer_executable_names); ++index)
         {

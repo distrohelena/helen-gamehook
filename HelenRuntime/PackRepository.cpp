@@ -1094,7 +1094,16 @@ namespace
     {
         definition.Id = TryGetString(FindObjectMember(value, "id")).value_or("");
         definition.TargetConfigKey = TryGetString(FindObjectMember(value, "targetConfigKey")).value_or("");
-        definition.CommandId = TryGetString(FindObjectMember(value, "command"));
+        const helen::JsonValue* command_value = FindObjectMember(value, "command");
+        if (command_value != nullptr)
+        {
+            definition.CommandId = TryGetString(command_value);
+            if (!definition.CommandId.has_value())
+            {
+                return false;
+            }
+        }
+
         const helen::JsonValue* address_group_value = FindObjectMember(value, "addressGroup");
         if (address_group_value != nullptr)
         {
