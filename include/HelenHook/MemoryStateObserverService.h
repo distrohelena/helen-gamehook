@@ -23,20 +23,22 @@ namespace helen
     {
     public:
         /**
-         * @brief Receives mapped observer updates detected by the service.
+         * @brief Receives mapped observer updates detected by the service synchronously inside the serialized poll pass.
+         * @remarks The implementation must not call PollOnce(), Start(), Stop(), or another observer lifecycle method on the same service from this callback because poll_mutex_ remains held until the callback returns.
          */
         using UpdateCallback = std::function<void(const MemoryStateObserverUpdate&)>;
 
         /**
-         * @brief Resolves the current integer value for a registered config key during a carrier response.
+         * @brief Resolves the current integer value for a registered config key synchronously during a serialized carrier response.
+         * @remarks The implementation must not call PollOnce(), Start(), Stop(), or another observer lifecycle method on the same service from this callback because poll_mutex_ remains held until the callback returns.
          */
         using ConfigValueCallback = std::function<std::optional<int>(const std::string&)>;
 
         /**
          * @brief Creates one observer service bound to the supplied observer definitions and update callback.
          * @param definitions Declarative observers that should be evaluated by the service.
-         * @param update_callback Callback invoked whenever an observer emits a new mapped value.
-         * @param config_value_callback Optional callback used by request-response observers to read current config.
+         * @param update_callback Callback invoked synchronously whenever an observer emits a new mapped value; it must not re-enter this service through PollOnce(), Start(), Stop(), or another observer lifecycle method.
+         * @param config_value_callback Optional callback used synchronously by request-response observers to read current config; when supplied, it must not re-enter this service through PollOnce(), Start(), Stop(), or another observer lifecycle method.
          */
         MemoryStateObserverService(
             std::vector<MemoryStateObserverDefinition> definitions,
@@ -62,6 +64,7 @@ namespace helen
         /**
          * @brief Polls every observer immediately, bypassing background timer throttling.
          * @return True when the poll completes successfully; otherwise false.
+         * @remarks The complete pass, including ConfigValueCallback and UpdateCallback execution, holds poll_mutex_. Do not call PollOnce() from either callback on this same service.
          */
         bool PollOnce();
 
@@ -78,8 +81,9 @@ namespace helen
         void RunWorkerLoop();
 
         /**
-         * @brief Polls only the observers whose polling interval has elapsed.
+         * @brief Polls only the observers whose polling interval has elapsed while holding the pass serialization lock.
          * @return True when the timed poll completes successfully; otherwise false.
+         * @remarks poll_mutex_ remains held for the complete due-observer pass, including response and update callbacks, so callbacks must not re-enter this service.
          */
         bool PollDueObservers();
 
@@ -130,7 +134,7 @@ namespace helen
         ConfigValueCallback config_value_callback_;
         /** @brief Protects debug views, cached addresses, and thread start-stop state. */
         mutable std::mutex mutex_;
-        /** @brief Serializes complete observer poll passes so manual and worker polling cannot overlap state validation, responses, or callbacks. */
+        /** @brief Serializes complete observer poll passes so manual and worker polling cannot overlap state validation, responses, or callbacks; it remains held through both callback types and therefore requires callbacks to avoid re-entering this service. */
         std::mutex poll_mutex_;
         /** @brief Coordinates timed wakeups and stop requests for the background worker thread. */
         std::condition_variable stop_condition_;
