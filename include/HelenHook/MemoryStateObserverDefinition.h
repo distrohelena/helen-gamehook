@@ -35,10 +35,16 @@ namespace helen
         std::optional<std::string> CommandId;
         /** @brief Validation checks that a candidate state block must satisfy before it is accepted. */
         std::vector<MemoryStateObserverCheckDefinition> Checks;
+        /** @brief Optional compatible observer address reuse identifier that lets related observers share a resolved carrier address. */
+        std::optional<std::string> AddressGroup;
         /** @brief Raw values that identify this observer's carrier address; an empty list preserves legacy mapping-based recognition. */
         std::vector<int> AddressMatchValues;
         /** @brief Raw-to-config mappings that translate observed state codes into Helen-owned config values. */
         std::vector<MemoryStateObserverMapEntryDefinition> Mappings;
+        /** @brief Raw request-to-success-response mappings written only after the associated config update completes successfully. */
+        std::vector<MemoryStateObserverMapEntryDefinition> AcknowledgementMappings;
+        /** @brief Raw response value written when the associated config or command update fails. */
+        std::optional<int> FailureResponseValue;
         /** @brief Optional raw request code that asks HelenHook to answer through the resolved carrier value address. */
         std::optional<int> ResponseRequestValue;
         /** @brief Config-to-raw mappings used to encode a requested current config value back into process memory. */

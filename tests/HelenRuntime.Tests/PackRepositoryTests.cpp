@@ -5,10 +5,12 @@
 #include <HelenHook/PackRepository.h>
 #include <HelenHook/VirtualFileSourceKind.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <string>
 #include <stdexcept>
 #include <string_view>
 
@@ -55,6 +57,78 @@ namespace
     {
         const std::filesystem::path source_path(__FILE__);
         return source_path.parent_path().parent_path().parent_path() / "games" / "HelenBatmanAA" / "helengamehook" / "packs";
+    }
+
+    /**
+     * @brief Creates a minimal split-pack fixture whose hooks manifest contains one observer scenario.
+     * @param packs_root Root directory under which the synthetic pack directory should be created.
+     * @param pack_id Stable identifier written to the pack manifest and used for the fixture directory.
+     * @param build_id Stable identifier written to the build manifest and used for the fixture directory.
+     * @param executable_name Executable name that the synthetic build declares and matches.
+     * @param file_size Executable size used as the synthetic build fingerprint.
+     * @param sha256 Executable SHA-256 text used as the synthetic build fingerprint.
+     * @param hooks_json Complete hooks manifest payload to write for the synthetic build.
+     */
+    void WriteObserverPackFixture(
+        const std::filesystem::path& packs_root,
+        std::string_view pack_id,
+        std::string_view build_id,
+        std::string_view executable_name,
+        std::uintmax_t file_size,
+        std::string_view sha256,
+        std::string_view hooks_json)
+    {
+        const std::filesystem::path build_root = packs_root / std::string(pack_id) / "builds" / std::string(build_id);
+        std::filesystem::create_directories(build_root);
+
+        const std::string pack_json =
+            "{\n"
+            "  \"schemaVersion\": 1,\n"
+            "  \"id\": \"" + std::string(pack_id) + "\",\n"
+            "  \"name\": \"Observer Protocol Test Pack\",\n"
+            "  \"targets\": [\n"
+            "    {\n"
+            "      \"executables\": [\n"
+            "        \"" + std::string(executable_name) + "\"\n"
+            "      ]\n"
+            "    }\n"
+            "  ],\n"
+            "  \"builds\": [\n"
+            "    \"" + std::string(build_id) + "\"\n"
+            "  ]\n"
+            "}";
+        WriteAllText(build_root.parent_path().parent_path() / "pack.json", pack_json);
+
+        const std::string build_json =
+            "{\n"
+            "  \"id\": \"" + std::string(build_id) + "\",\n"
+            "  \"executable\": \"" + std::string(executable_name) + "\",\n"
+            "  \"match\": {\n"
+            "    \"fileSize\": " + std::to_string(file_size) + ",\n"
+            "    \"sha256\": \"" + std::string(sha256) + "\"\n"
+            "  }\n"
+            "}";
+        WriteAllText(build_root / "build.json", build_json);
+        WriteAllText(build_root / "hooks.json", hooks_json);
+    }
+
+    /**
+     * @brief Replaces one required text fragment in a synthetic observer manifest.
+     * @param text Manifest text that should be copied and modified.
+     * @param source Exact fragment that must occur once in the manifest text.
+     * @param replacement Text that should replace the source fragment.
+     * @return Modified manifest text.
+     */
+    std::string ReplaceObserverManifestText(std::string text, std::string_view source, std::string_view replacement)
+    {
+        const std::size_t position = text.find(source);
+        if (position == std::string::npos)
+        {
+            throw std::runtime_error("Observer manifest test fragment was not found.");
+        }
+
+        text.replace(position, source.size(), replacement);
+        return text;
     }
 
 }
@@ -663,6 +737,321 @@ void RunPackRepositoryTests()
     }
   ]
 })");
+
+        const std::string transactional_observer_hooks = R"({
+  "stateObservers": [
+    {
+      "id": "graphicsObserverMsaa",
+      "addressGroup": "batmanFrontendControlType",
+      "scanStartAddress": "0x10000000",
+      "scanEndAddress": "0x30000000",
+      "scanStride": 4,
+      "valueOffset": 12,
+      "pollIntervalMs": 50,
+      "targetConfigKey": "msaa",
+      "checks": [
+        {
+          "comparison": "equals-constant",
+          "offset": 0,
+          "expectedValue": 4102
+        }
+      ],
+      "addressMatchValues": [
+        4300,
+        4310,
+        4311,
+        4312,
+        4313,
+        4314,
+        4320,
+        4321,
+        4322,
+        4323,
+        4324,
+        4330,
+        4331,
+        4332,
+        4333,
+        4334,
+        4399
+      ],
+      "mappings": [
+        {
+          "match": 4320,
+          "value": 0
+        },
+        {
+          "match": 4321,
+          "value": 1
+        },
+        {
+          "match": 4322,
+          "value": 2
+        },
+        {
+          "match": 4323,
+          "value": 3
+        },
+        {
+          "match": 4324,
+          "value": 5
+        }
+      ],
+      "responseRequestValue": 4300,
+      "responseMappings": [
+        {
+          "match": 0,
+          "value": 4310
+        },
+        {
+          "match": 1,
+          "value": 4311
+        },
+        {
+          "match": 2,
+          "value": 4312
+        },
+        {
+          "match": 3,
+          "value": 4313
+        },
+        {
+          "match": 5,
+          "value": 4314
+        }
+      ],
+      "acknowledgementMappings": [
+        {
+          "match": 4320,
+          "value": 4330
+        },
+        {
+          "match": 4321,
+          "value": 4331
+        },
+        {
+          "match": 4322,
+          "value": 4332
+        },
+        {
+          "match": 4323,
+          "value": 4333
+        },
+        {
+          "match": 4324,
+          "value": 4334
+        }
+      ],
+      "failureResponseValue": 4399
+    }
+  ]
+})";
+        const std::string observer_hash(64, 'a');
+        WriteObserverPackFixture(
+            packs_root,
+            "transactional-observer-pack",
+            "transactional-observer-build",
+            "TransactionalObserverGame.exe",
+            5001,
+            observer_hash,
+            transactional_observer_hooks);
+
+        const std::optional<helen::LoadedBuildPack> loaded_transactional_observer_pack = repository.LoadForExecutable(
+            packs_root,
+            "TransactionalObserverGame.exe",
+            5001,
+            observer_hash);
+        Expect(loaded_transactional_observer_pack.has_value(), "Pack repository rejected a valid grouped transactional observer.");
+        Expect(loaded_transactional_observer_pack->Build.StateObservers.size() == 1, "Transactional observer count mismatch.");
+        const helen::MemoryStateObserverDefinition& transactional_observer = loaded_transactional_observer_pack->Build.StateObservers[0];
+        Expect(
+            transactional_observer.AddressGroup.has_value() && *transactional_observer.AddressGroup == "batmanFrontendControlType",
+            "Transactional observer address group mismatch.");
+        const int expected_acknowledgement_matches[] = { 4320, 4321, 4322, 4323, 4324 };
+        const int expected_acknowledgement_values[] = { 4330, 4331, 4332, 4333, 4334 };
+        Expect(transactional_observer.AcknowledgementMappings.size() == std::size(expected_acknowledgement_matches), "Transactional acknowledgement mapping count mismatch.");
+        for (std::size_t index = 0; index < std::size(expected_acknowledgement_matches); ++index)
+        {
+            Expect(
+                transactional_observer.AcknowledgementMappings[index].Match == expected_acknowledgement_matches[index] &&
+                    transactional_observer.AcknowledgementMappings[index].Value == expected_acknowledgement_values[index],
+                "Transactional acknowledgement mapping mismatch.");
+        }
+        Expect(
+            transactional_observer.FailureResponseValue.has_value() && *transactional_observer.FailureResponseValue == 4399,
+            "Transactional observer failure response mismatch.");
+
+        const std::string empty_address_group_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            "\"addressGroup\": \"batmanFrontendControlType\"",
+            "\"addressGroup\": \"\"");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-empty-address-group-pack",
+            "observer-empty-address-group-build",
+            "ObserverEmptyAddressGroupGame.exe",
+            5002,
+            observer_hash,
+            empty_address_group_hooks);
+
+        const std::string acknowledgement_without_failure_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            ",\n      \"failureResponseValue\": 4399",
+            "");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-ack-without-failure-pack",
+            "observer-ack-without-failure-build",
+            "ObserverAckWithoutFailureGame.exe",
+            5003,
+            observer_hash,
+            acknowledgement_without_failure_hooks);
+
+        const std::string failure_without_acknowledgement_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            R"(,
+      "acknowledgementMappings": [
+        {
+          "match": 4320,
+          "value": 4330
+        },
+        {
+          "match": 4321,
+          "value": 4331
+        },
+        {
+          "match": 4322,
+          "value": 4332
+        },
+        {
+          "match": 4323,
+          "value": 4333
+        },
+        {
+          "match": 4324,
+          "value": 4334
+        }
+      ])",
+            "");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-failure-without-ack-pack",
+            "observer-failure-without-ack-build",
+            "ObserverFailureWithoutAckGame.exe",
+            5004,
+            observer_hash,
+            failure_without_acknowledgement_hooks);
+
+        const std::string acknowledgement_input_absent_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            "\"match\": 4320,\n          \"value\": 4330",
+            "\"match\": 4340,\n          \"value\": 4330");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-ack-input-absent-pack",
+            "observer-ack-input-absent-build",
+            "ObserverAckInputAbsentGame.exe",
+            5005,
+            observer_hash,
+            acknowledgement_input_absent_hooks);
+
+        const std::string acknowledgement_output_absent_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            "\"match\": 4320,\n          \"value\": 4330",
+            "\"match\": 4320,\n          \"value\": 4340");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-ack-output-absent-pack",
+            "observer-ack-output-absent-build",
+            "ObserverAckOutputAbsentGame.exe",
+            5006,
+            observer_hash,
+            acknowledgement_output_absent_hooks);
+
+        const std::string failure_response_absent_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            "\"failureResponseValue\": 4399",
+            "\"failureResponseValue\": 4400");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-failure-response-absent-pack",
+            "observer-failure-response-absent-build",
+            "ObserverFailureResponseAbsentGame.exe",
+            5007,
+            observer_hash,
+            failure_response_absent_hooks);
+
+        const std::string duplicate_acknowledgement_input_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            "\"match\": 4321,\n          \"value\": 4331",
+            "\"match\": 4320,\n          \"value\": 4331");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-duplicate-ack-input-pack",
+            "observer-duplicate-ack-input-build",
+            "ObserverDuplicateAckInputGame.exe",
+            5008,
+            observer_hash,
+            duplicate_acknowledgement_input_hooks);
+
+        const std::string acknowledgement_input_without_mapping_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            "\"match\": 4320,\n          \"value\": 4330",
+            "\"match\": 4340,\n          \"value\": 4330");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-ack-input-without-mapping-pack",
+            "observer-ack-input-without-mapping-build",
+            "ObserverAckInputWithoutMappingGame.exe",
+            5009,
+            observer_hash,
+            acknowledgement_input_without_mapping_hooks);
+
+        const std::string response_mappings_without_request_hooks = ReplaceObserverManifestText(
+            transactional_observer_hooks,
+            "      \"responseRequestValue\": 4300,\n",
+            "");
+        WriteObserverPackFixture(
+            packs_root,
+            "observer-response-without-request-pack",
+            "observer-response-without-request-build",
+            "ObserverResponseWithoutRequestGame.exe",
+            5010,
+            observer_hash,
+            response_mappings_without_request_hooks);
+
+        const std::string_view rejected_observer_executable_names[] = {
+            "ObserverEmptyAddressGroupGame.exe",
+            "ObserverAckWithoutFailureGame.exe",
+            "ObserverFailureWithoutAckGame.exe",
+            "ObserverAckInputAbsentGame.exe",
+            "ObserverAckOutputAbsentGame.exe",
+            "ObserverFailureResponseAbsentGame.exe",
+            "ObserverDuplicateAckInputGame.exe",
+            "ObserverAckInputWithoutMappingGame.exe",
+            "ObserverResponseWithoutRequestGame.exe"
+        };
+        const std::uintmax_t rejected_observer_file_sizes[] = { 5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009, 5010 };
+        const char* rejected_observer_messages[] = {
+            "Pack repository accepted an observer with an empty address group.",
+            "Pack repository accepted acknowledgement mappings without a failure response.",
+            "Pack repository accepted a failure response without acknowledgement mappings.",
+            "Pack repository accepted an acknowledgement input absent from mappings.",
+            "Pack repository accepted an acknowledgement output absent from address matches.",
+            "Pack repository accepted a failure response absent from address matches.",
+            "Pack repository accepted duplicate acknowledgement inputs.",
+            "Pack repository accepted an acknowledgement input with no config mapping.",
+            "Pack repository accepted response mappings without a response request value."
+        };
+        for (std::size_t index = 0; index < std::size(rejected_observer_executable_names); ++index)
+        {
+            const std::optional<helen::LoadedBuildPack> rejected_pack = repository.LoadForExecutable(
+                packs_root,
+                std::string(rejected_observer_executable_names[index]),
+                rejected_observer_file_sizes[index],
+                observer_hash);
+            Expect(!rejected_pack.has_value(), rejected_observer_messages[index]);
+        }
 
         const std::optional<helen::LoadedBuildPack> loaded_valid_pack = repository.LoadForExecutable(
             packs_root,

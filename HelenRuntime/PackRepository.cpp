@@ -1095,6 +1095,16 @@ namespace
         definition.Id = TryGetString(FindObjectMember(value, "id")).value_or("");
         definition.TargetConfigKey = TryGetString(FindObjectMember(value, "targetConfigKey")).value_or("");
         definition.CommandId = TryGetString(FindObjectMember(value, "command"));
+        const helen::JsonValue* address_group_value = FindObjectMember(value, "addressGroup");
+        if (address_group_value != nullptr)
+        {
+            definition.AddressGroup = TryGetString(address_group_value);
+            if (!definition.AddressGroup.has_value() || definition.AddressGroup->empty())
+            {
+                return false;
+            }
+        }
+
         definition.ScanStartAddress = TryGetUnsignedAddressValue(FindObjectMember(value, "scanStartAddress")).value_or(0);
         definition.ScanEndAddress = TryGetUnsignedAddressValue(FindObjectMember(value, "scanEndAddress")).value_or(0);
 
@@ -1182,7 +1192,16 @@ namespace
             }
         }
 
-        definition.ResponseRequestValue = TryGetInt(FindObjectMember(value, "responseRequestValue"));
+        const helen::JsonValue* response_request_value = FindObjectMember(value, "responseRequestValue");
+        if (response_request_value != nullptr)
+        {
+            definition.ResponseRequestValue = TryGetInt(response_request_value);
+            if (!definition.ResponseRequestValue.has_value())
+            {
+                return false;
+            }
+        }
+
         const helen::JsonValue* response_mappings_value = FindObjectMember(value, "responseMappings");
         if (definition.ResponseRequestValue.has_value())
         {
@@ -1211,6 +1230,71 @@ namespace
         else if (response_mappings_value != nullptr)
         {
             return false;
+        }
+
+        const helen::JsonValue* acknowledgement_mappings_value = FindObjectMember(value, "acknowledgementMappings");
+        const helen::JsonValue* failure_response_value = FindObjectMember(value, "failureResponseValue");
+        if ((acknowledgement_mappings_value == nullptr) != (failure_response_value == nullptr))
+        {
+            return false;
+        }
+
+        if (failure_response_value != nullptr)
+        {
+            definition.FailureResponseValue = TryGetInt(failure_response_value);
+            if (!definition.FailureResponseValue.has_value() ||
+                std::find(
+                    definition.AddressMatchValues.begin(),
+                    definition.AddressMatchValues.end(),
+                    *definition.FailureResponseValue) == definition.AddressMatchValues.end())
+            {
+                return false;
+            }
+        }
+
+        if (acknowledgement_mappings_value != nullptr)
+        {
+            const helen::JsonValue::Array* acknowledgement_mappings = acknowledgement_mappings_value->AsArray();
+            if (acknowledgement_mappings == nullptr || acknowledgement_mappings->empty())
+            {
+                return false;
+            }
+
+            std::set<int> acknowledgement_matches;
+            for (const helen::JsonValue& acknowledgement_mapping_value : *acknowledgement_mappings)
+            {
+                helen::MemoryStateObserverMapEntryDefinition acknowledgement_mapping;
+                if (!ParseStateObserverMapping(acknowledgement_mapping_value, acknowledgement_mapping))
+                {
+                    return false;
+                }
+
+                if (!acknowledgement_matches.emplace(acknowledgement_mapping.Match).second)
+                {
+                    return false;
+                }
+
+                bool acknowledgement_input_is_mapped = false;
+                for (const helen::MemoryStateObserverMapEntryDefinition& mapping : definition.Mappings)
+                {
+                    if (mapping.Match == acknowledgement_mapping.Match)
+                    {
+                        acknowledgement_input_is_mapped = true;
+                        break;
+                    }
+                }
+
+                if (!acknowledgement_input_is_mapped ||
+                    std::find(
+                        definition.AddressMatchValues.begin(),
+                        definition.AddressMatchValues.end(),
+                        acknowledgement_mapping.Value) == definition.AddressMatchValues.end())
+                {
+                    return false;
+                }
+
+                definition.AcknowledgementMappings.push_back(std::move(acknowledgement_mapping));
+            }
         }
 
         return true;
