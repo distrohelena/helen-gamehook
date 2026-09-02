@@ -615,10 +615,26 @@ $applyObserver = $hooks.stateObservers[4]
 $rollbackObserver = $hooks.stateObservers[5]
 if ($applyObserver.id -cne 'graphicsObserverApplySignal' -or $applyObserver.targetConfigKey -cne 'applySignal' -or $applyObserver.command -cne 'applyBatmanGraphicsDraft') { throw 'hooks.json apply observer identity drifted.' }
 if ($rollbackObserver.id -cne 'graphicsObserverRollbackSignal' -or $rollbackObserver.targetConfigKey -cne 'rollbackSignal' -or $rollbackObserver.command -cne 'loadBatmanGraphicsDraftIntoConfig') { throw 'hooks.json rollback observer identity drifted.' }
-if ($applyObserver.mappings[0].match -ne 4990 -or $applyObserver.mappings[0].value -ne 0 -or $applyObserver.mappings[1].match -ne 4991 -or $applyObserver.mappings[1].value -ne 1) { throw 'hooks.json apply mappings drifted.' }
-if ($applyObserver.acknowledgementMappings[0].match -ne 4990 -or $applyObserver.acknowledgementMappings[0].value -ne 4980 -or $applyObserver.acknowledgementMappings[1].match -ne 4991 -or $applyObserver.acknowledgementMappings[1].value -ne 4981 -or $applyObserver.failureResponseValue -ne 4989) { throw 'hooks.json apply acknowledgement/failure mappings drifted.' }
-if ($rollbackObserver.mappings[0].match -ne 4970 -or $rollbackObserver.mappings[0].value -ne 0 -or $rollbackObserver.mappings[1].match -ne 4971 -or $rollbackObserver.mappings[1].value -ne 1) { throw 'hooks.json rollback mappings drifted.' }
-if ($rollbackObserver.acknowledgementMappings[0].match -ne 4970 -or $rollbackObserver.acknowledgementMappings[0].value -ne 4960 -or $rollbackObserver.acknowledgementMappings[1].match -ne 4971 -or $rollbackObserver.acknowledgementMappings[1].value -ne 4961 -or $rollbackObserver.failureResponseValue -ne 4969) { throw 'hooks.json rollback acknowledgement/failure mappings drifted.' }
+$expectedApplyMappingMatches = @(4990, 4991)
+$expectedApplyMappingValues = @(0, 1)
+$expectedApplyAcknowledgementMatches = @(4990, 4991)
+$expectedApplyAcknowledgementValues = @(4980, 4981)
+$expectedRollbackMappingMatches = @(4970, 4971)
+$expectedRollbackMappingValues = @(0, 1)
+$expectedRollbackAcknowledgementMatches = @(4970, 4971)
+$expectedRollbackAcknowledgementValues = @(4960, 4961)
+if (@($applyObserver.mappings).Count -ne $expectedApplyMappingMatches.Count -or @($applyObserver.acknowledgementMappings).Count -ne $expectedApplyAcknowledgementMatches.Count) { throw 'hooks.json apply mapping counts drifted.' }
+for ($mappingIndex = 0; $mappingIndex -lt $expectedApplyMappingMatches.Count; $mappingIndex++) {
+    if ($applyObserver.mappings[$mappingIndex].match -ne $expectedApplyMappingMatches[$mappingIndex] -or $applyObserver.mappings[$mappingIndex].value -ne $expectedApplyMappingValues[$mappingIndex]) { throw 'hooks.json apply mappings drifted.' }
+    if ($applyObserver.acknowledgementMappings[$mappingIndex].match -ne $expectedApplyAcknowledgementMatches[$mappingIndex] -or $applyObserver.acknowledgementMappings[$mappingIndex].value -ne $expectedApplyAcknowledgementValues[$mappingIndex]) { throw 'hooks.json apply acknowledgement mappings drifted.' }
+}
+if ($applyObserver.failureResponseValue -ne 4989) { throw 'hooks.json apply failure response drifted.' }
+if (@($rollbackObserver.mappings).Count -ne $expectedRollbackMappingMatches.Count -or @($rollbackObserver.acknowledgementMappings).Count -ne $expectedRollbackAcknowledgementMatches.Count) { throw 'hooks.json rollback mapping counts drifted.' }
+for ($mappingIndex = 0; $mappingIndex -lt $expectedRollbackMappingMatches.Count; $mappingIndex++) {
+    if ($rollbackObserver.mappings[$mappingIndex].match -ne $expectedRollbackMappingMatches[$mappingIndex] -or $rollbackObserver.mappings[$mappingIndex].value -ne $expectedRollbackMappingValues[$mappingIndex]) { throw 'hooks.json rollback mappings drifted.' }
+    if ($rollbackObserver.acknowledgementMappings[$mappingIndex].match -ne $expectedRollbackAcknowledgementMatches[$mappingIndex] -or $rollbackObserver.acknowledgementMappings[$mappingIndex].value -ne $expectedRollbackAcknowledgementValues[$mappingIndex]) { throw 'hooks.json rollback acknowledgement mappings drifted.' }
+}
+if ($rollbackObserver.failureResponseValue -ne 4969) { throw 'hooks.json rollback failure response drifted.' }
 
 $files = Get-Content -LiteralPath $filesJsonPath -Raw | ConvertFrom-Json
 Assert-ExactProperties -Object $files -Names @('virtualFiles') -Context 'files.json'
