@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <optional>
 
@@ -348,6 +349,7 @@ namespace helen
         debug_views_.reserve(definitions_.size());
         last_poll_ticks_.assign(definitions_.size(), 0);
         pending_transaction_requests_.assign(definitions_.size(), std::nullopt);
+        pending_transaction_addresses_.assign(definitions_.size(), std::nullopt);
 
         for (const MemoryStateObserverDefinition& definition : definitions_)
         {
@@ -364,13 +366,29 @@ namespace helen
 
     bool MemoryStateObserverService::Start()
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (running_ || definitions_.empty())
+        std::thread completed_worker;
         {
-            if (definitions_.empty())
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (running_ || definitions_.empty())
             {
-                Logf(L"[observer] start skipped because no observers were declared.");
+                if (definitions_.empty())
+                {
+                    Logf(L"[observer] start skipped because no observers were declared.");
+                }
+                return true;
             }
+
+            completed_worker = std::move(worker_thread_);
+        }
+
+        if (completed_worker.joinable())
+        {
+            completed_worker.join();
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (running_)
+        {
             return true;
         }
 
@@ -383,20 +401,21 @@ namespace helen
 
     void MemoryStateObserverService::Stop()
     {
+        std::thread worker_to_join;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (!running_)
+            if (running_)
             {
-                return;
+                stop_requested_ = true;
             }
 
-            stop_requested_ = true;
+            worker_to_join = std::move(worker_thread_);
         }
 
         stop_condition_.notify_all();
-        if (worker_thread_.joinable())
+        if (worker_to_join.joinable())
         {
-            worker_thread_.join();
+            worker_to_join.join();
         }
     }
 
@@ -512,8 +531,27 @@ namespace helen
         const std::optional<std::string>& address_group = definitions_[observer_index].AddressGroup;
         if (!address_group.has_value())
         {
+            if (debug_views_[observer_index].CachedAddress != 0 && debug_views_[observer_index].CachedAddress != address)
+            {
+                pending_transaction_requests_[observer_index].reset();
+                pending_transaction_addresses_[observer_index].reset();
+            }
+
             debug_views_[observer_index].CachedAddress = address;
             return;
+        }
+
+        const auto previous_grouped_address = grouped_addresses_.find(*address_group);
+        if (previous_grouped_address != grouped_addresses_.end() && previous_grouped_address->second != address)
+        {
+            for (std::size_t matching_index = 0; matching_index < definitions_.size(); ++matching_index)
+            {
+                if (definitions_[matching_index].AddressGroup == address_group)
+                {
+                    pending_transaction_requests_[matching_index].reset();
+                    pending_transaction_addresses_[matching_index].reset();
+                }
+            }
         }
 
         grouped_addresses_[*address_group] = address;
@@ -533,6 +571,8 @@ namespace helen
         if (!address_group.has_value())
         {
             debug_views_[observer_index].CachedAddress = 0;
+            pending_transaction_requests_[observer_index].reset();
+            pending_transaction_addresses_[observer_index].reset();
             return;
         }
 
@@ -542,8 +582,17 @@ namespace helen
             if (definitions_[matching_index].AddressGroup == address_group)
             {
                 debug_views_[matching_index].CachedAddress = 0;
+                pending_transaction_requests_[matching_index].reset();
+                pending_transaction_addresses_[matching_index].reset();
             }
         }
+    }
+
+    void MemoryStateObserverService::ClearPendingTransactionRequest(std::size_t observer_index)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_transaction_requests_[observer_index].reset();
+        pending_transaction_addresses_[observer_index].reset();
     }
 
     bool MemoryStateObserverService::PollObserver(std::size_t observer_index)
@@ -741,14 +790,18 @@ namespace helen
             if (!resolved_address.has_value())
             {
                 pending_transaction_requests_[observer_index].reset();
+                pending_transaction_addresses_[observer_index].reset();
             }
             else if (is_transactional &&
                      (!mapped_value.has_value() ||
                       !raw_value.has_value() ||
                       (pending_transaction_requests_[observer_index].has_value() &&
-                       *pending_transaction_requests_[observer_index] != *raw_value)))
+                       (!pending_transaction_addresses_[observer_index].has_value() ||
+                        *pending_transaction_requests_[observer_index] != *raw_value ||
+                        *pending_transaction_addresses_[observer_index] != *resolved_address))))
             {
                 pending_transaction_requests_[observer_index].reset();
+                pending_transaction_addresses_[observer_index].reset();
             }
 
             if (mapped_value.has_value() && !response_written)
@@ -758,11 +811,14 @@ namespace helen
                 {
                     const bool same_pending_request =
                         pending_transaction_requests_[observer_index].has_value() &&
+                        pending_transaction_addresses_[observer_index].has_value() &&
                         raw_value.has_value() &&
-                        *pending_transaction_requests_[observer_index] == *raw_value;
+                        *pending_transaction_requests_[observer_index] == *raw_value &&
+                        *pending_transaction_addresses_[observer_index] == *resolved_address;
                     if (!same_pending_request)
                     {
                         pending_transaction_requests_[observer_index] = raw_value;
+                        pending_transaction_addresses_[observer_index] = resolved_address;
                         should_emit_update = true;
                     }
                 }
@@ -830,10 +886,34 @@ namespace helen
         bool update_succeeded = true;
         if (update_callback_)
         {
-            update_succeeded = update_callback_(*update);
+            try
+            {
+                update_succeeded = update_callback_(*update);
+            }
+            catch (const std::exception& exception)
+            {
+                Logf(
+                    L"[observer] update failed id=%hs raw=%d reason=callback-exception message=%hs",
+                    definition.Id.c_str(),
+                    update->RawValue,
+                    exception.what());
+                update_succeeded = false;
+            }
+            catch (...)
+            {
+                Logf(
+                    L"[observer] update failed id=%hs raw=%d reason=callback-exception-unknown",
+                    definition.Id.c_str(),
+                    update->RawValue);
+                update_succeeded = false;
+            }
         }
         else if (is_transactional)
         {
+            Logf(
+                L"[observer] update failed id=%hs raw=%d reason=callback-missing",
+                definition.Id.c_str(),
+                update->RawValue);
             update_succeeded = false;
         }
 
@@ -852,6 +932,7 @@ namespace helen
                     L"[observer] acknowledgement failed id=%hs raw=%d result=1 reason=success-mapping-missing",
                     definition.Id.c_str(),
                     update->RawValue);
+                ClearPendingTransactionRequest(observer_index);
                 return false;
             }
         }
@@ -868,18 +949,20 @@ namespace helen
                 definition.Id.c_str(),
                 update->RawValue,
                 static_cast<int>(update_succeeded));
+            ClearPendingTransactionRequest(observer_index);
             return false;
         }
 
-        if (!TryWriteInt32(response_address, *response_value))
+        if (!response_value.has_value() || !TryWriteInt32(response_address, *response_value))
         {
             Logf(
                 L"[observer] acknowledgement failed id=%hs raw=%d result=%d response=%d address=0x%08llX reason=write-failed",
                 definition.Id.c_str(),
                 update->RawValue,
                 static_cast<int>(update_succeeded),
-                *response_value,
+                response_value.value_or(0),
                 static_cast<unsigned long long>(response_address));
+            ClearPendingTransactionRequest(observer_index);
             return false;
         }
 
@@ -887,6 +970,7 @@ namespace helen
             std::lock_guard<std::mutex> lock(mutex_);
             debug_views_[observer_index].LastRawValue = response_value;
             pending_transaction_requests_[observer_index].reset();
+            pending_transaction_addresses_[observer_index].reset();
         }
 
         Logf(
@@ -897,6 +981,6 @@ namespace helen
             *response_value,
             static_cast<unsigned long long>(response_address));
 
-        return update_succeeded;
+        return true;
     }
 }

@@ -17,7 +17,7 @@
 namespace helen
 {
     /**
-     * @brief Watches bounded process-memory ranges for declarative state signatures and emits mapped config updates when the observed value changes.
+     * @brief Watches bounded process-memory ranges for declarative state signatures and emits eligible mapped requests and updates.
      */
     class MemoryStateObserverService
     {
@@ -38,7 +38,7 @@ namespace helen
         /**
          * @brief Creates one observer service bound to the supplied observer definitions and update callback.
          * @param definitions Declarative observers that should be evaluated by the service.
-         * @param update_callback Callback invoked synchronously whenever an observer emits a new mapped value; it must not re-enter this service through PollOnce(), Start(), Stop(), or another observer lifecycle method.
+         * @param update_callback Callback invoked synchronously for each eligible mapped request or update; it applies the mapped update and reports whether all required native work succeeded, and it must not re-enter this service through PollOnce(), Start(), Stop(), or another observer lifecycle method.
          * @param config_value_callback Optional callback used synchronously by request-response observers to read current config; when supplied, it must not re-enter this service through PollOnce(), Start(), Stop(), or another observer lifecycle method.
          */
         MemoryStateObserverService(
@@ -89,7 +89,7 @@ namespace helen
         bool PollDueObservers();
 
         /**
-         * @brief Polls one observer and optionally emits a mapped update when the observed value changed.
+         * @brief Polls one observer and optionally emits an eligible mapped request or update.
          * @param observer_index Zero-based observer index inside the stored definition array.
          * @return True when the observer poll completed successfully; otherwise false.
          * @remarks Callers must hold poll_mutex_ for the complete enclosing pass; this method intentionally does not acquire that serialization mutex itself.
@@ -121,6 +121,13 @@ namespace helen
          */
         void ClearCachedAddress(std::size_t observer_index);
 
+        /**
+         * @brief Clears the raw request and carrier address remembered for an unacknowledged transactional update.
+         * @param observer_index Zero-based observer index whose pending transaction should be cleared.
+         * @remarks The caller must not hold mutex_; this method is used on acknowledgement infrastructure failures so a later identical request can be retried.
+         */
+        void ClearPendingTransactionRequest(std::size_t observer_index);
+
         /** @brief Declared observers evaluated by this service. */
         std::vector<MemoryStateObserverDefinition> definitions_;
         /** @brief Live debug state that mirrors the declared observer order. */
@@ -129,9 +136,11 @@ namespace helen
         std::unordered_map<std::string, std::uintptr_t> grouped_addresses_;
         /** @brief Last tick count recorded for each observer by the timed polling loop. */
         std::vector<std::uint64_t> last_poll_ticks_;
-        /** @brief Raw transactional request remembered while its response has not yet been written, so identical pending polls are suppressed safely. */
+        /** @brief Raw transactional request remembered while its response has not yet been written, so only the same continuously pending request is suppressed. */
         std::vector<std::optional<int>> pending_transaction_requests_;
-        /** @brief Callback invoked for newly mapped observer updates. */
+        /** @brief Resolved carrier address paired by index with each pending transactional request, preventing stale-address suppression after relocation. */
+        std::vector<std::optional<std::uintptr_t>> pending_transaction_addresses_;
+        /** @brief Callback invoked for eligible mapped observer requests and updates, including retryable transactional requests. */
         UpdateCallback update_callback_;
         /** @brief Optional callback that supplies current config values for bidirectional carrier responses. */
         ConfigValueCallback config_value_callback_;
