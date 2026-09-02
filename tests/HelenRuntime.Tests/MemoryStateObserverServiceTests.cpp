@@ -329,11 +329,14 @@ namespace
         ConfigureGraphicsCarrierStateBlock(candidate_address, 4324);
 
         int callback_count = 0;
+        int callback_carrier_value = 0;
         helen::MemoryStateObserverService service(
             { CreateTransactionalMsaaObserverDefinition(page_address, page_address + page_size) },
-            [&callback_count](const helen::MemoryStateObserverUpdate& update)
+            [&callback_count, &callback_carrier_value, candidate_address](const helen::MemoryStateObserverUpdate& update)
             {
                 ++callback_count;
+                callback_carrier_value = ReadInt32(candidate_address + 12);
+                Expect(callback_carrier_value == 4324, "Failed transactional callback did not observe the raw request before failure acknowledgement.");
                 Expect(update.RawValue == 4324, "Failed transactional callback received the wrong raw request.");
                 return false;
             });
@@ -341,6 +344,7 @@ namespace
         try
         {
             Expect(!service.PollOnce(), "Failed transactional callback unexpectedly reported a successful poll.");
+            Expect(callback_carrier_value == 4324, "Failed transactional callback carrier capture changed before failure acknowledgement processing completed.");
             Expect(ReadInt32(candidate_address + 12) == 4399, "Failed transactional callback did not write the declared failure response.");
             Expect(callback_count == 1, "Failed transactional callback invocation count mismatch.");
 

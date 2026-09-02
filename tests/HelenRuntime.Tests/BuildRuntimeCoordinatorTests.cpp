@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <system_error>
 
 namespace
 {
@@ -161,11 +162,15 @@ namespace
         command.Id = "failObserverCommand";
         command.Name = "Fail Observer Command";
 
-        helen::CommandStepDefinition step;
-        step.Kind = "set-live-double";
-        step.Target = "missing.slot";
-        step.ValueName = "unresolvedValue";
-        command.Steps.push_back(step);
+        helen::CommandStepDefinition load_step;
+        load_step.Kind = "load-batman-subtitle-size-into-config";
+        command.Steps.push_back(load_step);
+
+        helen::CommandStepDefinition failing_step;
+        failing_step.Kind = "set-live-double";
+        failing_step.Target = "missing.slot";
+        failing_step.ValueName = "unresolvedValue";
+        command.Steps.push_back(failing_step);
         return command;
     }
 
@@ -273,11 +278,15 @@ namespace
 
         helen::CommandDispatcher dispatcher;
         dispatcher.RegisterConfigInt("ui.subtitleSize", 1);
+        Expect(dispatcher.TrySetInt("ui.subtitleSize", 2), "Failed to seed the observable coordinator command input.");
 
         helen::RuntimeValueStore runtime_values;
         Expect(runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the coordinator transaction runtime slot.");
 
-        const std::filesystem::path graphics_ini_path = CreateTemporaryBatmanGraphicsIniPath();
+        const std::filesystem::path graphics_ini_path =
+            CreateTemporaryBatmanGraphicsIniPath().parent_path() / "Task3Transactions" / "BmEngine.ini";
+        const std::filesystem::path graphics_test_directory = graphics_ini_path.parent_path().parent_path();
+        WriteAllText(graphics_ini_path, "[Engine.HUD]\r\nConsoleFontSize=5\r\n");
         helen::BatmanGraphicsConfigService graphics_config_service(graphics_ini_path);
         helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
         Expect(executor.RegisterCommand(CreateApplySubtitleSizeCommand("applySubtitleSize")), "Failed to register the successful observer command.");
@@ -306,7 +315,7 @@ namespace
                 executor);
             Expect(!command_failure_coordinator.PollStateObserversOnce(), "Coordinator reported success when the optional observer command failed.");
             const std::optional<int> failed_command_config = dispatcher.TryGetInt("ui.subtitleSize");
-            Expect(failed_command_config.has_value() && *failed_command_config == 2, "Coordinator did not retain the successful config update before optional command failure.");
+            Expect(failed_command_config.has_value() && *failed_command_config == 0, "Coordinator did not observe the valid first command step before optional command failure.");
             const std::optional<double> failed_command_slot_value = runtime_values.TryGetDouble("subtitle.scale");
             Expect(failed_command_slot_value.has_value() && std::fabs(*failed_command_slot_value - 1.5) < 0.001, "Failed observer command changed the runtime slot unexpectedly.");
 
@@ -334,6 +343,9 @@ namespace
             Expect(config_only_value.has_value() && *config_only_value == 2, "Coordinator did not apply the successful config-only observer update.");
 
             Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release coordinator transaction allocation.");
+            std::error_code cleanup_error;
+            std::filesystem::remove_all(graphics_test_directory, cleanup_error);
+            Expect(!cleanup_error, "Failed to clean up coordinator transaction fixtures.");
         }
         catch (...)
         {
@@ -345,6 +357,9 @@ namespace
                     VirtualFree(allocation, 0, MEM_RELEASE);
                 }
             }
+
+            std::error_code cleanup_error;
+            std::filesystem::remove_all(graphics_test_directory, cleanup_error);
 
             throw;
         }
