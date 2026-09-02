@@ -121,13 +121,6 @@ namespace helen
          */
         void ClearCachedAddress(std::size_t observer_index);
 
-        /**
-         * @brief Clears the raw request and carrier address remembered for an unacknowledged transactional update.
-         * @param observer_index Zero-based observer index whose pending transaction should be cleared.
-         * @remarks The caller must not hold mutex_; this method is used on acknowledgement infrastructure failures so a later identical request can be retried.
-         */
-        void ClearPendingTransactionRequest(std::size_t observer_index);
-
         /** @brief Declared observers evaluated by this service. */
         std::vector<MemoryStateObserverDefinition> definitions_;
         /** @brief Live debug state that mirrors the declared observer order. */

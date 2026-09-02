@@ -588,13 +588,6 @@ namespace helen
         }
     }
 
-    void MemoryStateObserverService::ClearPendingTransactionRequest(std::size_t observer_index)
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        pending_transaction_requests_[observer_index].reset();
-        pending_transaction_addresses_[observer_index].reset();
-    }
-
     bool MemoryStateObserverService::PollObserver(std::size_t observer_index)
     {
         const MemoryStateObserverDefinition& definition = definitions_[observer_index];
@@ -932,7 +925,6 @@ namespace helen
                     L"[observer] acknowledgement failed id=%hs raw=%d result=1 reason=success-mapping-missing",
                     definition.Id.c_str(),
                     update->RawValue);
-                ClearPendingTransactionRequest(observer_index);
                 return false;
             }
         }
@@ -949,7 +941,6 @@ namespace helen
                 definition.Id.c_str(),
                 update->RawValue,
                 static_cast<int>(update_succeeded));
-            ClearPendingTransactionRequest(observer_index);
             return false;
         }
 
@@ -962,7 +953,6 @@ namespace helen
                 static_cast<int>(update_succeeded),
                 response_value.value_or(0),
                 static_cast<unsigned long long>(response_address));
-            ClearPendingTransactionRequest(observer_index);
             return false;
         }
 

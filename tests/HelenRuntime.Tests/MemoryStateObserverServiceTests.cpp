@@ -533,10 +533,10 @@ namespace
                 VirtualProtect(reinterpret_cast<void*>(page_address), page_size, PAGE_READWRITE, &restored_protection) != FALSE,
                 "Failed to restore writable protection after the transactional write-failure test.");
             protection_changed = false;
-            Expect(service.PollOnce(), "Transactional acknowledgement retry failed after memory protection was restored.");
-            Expect(callback_count == 2, "Transactional acknowledgement retry did not invoke the callback again after write failure.");
-            Expect(callback_values_valid, "Transactional acknowledgement retry received the wrong raw request.");
-            Expect(ReadInt32(candidate_address + 12) == 4334, "Transactional acknowledgement retry did not write the exact success response.");
+            Expect(service.PollOnce(), "Transactional acknowledgement suppression poll failed after memory protection was restored.");
+            Expect(callback_count == 1, "Transactional acknowledgement re-invoked the callback for an unchanged pending request.");
+            Expect(callback_values_valid, "Transactional acknowledgement suppression poll received the wrong raw request.");
+            Expect(ReadInt32(candidate_address + 12) == 4324, "Transactional acknowledgement suppression poll claimed an unwritten response.");
             Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release the transactional write-failure allocation.");
         }
         catch (...)
@@ -909,8 +909,11 @@ namespace
                 VirtualProtect(reinterpret_cast<void*>(page_address), page_size, PAGE_READWRITE, &restored_protection) != FALSE,
                 "Failed to restore writable protection before transactional carrier relocation.");
             protection_changed = false;
+            Expect(service.PollOnce(), "Transactional relocation same-address suppression poll failed.");
+            Expect(callback_count == 1, "Transactional relocation re-invoked the callback for an unchanged pending request at carrier A.");
+            Expect(ReadInt32(carrier_a_address + 12) == 4324, "Transactional relocation same-address suppression poll claimed an unwritten response.");
             WriteInt32(carrier_a_address + 4, 7);
-            Expect(service.PollOnce(), "Transactional carrier relocation retry unexpectedly failed.");
+            Expect(service.PollOnce(), "Transactional carrier relocation poll unexpectedly failed.");
             Expect(callback_count == 2, "Transactional carrier relocation suppressed the request pending at carrier A.");
             Expect(callback_values_valid, "Transactional relocation callback received the wrong raw request.");
             Expect(ReadInt32(carrier_b_address + 12) == 4334, "Transactional carrier relocation did not acknowledge the request at carrier B.");
