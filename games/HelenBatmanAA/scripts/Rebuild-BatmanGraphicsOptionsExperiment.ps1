@@ -16,6 +16,102 @@ function Write-Utf8TextFile {
     [IO.File]::WriteAllText($Path, $Contents, [Text.UTF8Encoding]::new($false))
 }
 
+function New-GraphicsCarrierChecks {
+    <#
+    Return the ordered structural checks for the shared Batman graphics state carrier.
+    The offsets and constants deliberately identify the verified retail structure;
+    both observers reuse this list so a raw state code controls only emission and
+    never changes address resolution or causes observers to scan different shapes.
+    #>
+    return @(
+        [ordered]@{
+            comparison = 'equals-constant'
+            offset = [int]-16
+            expectedValue = [int]50
+        },
+        [ordered]@{
+            comparison = 'equals-constant'
+            offset = [int]-12
+            expectedValue = [int]100
+        },
+        [ordered]@{
+            comparison = 'equals-constant'
+            offset = [int]-8
+            expectedValue = [int]100
+        },
+        [ordered]@{
+            comparison = 'equals-constant'
+            offset = [int]-4
+            expectedValue = [int]100
+        },
+        [ordered]@{
+            comparison = 'equals-constant'
+            offset = [int]4
+            expectedValue = [int]1
+        },
+        [ordered]@{
+            comparison = 'equals-constant'
+            offset = [int]8
+            expectedValue = [int]0
+        },
+        [ordered]@{
+            comparison = 'equals-constant'
+            offset = [int]12
+            expectedValue = [int]1
+        },
+        [ordered]@{
+            comparison = 'equals-value-at-offset'
+            offset = [int]16
+            compareOffset = [int]0
+        },
+        [ordered]@{
+            comparison = 'equals-constant'
+            offset = [int]20
+            expectedValue = [int]2
+        },
+        [ordered]@{
+            comparison = 'equals-constant'
+            offset = [int]28
+            expectedValue = [int]3
+        },
+        [ordered]@{
+            comparison = 'equals-constant'
+            offset = [int]32
+            expectedValue = [int]3
+        }
+    )
+}
+
+function New-GraphicsCarrierObserver {
+    <#
+    Build one declarative observer for a graphics state code carried by the shared
+    retail structure. Geometry and checks are fixed for collision-free discovery,
+    mappings remain observer-specific, and the optional command is omitted entirely
+    for the passive VSync observer so the generated schema stays exact.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$Id,
+        [Parameter(Mandatory = $true)] [string]$TargetConfigKey,
+        [Parameter(Mandatory = $true)] [object[]]$Mappings,
+        [AllowEmptyString()] [string]$Command = ''
+    )
+
+    $observer = [ordered]@{
+        id = $Id
+        scanStartAddress = '0x2B000000'
+        scanEndAddress = '0x30000000'
+        scanStride = [int]4
+        valueOffset = [int]0
+        pollIntervalMs = [int]50
+        targetConfigKey = $TargetConfigKey
+        addressMatchValues = @([int]4101, [int]4102, [int]4103, [int]4104, [int]4105, [int]4106, [int]4210, [int]4211, [int]4990, [int]4991)
+        checks = @(New-GraphicsCarrierChecks)
+        mappings = $Mappings
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Command)) { $observer.command = $Command }
+    return $observer
+}
+
 function Invoke-RequiredProcess {
     param([string]$FilePath, [string[]]$Arguments, [string]$FailureMessage)
     & $FilePath @Arguments
@@ -128,6 +224,30 @@ function Ensure-SafeDirectoryPath {
     return @($missing)
 }
 
+function Assert-GraphicsPublicationSameVolume {
+    <# Require staging, recovery, and both live graphics outputs to share a volume before any publication move. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$TempRoot,
+        [Parameter(Mandatory = $true)] [string]$BackupRoot,
+        [Parameter(Mandatory = $true)] [string]$LivePackRoot,
+        [Parameter(Mandatory = $true)] [string]$LiveTargetPath
+    )
+
+    $paths = @(
+        [pscustomobject]@{ Label = 'staging'; Path = $TempRoot },
+        [pscustomobject]@{ Label = 'activation backup'; Path = $BackupRoot },
+        [pscustomobject]@{ Label = 'live pack'; Path = $LivePackRoot },
+        [pscustomobject]@{ Label = 'stable target'; Path = $LiveTargetPath }
+    )
+    $expectedVolume = [IO.Path]::GetPathRoot((Get-SafeFullPath $TempRoot))
+    foreach ($entry in $paths) {
+        $actualVolume = [IO.Path]::GetPathRoot((Get-SafeFullPath $entry.Path))
+        if (-not [String]::Equals($actualVolume, $expectedVolume, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Rollback-safe graphics publication requires all paths on one Windows volume; $($entry.Label) '$($entry.Path)' is on '$actualVolume' while staging is on '$expectedVolume'."
+        }
+    }
+}
+
 function Restore-AtomicRebuild {
     <# Restore both live artifacts from the activation backup, tolerating absent originals. #>
     param(
@@ -159,7 +279,7 @@ function Restore-AtomicRebuild {
 
 function Invoke-AtomicGraphicsPublication {
     <#
-    Publish a fully verified pack and target as one rollback-capable transaction.
+    Publish a fully verified pack and target through a rollback-safe transaction.
     The caller supplies a verifier and optional injected transition failure so
     tests exercise real file moves, restoration, and post-commit cleanup. Backups
     live in a unique sibling of the staging root and are never removed in finally.
@@ -177,14 +297,15 @@ function Invoke-AtomicGraphicsPublication {
     )
     $livePack = Get-SafeFullPath $LivePackRoot
     $liveTarget = Get-SafeFullPath $LiveTargetPath
-    $stagedPack = Assert-SafeMutationTarget -Path $StagedPackRoot -AllowedDescendantRoots @($TempRoot)
-    $stagedTarget = Assert-SafeMutationTarget -Path $StagedTargetPath -AllowedDescendantRoots @($TempRoot)
     $tempFull = Get-SafeFullPath $TempRoot
     $backupFull = Get-SafeFullPath $BackupRoot
+    Assert-GraphicsPublicationSameVolume -TempRoot $tempFull -BackupRoot $backupFull -LivePackRoot $livePack -LiveTargetPath $liveTarget
+    $stagedPack = Assert-SafeMutationTarget -Path $StagedPackRoot -AllowedDescendantRoots @($TempRoot)
+    $stagedTarget = Assert-SafeMutationTarget -Path $StagedTargetPath -AllowedDescendantRoots @($TempRoot)
     if ([String]::Equals($backupFull, $tempFull, [StringComparison]::OrdinalIgnoreCase) -or $backupFull.StartsWith($tempFull.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Atomic publication backups must be outside the staging temp tree.'
+        throw 'Rollback-safe publication backups must be outside the staging temp tree.'
     }
-    if (Test-Path -LiteralPath $backupFull) { throw "Atomic publication backup root already exists: $backupFull" }
+    if (Test-Path -LiteralPath $backupFull) { throw "Rollback-safe publication backup root already exists: $backupFull" }
     $packBackupRoot = Join-Path $backupFull 'pack\batman-aa-graphics-options'
     $targetBackupPath = Join-Path $backupFull 'target\Frontend-graphics-options.umap'
     $packBackedUp = $false
@@ -201,37 +322,37 @@ function Invoke-AtomicGraphicsPublication {
                 if (-not $createdDestinationParents.Contains($createdParent)) { $createdDestinationParents.Add($createdParent) }
             }
         }
-        if (-not (Test-Path -LiteralPath $stagedPack) -or -not (Test-Path -LiteralPath $stagedTarget)) { throw 'Atomic publication staged inputs disappeared before activation.' }
+        if (-not (Test-Path -LiteralPath $stagedPack) -or -not (Test-Path -LiteralPath $stagedTarget)) { throw 'Rollback-safe publication staged inputs disappeared before activation.' }
         if (Test-Path -LiteralPath $livePack) {
             Move-SafeMutationTarget -Source $livePack -Destination $packBackupRoot -SourceExactPaths @($livePack) -DestinationDescendantRoots @($backupFull)
             $packBackedUp = $true
         }
-        if ($FailureInjection -eq 'AfterPackBackup') { throw 'Injected atomic publication failure after pack backup.' }
+        if ($FailureInjection -eq 'AfterPackBackup') { throw 'Injected rollback-safe publication failure after pack backup.' }
         if (Test-Path -LiteralPath $liveTarget) {
             Move-SafeMutationTarget -Source $liveTarget -Destination $targetBackupPath -SourceExactPaths @($liveTarget) -DestinationDescendantRoots @($backupFull)
             $targetBackedUp = $true
         }
-        if ($FailureInjection -eq 'AfterTargetBackup') { throw 'Injected atomic publication failure after target backup.' }
+        if ($FailureInjection -eq 'AfterTargetBackup') { throw 'Injected rollback-safe publication failure after target backup.' }
         Move-SafeMutationTarget -Source $stagedPack -Destination $livePack -SourceDescendantRoots @($TempRoot) -DestinationExactPaths @($livePack)
         $packInstalled = $true
-        if ($FailureInjection -eq 'AfterPackActivation') { throw 'Injected atomic publication failure after pack activation.' }
+        if ($FailureInjection -eq 'AfterPackActivation') { throw 'Injected rollback-safe publication failure after pack activation.' }
         Move-SafeMutationTarget -Source $stagedTarget -Destination $liveTarget -SourceDescendantRoots @($TempRoot) -DestinationExactPaths @($liveTarget)
         $targetInstalled = $true
-        if ($FailureInjection -eq 'AfterTargetActivation') { throw 'Injected atomic publication failure after target activation.' }
+        if ($FailureInjection -eq 'AfterTargetActivation') { throw 'Injected rollback-safe publication failure after target activation.' }
         & $VerifyPublication $livePack $liveTarget
-        if (-not $?) { throw 'Atomic publication live-output verification failed.' }
-        if ($FailureInjection -eq 'AfterTargetVerification') { throw 'Injected atomic publication failure after target verification.' }
+        if (-not $?) { throw 'Rollback-safe publication live-output verification failed.' }
+        if ($FailureInjection -eq 'AfterTargetVerification') { throw 'Injected rollback-safe publication failure after target verification.' }
         $committed = $true
 
         if (Test-Path -LiteralPath $packBackupRoot) { Remove-SafeMutationTarget -Path $packBackupRoot -AllowedDescendantRoots @($backupFull) }
-        if ($FailureInjection -eq 'AfterBackupDeletion') { throw "Injected atomic publication backup cleanup failure while deleting '$targetBackupPath'." }
+        if ($FailureInjection -eq 'AfterBackupDeletion') { throw "Injected rollback-safe publication backup cleanup failure while deleting '$targetBackupPath'." }
         if (Test-Path -LiteralPath $targetBackupPath) { Remove-SafeMutationTarget -Path $targetBackupPath -AllowedDescendantRoots @($backupFull) }
         if (Test-Path -LiteralPath $backupFull) { Remove-SafeMutationTarget -Path $backupFull -AllowedDescendantRoots @([IO.Path]::GetTempPath()) }
     }
     catch {
         $failure = $_
         if ($committed) {
-            throw "Atomic graphics-shell publication committed, but backup cleanup failed: $($failure.Exception.Message). Recovery copies are retained at $backupFull."
+            throw "Rollback-safe graphics-shell publication committed, but backup cleanup failed: $($failure.Exception.Message). Recovery copies are retained at $backupFull."
         }
         try {
             Restore-AtomicRebuild -LivePackRoot $livePack -LiveTargetPath $liveTarget -PackBackupRoot $packBackupRoot -TargetBackupPath $targetBackupPath -ActivationBackupRoot $backupFull -PackWasBackedUp $packBackedUp -TargetWasBackedUp $targetBackedUp -PackWasInstalled $packInstalled -TargetWasInstalled $targetInstalled
@@ -244,7 +365,7 @@ function Invoke-AtomicGraphicsPublication {
             }
         }
         catch {
-            throw "Atomic graphics-shell publication failed: $($failure.Exception.Message); rollback failed: $($_.Exception.Message)"
+            throw "Rollback-safe graphics-shell publication failed: $($failure.Exception.Message); rollback failed: $($_.Exception.Message)"
         }
         throw $failure
     }
@@ -298,6 +419,8 @@ $stagedBuildJsonPath = Join-Path $stagedPackBuildRoot 'build.json'
 $stagedBindingsJsonPath = Join-Path $stagedPackBuildRoot 'bindings.json'
 $stagedCommandsJsonPath = Join-Path $stagedPackBuildRoot 'commands.json'
 $stagedFilesJsonPath = Join-Path $stagedPackBuildRoot 'files.json'
+$stagedHooksJsonPath = Join-Path $stagedPackBuildRoot 'hooks.json'
+Assert-GraphicsPublicationSameVolume -TempRoot $tempRoot -BackupRoot $activationBackupRoot -LivePackRoot $packRoot -LiveTargetPath $stableTargetPath
 $primaryFailure = $null
 try {
     New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
@@ -346,23 +469,91 @@ try {
             }
         })
     }
+    $configKeys = @(
+        'fullscreen',
+        'resolutionWidth',
+        'resolutionHeight',
+        'vsync',
+        'msaa',
+        'detailLevel',
+        'bloom',
+        'dynamicShadows',
+        'motionBlur',
+        'distortion',
+        'fogVolumes',
+        'sphericalHarmonicLighting',
+        'ambientOcclusion',
+        'physx',
+        'stereo',
+        'applySignal'
+    )
+    $config = @(
+        foreach ($configKey in $configKeys) {
+            [ordered]@{
+                key = $configKey
+                type = 'int'
+                defaultValue = [int]0
+            }
+        }
+    )
+    $loadGraphicsDraftCommand = [ordered]@{
+        id = 'loadBatmanGraphicsDraftIntoConfig'
+        name = 'Load Batman Graphics Draft Into Config'
+        steps = @(
+            [ordered]@{
+                kind = 'load-batman-graphics-draft-into-config'
+            }
+        )
+    }
+    $applyGraphicsDraftCommand = [ordered]@{
+        id = 'applyBatmanGraphicsDraft'
+        name = 'Apply Batman Graphics Draft'
+        steps = @(
+            [ordered]@{
+                kind = 'apply-batman-graphics-config'
+            },
+            [ordered]@{
+                kind = 'load-batman-graphics-draft-into-config'
+            }
+        )
+    }
+    $commands = [ordered]@{
+        commands = @($loadGraphicsDraftCommand, $applyGraphicsDraftCommand)
+    }
+    $hooks = [ordered]@{
+        runtimeSlots = @()
+        stateObservers = @(
+            (New-GraphicsCarrierObserver -Id 'graphicsObserverVsync' -TargetConfigKey 'vsync' -Mappings @(
+                    [ordered]@{ match = [int]4210; value = [int]0 },
+                    [ordered]@{ match = [int]4211; value = [int]1 }
+                )),
+            (New-GraphicsCarrierObserver -Id 'graphicsObserverApplySignal' -TargetConfigKey 'applySignal' -Command 'applyBatmanGraphicsDraft' -Mappings @(
+                    [ordered]@{ match = [int]4990; value = [int]0 },
+                    [ordered]@{ match = [int]4991; value = [int]1 }
+                ))
+        )
+        hooks = @()
+    }
     $pack = [ordered]@{
         schemaVersion = 1
         id = 'batman-aa-graphics-options'
-        name = 'Batman Graphics Options Shell'
+        name = 'Batman Graphics Options VSync'
         targets = @([ordered]@{ gameId = 'batman-arkham-asylum'; executables = @($buildMatch.Executable) })
+        config = $config
         builds = @($buildMatch.BuildId)
     }
     $build = [ordered]@{
         id = $buildMatch.BuildId
         executable = $buildMatch.Executable
         match = [ordered]@{ fileSize = $buildMatch.FileSize; sha256 = $buildMatch.Sha256 }
+        startupCommands = @('loadBatmanGraphicsDraftIntoConfig')
     }
     Write-Utf8TextFile -Path $stagedFilesJsonPath -Contents ($files | ConvertTo-Json -Depth 7)
     Write-Utf8TextFile -Path $stagedPackJsonPath -Contents ($pack | ConvertTo-Json -Depth 5)
     Write-Utf8TextFile -Path $stagedBuildJsonPath -Contents ($build | ConvertTo-Json -Depth 5)
     Write-Utf8TextFile -Path $stagedBindingsJsonPath -Contents (([ordered]@{ bindings = @() }) | ConvertTo-Json -Depth 3)
-    Write-Utf8TextFile -Path $stagedCommandsJsonPath -Contents (([ordered]@{ commands = @() }) | ConvertTo-Json -Depth 3)
+    Write-Utf8TextFile -Path $stagedCommandsJsonPath -Contents ($commands | ConvertTo-Json -Depth 6)
+    Write-Utf8TextFile -Path $stagedHooksJsonPath -Contents ($hooks | ConvertTo-Json -Depth 8)
 
     # The verifier reopens/export-checks the staged target and reconstructs its delta before activation.
     & $packageVerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot -Configuration $Configuration -PackRootOverride $stagedPackRoot -TargetPathOverride $stagedTargetPath -StagedPackageValidation
@@ -397,7 +588,7 @@ finally {
 $finalInfo = Get-Item -LiteralPath $stableTargetPath
 $finalHash = (Get-FileHash -LiteralPath $stableTargetPath -Algorithm SHA256).Hash
 $finalDeltaPath = Join-Path $packRoot 'builds\steam-goty-1.0\assets\deltas\Frontend-graphics-options.hgdelta'
-Write-Output 'Rebuilt Batman graphics-options shell outputs atomically:'
+Write-Output 'Rebuilt Batman graphics-options shell outputs with rollback-safe publication:'
 Write-Output "  Retail base:     $retailBasePath ($($retailInfo.Length) bytes, $retailHash)"
 Write-Output "  Frontend target: $stableTargetPath ($($finalInfo.Length) bytes, $finalHash)"
 Write-Output "  Frontend delta:  $finalDeltaPath ($((Get-Item -LiteralPath $finalDeltaPath).Length) bytes, $((Get-FileHash -LiteralPath $finalDeltaPath -Algorithm SHA256).Hash))"

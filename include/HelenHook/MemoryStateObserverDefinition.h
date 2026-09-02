@@ -35,6 +35,8 @@ namespace helen
         std::optional<std::string> CommandId;
         /** @brief Validation checks that a candidate state block must satisfy before it is accepted. */
         std::vector<MemoryStateObserverCheckDefinition> Checks;
+        /** @brief Raw values that identify this observer's carrier address; an empty list preserves legacy mapping-based recognition. */
+        std::vector<int> AddressMatchValues;
         /** @brief Raw-to-config mappings that translate observed state codes into Helen-owned config values. */
         std::vector<MemoryStateObserverMapEntryDefinition> Mappings;
     };

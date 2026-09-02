@@ -97,8 +97,12 @@ internal static class BatmanGraphicsIniBootstrapLoader
                     throw new InvalidOperationException($"Encountered an empty INI section name in '{iniPath}'.");
                 }
 
-                currentSection = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                sections[sectionName] = currentSection;
+                // BatmanRuntime reads the first matching section, so repeated blocks must reuse that dictionary.
+                if (!sections.TryGetValue(sectionName, out currentSection))
+                {
+                    currentSection = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    sections.Add(sectionName, currentSection);
+                }
                 continue;
             }
 
@@ -120,7 +124,11 @@ internal static class BatmanGraphicsIniBootstrapLoader
                 throw new InvalidOperationException($"Encountered an empty INI key in '{iniPath}': {line}");
             }
 
-            currentSection[key] = value;
+            // Preserve the first assignment just as the runtime's line-oriented reader does.
+            if (!currentSection.ContainsKey(key))
+            {
+                currentSection.Add(key, value);
+            }
         }
 
         return sections;
@@ -215,6 +223,11 @@ internal static class BatmanGraphicsIniBootstrapLoader
         if (rawMsaaSamples == 8)
         {
             return 3;
+        }
+
+        if (rawMsaaSamples == 16)
+        {
+            return 5;
         }
 
         throw new InvalidOperationException($"Unsupported MaxMultisamples value '{rawMsaaSamples}'.");

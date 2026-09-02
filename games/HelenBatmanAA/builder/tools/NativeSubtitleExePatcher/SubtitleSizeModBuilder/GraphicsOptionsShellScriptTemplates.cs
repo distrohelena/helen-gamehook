@@ -153,7 +153,7 @@ internal static class GraphicsOptionsShellScriptTemplates
               this.ApplyInProgress = true;
               this.Screen.BlockInput(true);
               this.RefreshRows();
-              flash.external.ExternalInterface.call("FE_SetControlType",4210+this.DraftVsync);
+              flash.external.ExternalInterface.call("FE_SetControlType",4210+this.DraftVsync,"");
               this.ApplyTimerId = setInterval(this,"CompleteApply",100);
            }
            function CompleteApply()
@@ -164,7 +164,7 @@ internal static class GraphicsOptionsShellScriptTemplates
                  this.ApplyTimerId = undefined;
               }
               this.ApplySignalToggle = this.ApplySignalToggle == 0 ? 1 : 0;
-              flash.external.ExternalInterface.call("FE_SetControlType",4990+this.ApplySignalToggle);
+              flash.external.ExternalInterface.call("FE_SetControlType",4990+this.ApplySignalToggle,"");
               this.ApplyWasDispatched = true;
               this.ApplyInProgress = false;
               this.Screen.BlockInput(false);

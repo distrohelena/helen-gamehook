@@ -126,6 +126,57 @@ namespace
     }
 
     /**
+     * @brief Evaluates only the structural checks that identify one observer's state block.
+     * @param definition Observer definition whose checks should be evaluated.
+     * @param base_address Candidate base address to validate.
+     * @return True when every declared check passes; otherwise false.
+     * @remarks Mapping tables intentionally do not participate here. A structurally valid carrier remains cached while another subsystem temporarily owns its raw control code; mappings only decide whether an update is emitted.
+     */
+    bool MatchesObserverChecks(const helen::MemoryStateObserverDefinition& definition, std::uintptr_t base_address) noexcept
+    {
+        for (const helen::MemoryStateObserverCheckDefinition& check : definition.Checks)
+        {
+            std::uintptr_t check_address = 0;
+            if (!TryApplyOffset(base_address, check.Offset, check_address))
+            {
+                return false;
+            }
+
+            int check_value = 0;
+            if (!TryReadInt32(check_address, check_value))
+            {
+                return false;
+            }
+
+            if (check.Comparison == "equals-constant")
+            {
+                if (!check.ExpectedValue.has_value() || check_value != *check.ExpectedValue)
+                {
+                    return false;
+                }
+            }
+            else if (check.Comparison == "equals-value-at-offset")
+            {
+                std::uintptr_t compare_address = 0;
+                int compare_value = 0;
+                if (!check.CompareOffset.has_value()
+                    || !TryApplyOffset(base_address, *check.CompareOffset, compare_address)
+                    || !TryReadInt32(compare_address, compare_value)
+                    || check_value != compare_value)
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * @brief Maps one raw observed value through the observer's declarative integer table.
      * @param definition Observer definition whose mappings should be evaluated.
      * @param raw_value Raw observed integer value.
@@ -142,6 +193,23 @@ namespace
         }
 
         return std::nullopt;
+    }
+
+    /**
+     * @brief Returns whether one raw value is eligible to identify an observer's carrier address.
+     * @param definition Observer definition whose explicit or legacy recognition values should be used.
+     * @param raw_value Raw integer read from a candidate value offset.
+     * @return True when the raw value is an explicit address match or a legacy mapping match.
+     * @remarks Explicit AddressMatchValues intentionally separate address recognition from update mappings. Definitions created before that field existed retain mapping-based recognition when the explicit list is empty.
+     */
+    bool IsAddressMatchValue(const helen::MemoryStateObserverDefinition& definition, int raw_value) noexcept
+    {
+        if (!definition.AddressMatchValues.empty())
+        {
+            return std::find(definition.AddressMatchValues.begin(), definition.AddressMatchValues.end(), raw_value) != definition.AddressMatchValues.end();
+        }
+
+        return TryMapObservedValue(definition, raw_value).has_value();
     }
 
     /**
@@ -391,65 +459,13 @@ namespace helen
                 if (TryApplyOffset(cached_address, definition.ValueOffset, value_address))
                 {
                     int cached_raw_value = 0;
-                    if (!TryReadInt32(value_address, cached_raw_value))
+                    if (TryReadInt32(value_address, cached_raw_value)
+                        && IsAddressMatchValue(definition, cached_raw_value)
+                        && MatchesObserverChecks(definition, cached_address))
                     {
-                        cached_raw_value = 0;
-                    }
-
-                    const std::optional<int> cached_mapped_value = TryMapObservedValue(definition, cached_raw_value);
-                    if (cached_mapped_value.has_value())
-                    {
-                        bool matches = true;
-                        for (const MemoryStateObserverCheckDefinition& check : definition.Checks)
-                        {
-                            std::uintptr_t check_address = 0;
-                            if (!TryApplyOffset(cached_address, check.Offset, check_address))
-                            {
-                                matches = false;
-                                break;
-                            }
-
-                            int check_value = 0;
-                            if (!TryReadInt32(check_address, check_value))
-                            {
-                                matches = false;
-                                break;
-                            }
-
-                            if (check.Comparison == "equals-constant")
-                            {
-                                if (!check.ExpectedValue.has_value() || check_value != *check.ExpectedValue)
-                                {
-                                    matches = false;
-                                    break;
-                                }
-                            }
-                            else if (check.Comparison == "equals-value-at-offset")
-                            {
-                                std::uintptr_t compare_address = 0;
-                                int compare_value = 0;
-                                if (!check.CompareOffset.has_value()
-                                    || !TryApplyOffset(cached_address, *check.CompareOffset, compare_address)
-                                    || !TryReadInt32(compare_address, compare_value)
-                                    || check_value != compare_value)
-                                {
-                                    matches = false;
-                                    break;
-                                }
-                            }
-                            else
-                            {
-                                matches = false;
-                                break;
-                            }
-                        }
-
-                        if (matches)
-                        {
-                            resolved_address = cached_address;
-                            raw_value = cached_raw_value;
-                            mapped_value = cached_mapped_value;
-                        }
+                        resolved_address = cached_address;
+                        raw_value = cached_raw_value;
+                        mapped_value = TryMapObservedValue(definition, cached_raw_value);
                     }
                 }
             }
@@ -526,62 +542,12 @@ namespace helen
                         continue;
                     }
 
-                    const std::optional<int> candidate_mapped_value = TryMapObservedValue(definition, candidate_raw_value);
-                    if (!candidate_mapped_value.has_value())
-                    {
-                        continue;
-                    }
-
-                    bool matches = true;
-                    for (const MemoryStateObserverCheckDefinition& check : definition.Checks)
-                    {
-                        std::uintptr_t check_address = 0;
-                        if (!TryApplyOffset(candidate, check.Offset, check_address))
-                        {
-                            matches = false;
-                            break;
-                        }
-
-                        int check_value = 0;
-                        if (!TryReadInt32(check_address, check_value))
-                        {
-                            matches = false;
-                            break;
-                        }
-
-                        if (check.Comparison == "equals-constant")
-                        {
-                            if (!check.ExpectedValue.has_value() || check_value != *check.ExpectedValue)
-                            {
-                                matches = false;
-                                break;
-                            }
-                        }
-                        else if (check.Comparison == "equals-value-at-offset")
-                        {
-                            std::uintptr_t compare_address = 0;
-                            int compare_value = 0;
-                            if (!check.CompareOffset.has_value()
-                                || !TryApplyOffset(candidate, *check.CompareOffset, compare_address)
-                                || !TryReadInt32(compare_address, compare_value)
-                                || check_value != compare_value)
-                            {
-                                matches = false;
-                                break;
-                            }
-                        }
-                        else
-                        {
-                            matches = false;
-                            break;
-                        }
-                    }
-
-                    if (matches)
+                    if (IsAddressMatchValue(definition, candidate_raw_value)
+                        && MatchesObserverChecks(definition, candidate))
                     {
                         resolved_address = candidate;
                         raw_value = candidate_raw_value;
-                        mapped_value = candidate_mapped_value;
+                        mapped_value = TryMapObservedValue(definition, candidate_raw_value);
                         break;
                     }
                 }

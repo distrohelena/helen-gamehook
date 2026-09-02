@@ -169,6 +169,39 @@ if (-not (Test-Path -LiteralPath $DebugAssemblyPath -PathType Leaf)) {
     throw "Batman graphics-options Debug assembly was not found after build: $DebugAssemblyPath"
 }
 
+$DuplicateIniRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('BatmanGraphicsIniDuplicateSemantics-' + [guid]::NewGuid().ToString('N'))
+$DuplicateIniPath = Join-Path $DuplicateIniRoot 'BmEngine.ini'
+New-Item -ItemType Directory -Path $DuplicateIniRoot -Force | Out-Null
+$DuplicateIniText = @'
+[SystemSettings]
+Fullscreen=False
+Fullscreen=True
+ResX=1280
+ResY=720
+UseVsync=False
+UseVsync=True
+MaxMultisamples=16
+Bloom=False
+DynamicShadows=False
+MotionBlur=False
+Distortion=False
+FogVolumes=False
+DisableSphericalHarmonicLights=True
+AmbientOcclusion=False
+Stereo=False
+[SystemSettings]
+Fullscreen=True
+ResX=1920
+ResY=1080
+UseVsync=True
+MaxMultisamples=8
+[Engine.Engine]
+PhysXLevel=1
+[Engine.Engine]
+PhysXLevel=2
+'@
+[System.IO.File]::WriteAllText($DuplicateIniPath, $DuplicateIniText)
+
 $RequiredTokens = @(
     'Object.registerClass("ScreenOptionsGraphics",rs.ui.Screen)',
     'flash.external.ExternalInterface.call("FE_SetActiveScreenName","Options Menu")',
@@ -309,12 +342,13 @@ function Assert-RetailStartupSpritesPreserved {
 }
 
 $BridgeSource = @'
+using System.Collections;
 using System.Reflection;
 using System.Text.Json;
 
-if (args.Length != 1)
+if (args.Length < 1 || args.Length > 2)
 {
-    throw new ArgumentException("Expected the builder assembly path as the only argument.");
+    throw new ArgumentException("Expected the builder assembly path and an optional duplicate-semantics INI path.");
 }
 
 Assembly assembly = Assembly.LoadFrom(args[0]);
@@ -322,6 +356,7 @@ Type templateType = assembly.GetType("SubtitleSizeModBuilder.GraphicsOptionsShel
 BindingFlags staticFlags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
 Type snapshotType = assembly.GetType("SubtitleSizeModBuilder.BatmanGraphicsIniBootstrapSnapshot", throwOnError: true)!;
 object snapshot = Activator.CreateInstance(snapshotType, new object?[] { 0, 1920, 1080, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 })!;
+Type loaderType = assembly.GetType("SubtitleSizeModBuilder.BatmanGraphicsIniBootstrapLoader", throwOnError: true)!;
 MethodInfo screenFrameMethod = templateType.GetMethod("CreateScreenFrame1", staticFlags)
     ?? throw new MissingMethodException(templateType.FullName, "CreateScreenFrame1");
 MethodInfo rowClipActionsMethod = templateType.GetMethod("CreateRowClipActions", staticFlags)
@@ -356,14 +391,52 @@ catch (TargetInvocationException exception)
     nulInnerException = exception.InnerException?.GetType().FullName;
 }
 
-Console.WriteLine(JsonSerializer.Serialize(new ReflectionContract(screenFrame, rowClipActions, graphicsRowDepths, xmlGraphicsRowDepths, escapedValue, nulInnerException)));
+int normalizedMsaa16 = 0;
+string? duplicateParsedFullscreen = null;
+string? duplicateParsedUseVsync = null;
+string? duplicateParsedMaxMultisamples = null;
+string? duplicateParsedPhysx = null;
+int duplicateSnapshotFullscreen = 0;
+int duplicateSnapshotResolutionWidth = 0;
+int duplicateSnapshotResolutionHeight = 0;
+int duplicateSnapshotVsync = 0;
+int duplicateSnapshotMsaa = 0;
+int duplicateSnapshotPhysx = 0;
+if (args.Length == 2)
+{
+    MethodInfo normalizeMsaaMethod = loaderType.GetMethod("NormalizeMsaa", bindingAttr: staticFlags)
+        ?? throw new MissingMethodException(loaderType.FullName, "NormalizeMsaa");
+    normalizedMsaa16 = (int)normalizeMsaaMethod.Invoke(null, new object?[] { 16 })!;
+    MethodInfo parseSectionsMethod = loaderType.GetMethod("ParseSections", staticFlags)
+        ?? throw new MissingMethodException(loaderType.FullName, "ParseSections");
+    MethodInfo loadIniMethod = loaderType.GetMethod("Load", staticFlags)
+        ?? throw new MissingMethodException(loaderType.FullName, "Load");
+    IDictionary sections = (IDictionary)parseSectionsMethod.Invoke(null, new object?[] { args[1] })!;
+    IDictionary systemSettings = (IDictionary)sections["SystemSettings"]!;
+    IDictionary engineSettings = (IDictionary)sections["Engine.Engine"]!;
+    duplicateParsedFullscreen = (string)systemSettings["Fullscreen"]!;
+    duplicateParsedUseVsync = (string)systemSettings["UseVsync"]!;
+    duplicateParsedMaxMultisamples = (string)systemSettings["MaxMultisamples"]!;
+    duplicateParsedPhysx = (string)engineSettings["PhysXLevel"]!;
+    object duplicateSnapshot = loadIniMethod.Invoke(null, new object?[] { args[1] })!;
+    Type duplicateSnapshotType = duplicateSnapshot.GetType();
+    duplicateSnapshotFullscreen = (int)duplicateSnapshotType.GetProperty("Fullscreen")!.GetValue(duplicateSnapshot)!;
+    duplicateSnapshotResolutionWidth = (int)duplicateSnapshotType.GetProperty("ResolutionWidth")!.GetValue(duplicateSnapshot)!;
+    duplicateSnapshotResolutionHeight = (int)duplicateSnapshotType.GetProperty("ResolutionHeight")!.GetValue(duplicateSnapshot)!;
+    duplicateSnapshotVsync = (int)duplicateSnapshotType.GetProperty("Vsync")!.GetValue(duplicateSnapshot)!;
+    duplicateSnapshotMsaa = (int)duplicateSnapshotType.GetProperty("Msaa")!.GetValue(duplicateSnapshot)!;
+    duplicateSnapshotPhysx = (int)duplicateSnapshotType.GetProperty("Physx")!.GetValue(duplicateSnapshot)!;
+}
 
-public sealed record ReflectionContract(string ScreenFrame, string[] RowClipActions, int[] GraphicsRowDepths, int[] XmlGraphicsRowDepths, string EscapedValue, string? NulInnerException);
+Console.WriteLine(JsonSerializer.Serialize(new ReflectionContract(screenFrame, rowClipActions, graphicsRowDepths, xmlGraphicsRowDepths, escapedValue, nulInnerException, normalizedMsaa16, duplicateParsedFullscreen, duplicateParsedUseVsync, duplicateParsedMaxMultisamples, duplicateParsedPhysx, duplicateSnapshotFullscreen, duplicateSnapshotResolutionWidth, duplicateSnapshotResolutionHeight, duplicateSnapshotVsync, duplicateSnapshotMsaa, duplicateSnapshotPhysx)));
+
+public sealed record ReflectionContract(string ScreenFrame, string[] RowClipActions, int[] GraphicsRowDepths, int[] XmlGraphicsRowDepths, string EscapedValue, string? NulInnerException, int NormalizedMsaa16, string? DuplicateParsedFullscreen, string? DuplicateParsedUseVsync, string? DuplicateParsedMaxMultisamples, string? DuplicateParsedPhysx, int DuplicateSnapshotFullscreen, int DuplicateSnapshotResolutionWidth, int DuplicateSnapshotResolutionHeight, int DuplicateSnapshotVsync, int DuplicateSnapshotMsaa, int DuplicateSnapshotPhysx);
 '@
 
 function Get-ReflectionContract {
     param(
-        [string]$AssemblyPath
+        [string]$AssemblyPath,
+        [string]$DuplicateIniPath
     )
 
     if ($PSVersionTable.PSEdition -eq 'Core') {
@@ -411,6 +484,42 @@ function Get-ReflectionContract {
             $NulInnerException = $_.Exception.InnerException.GetType().FullName
         }
 
+        $LoaderType = $Assembly.GetType('SubtitleSizeModBuilder.BatmanGraphicsIniBootstrapLoader', $true)
+        $NormalizeMsaaMethod = $LoaderType.GetMethod('NormalizeMsaa', $StaticFlags)
+        if ($null -eq $NormalizeMsaaMethod) {
+            throw 'Batman graphics INI loader is missing NormalizeMsaa.'
+        }
+        $NormalizedMsaa16 = [int]$NormalizeMsaaMethod.Invoke($null, @([object]16))
+        $DuplicateParsedFullscreen = $null
+        $DuplicateParsedUseVsync = $null
+        $DuplicateParsedMaxMultisamples = $null
+        $DuplicateParsedPhysx = $null
+        $DuplicateSnapshotFullscreen = 0
+        $DuplicateSnapshotResolutionWidth = 0
+        $DuplicateSnapshotResolutionHeight = 0
+        $DuplicateSnapshotVsync = 0
+        $DuplicateSnapshotMsaa = 0
+        $DuplicateSnapshotPhysx = 0
+        if (-not [string]::IsNullOrWhiteSpace($DuplicateIniPath)) {
+            $ParseSectionsMethod = $LoaderType.GetMethod('ParseSections', $StaticFlags)
+            $LoadIniMethod = $LoaderType.GetMethod('Load', $StaticFlags)
+            if ($null -eq $ParseSectionsMethod -or $null -eq $LoadIniMethod) {
+                throw 'Batman graphics INI loader is missing duplicate-semantics coverage methods.'
+            }
+            $ParsedDuplicateSections = $ParseSectionsMethod.Invoke($null, @($DuplicateIniPath))
+            $DuplicateParsedFullscreen = [string]$ParsedDuplicateSections['SystemSettings']['Fullscreen']
+            $DuplicateParsedUseVsync = [string]$ParsedDuplicateSections['SystemSettings']['UseVsync']
+            $DuplicateParsedMaxMultisamples = [string]$ParsedDuplicateSections['SystemSettings']['MaxMultisamples']
+            $DuplicateParsedPhysx = [string]$ParsedDuplicateSections['Engine.Engine']['PhysXLevel']
+            $DuplicateSnapshot = $LoadIniMethod.Invoke($null, @($DuplicateIniPath))
+            $DuplicateSnapshotFullscreen = [int]$DuplicateSnapshot.Fullscreen
+            $DuplicateSnapshotResolutionWidth = [int]$DuplicateSnapshot.ResolutionWidth
+            $DuplicateSnapshotResolutionHeight = [int]$DuplicateSnapshot.ResolutionHeight
+            $DuplicateSnapshotVsync = [int]$DuplicateSnapshot.Vsync
+            $DuplicateSnapshotMsaa = [int]$DuplicateSnapshot.Msaa
+            $DuplicateSnapshotPhysx = [int]$DuplicateSnapshot.Physx
+        }
+
         return [pscustomobject]@{
             ScreenFrame = $ScreenFrame
             RowClipActions = $RowClipActions
@@ -418,6 +527,17 @@ function Get-ReflectionContract {
             XmlGraphicsRowDepths = $XmlGraphicsRowDepths
             EscapedValue = $EscapedValue
             NulInnerException = $NulInnerException
+            NormalizedMsaa16 = $NormalizedMsaa16
+            DuplicateParsedFullscreen = $DuplicateParsedFullscreen
+            DuplicateParsedUseVsync = $DuplicateParsedUseVsync
+            DuplicateParsedMaxMultisamples = $DuplicateParsedMaxMultisamples
+            DuplicateParsedPhysx = $DuplicateParsedPhysx
+            DuplicateSnapshotFullscreen = $DuplicateSnapshotFullscreen
+            DuplicateSnapshotResolutionWidth = $DuplicateSnapshotResolutionWidth
+            DuplicateSnapshotResolutionHeight = $DuplicateSnapshotResolutionHeight
+            DuplicateSnapshotVsync = $DuplicateSnapshotVsync
+            DuplicateSnapshotMsaa = $DuplicateSnapshotMsaa
+            DuplicateSnapshotPhysx = $DuplicateSnapshotPhysx
         }
     }
 
@@ -445,7 +565,11 @@ function Get-ReflectionContract {
         }
 
         $BridgeAssemblyPath = Join-Path $BridgeRoot 'bin\Debug\net8.0\ReflectionBridge.dll'
-        $ReflectionOutput = & dotnet $BridgeAssemblyPath $AssemblyPath 2>&1
+        $BridgeArguments = @($AssemblyPath)
+        if (-not [string]::IsNullOrWhiteSpace($DuplicateIniPath)) {
+            $BridgeArguments += $DuplicateIniPath
+        }
+        $ReflectionOutput = & dotnet $BridgeAssemblyPath @BridgeArguments 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "Reflection bridge failed:`n$($ReflectionOutput -join [Environment]::NewLine)"
         }
@@ -459,7 +583,21 @@ function Get-ReflectionContract {
     }
 }
 
-$ReflectionContract = Get-ReflectionContract -AssemblyPath $DebugAssemblyPath
+try {
+    $ReflectionContract = Get-ReflectionContract -AssemblyPath $DebugAssemblyPath -DuplicateIniPath $DuplicateIniPath
+    if ($ReflectionContract.NormalizedMsaa16 -ne 5) {
+        throw 'Batman graphics INI loader must normalize MaxMultisamples=16 to MSAA state 5.'
+    }
+    if ($ReflectionContract.DuplicateParsedFullscreen -cne 'False' -or $ReflectionContract.DuplicateParsedUseVsync -cne 'False' -or $ReflectionContract.DuplicateParsedMaxMultisamples -cne '16' -or $ReflectionContract.DuplicateParsedPhysx -cne '1') {
+        throw 'Batman graphics INI parser did not preserve first values for duplicate keys or repeated sections.'
+    }
+    if ($ReflectionContract.DuplicateSnapshotFullscreen -ne 0 -or $ReflectionContract.DuplicateSnapshotResolutionWidth -ne 1280 -or $ReflectionContract.DuplicateSnapshotResolutionHeight -ne 720 -or $ReflectionContract.DuplicateSnapshotVsync -ne 0 -or $ReflectionContract.DuplicateSnapshotMsaa -ne 5 -or $ReflectionContract.DuplicateSnapshotPhysx -ne 1) {
+        throw 'Batman graphics INI bootstrap disagrees with runtime first-match semantics for duplicate sections or keys.'
+    }
+} finally {
+    if (Test-Path -LiteralPath $DuplicateIniRoot) { Remove-Item -LiteralPath $DuplicateIniRoot -Recurse -Force }
+}
+
 $ScreenFrame = [string]$ReflectionContract.ScreenFrame
 foreach ($RequiredScreenToken in @(
     'class rs.ui.BatmanGraphicsVsyncController',
@@ -470,9 +608,9 @@ foreach ($RequiredScreenToken in @(
     'this.SetVsync(this.DraftVsync == 0 ? 1 : 0,false);',
     'this.Screen.BlockInput(true);',
     'this.Screen.BlockInput(false);',
-    'flash.external.ExternalInterface.call("FE_SetControlType",4210+this.DraftVsync);',
+    'flash.external.ExternalInterface.call("FE_SetControlType",4210+this.DraftVsync,"");',
     'this.ApplyTimerId = setInterval(this,"CompleteApply",100);',
-    'flash.external.ExternalInterface.call("FE_SetControlType",4990+this.ApplySignalToggle);',
+    'flash.external.ExternalInterface.call("FE_SetControlType",4990+this.ApplySignalToggle,"");',
     'this.AddItem(GraphicsRow15,13,0,-1,-1);',
     'GraphicsRow15._visible = true;'
 )) {

@@ -1154,6 +1154,34 @@ namespace
             definition.Mappings.push_back(std::move(mapping));
         }
 
+        const helen::JsonValue* address_match_values_value = FindObjectMember(value, "addressMatchValues");
+        if (address_match_values_value != nullptr)
+        {
+            const helen::JsonValue::Array* address_match_values = address_match_values_value->AsArray();
+            if (address_match_values == nullptr || address_match_values->empty())
+            {
+                return false;
+            }
+
+            for (const helen::JsonValue& address_match_value : *address_match_values)
+            {
+                const std::optional<int> parsed_address_match_value = TryGetInt(&address_match_value);
+                if (!parsed_address_match_value.has_value())
+                {
+                    return false;
+                }
+
+                definition.AddressMatchValues.push_back(*parsed_address_match_value);
+            }
+        }
+        else
+        {
+            for (const helen::MemoryStateObserverMapEntryDefinition& mapping : definition.Mappings)
+            {
+                definition.AddressMatchValues.push_back(mapping.Match);
+            }
+        }
+
         return true;
     }
 

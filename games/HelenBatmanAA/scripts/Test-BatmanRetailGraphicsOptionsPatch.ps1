@@ -244,8 +244,8 @@ try {
     Assert-ContainsOrdinal -Text $screenText -Token 'setInterval(this,"CompleteApply",100)' -Context 'Options Graphics screen timer'
     Assert-ContainsOrdinal -Text $screenText -Token 'this.Screen.BlockInput(true);' -Context 'Options Graphics apply input block'
     Assert-ContainsOrdinal -Text $screenText -Token 'this.Screen.BlockInput(false);' -Context 'Options Graphics apply input unblock'
-    if ($screenText -notmatch 'FE_SetControlType",4210\s*\+\s*this\.DraftVsync') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4210 plus DraftVsync.' }
-    if ($screenText -notmatch 'FE_SetControlType",4990\s*\+\s*this\.ApplySignalToggle') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4990 plus ApplySignalToggle.' }
+    if ($screenText -notmatch 'FE_SetControlType",4210\s*\+\s*this\.DraftVsync\s*,\s*""\s*\)') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4210 plus DraftVsync with an empty second argument.' }
+    if ($screenText -notmatch 'FE_SetControlType",4990\s*\+\s*this\.ApplySignalToggle\s*,\s*""\s*\)') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4990 plus ApplySignalToggle with an empty second argument.' }
     foreach ($forbidden in @('Helen_GetInt', 'Helen_SetInt', 'Helen_RunCommand', 'Helen_ApplyBatmanGraphicsDraft', 'GraphicsExitPrompt', 'CaptureInitialState')) { Assert-NotContainsOrdinal -Text $screenText -Token $forbidden -Context 'Options Graphics screen script' }
     foreach ($forbidden in @('Helen_', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft', 'Unsaved graphics changes', 'Some changes require a restart')) { foreach ($file in $scriptFiles) { Assert-NotContainsOrdinal -Text (Get-Content -LiteralPath $file.FullName -Raw) -Token $forbidden -Context $file.Name } }
 }

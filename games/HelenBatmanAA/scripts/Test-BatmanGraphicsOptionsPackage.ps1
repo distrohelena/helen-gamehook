@@ -26,6 +26,19 @@ function Assert-ExactProperties {
     }
 }
 
+function Assert-ExactOrderedProperties {
+    param(
+        [Parameter(Mandatory = $true)] [psobject]$Object,
+        [Parameter(Mandatory = $true)] [string[]]$Names,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    $actual = @($Object.PSObject.Properties.Name)
+    if (($actual -join '|') -cne ($Names -join '|')) {
+        throw "$Context properties drifted. Expected '$($Names -join ', ')' but found '$($actual -join ', ')'."
+    }
+}
+
 function Assert-ContainsOrdinal {
     param(
         [Parameter(Mandatory = $true)] [AllowEmptyString()] [string]$Text,
@@ -87,6 +100,7 @@ function Assert-ExactPackFileSet {
         "builds\$BuildDirectoryName\build.json",
         "builds\$BuildDirectoryName\bindings.json",
         "builds\$BuildDirectoryName\commands.json",
+        "builds\$BuildDirectoryName\hooks.json",
         "builds\$BuildDirectoryName\files.json",
         "builds\$BuildDirectoryName\assets\deltas\Frontend-graphics-options.hgdelta"
     ) | Sort-Object
@@ -118,7 +132,7 @@ function Assert-RebuildAtomicSourceContract {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
     foreach ($token in @(
         '$stagedPackRoot', '$stagedTargetPath', '$stagedDeltaPath', '$packBackupRoot', '$targetBackupPath',
-        'Move-Item -LiteralPath', '-OutputFile $stagedDeltaPath', 'Restore-AtomicRebuild', 'catch', 'finally'
+        'Assert-GraphicsPublicationSameVolume', 'Move-Item -LiteralPath', '-OutputFile $stagedDeltaPath', 'Restore-AtomicRebuild', 'catch', 'finally'
     )) {
         Assert-ContainsOrdinal -Text $source -Token $token -Context 'atomic graphics-options rebuild source'
     }
@@ -222,8 +236,8 @@ function Assert-ScopedExportedShellContract {
     Assert-ContainsOrdinal -Text $screenText -Token 'setInterval(this,"CompleteApply",100)' -Context 'Options Graphics screen timer'
     Assert-ContainsOrdinal -Text $screenText -Token 'this.Screen.BlockInput(true);' -Context 'Options Graphics apply input block'
     Assert-ContainsOrdinal -Text $screenText -Token 'this.Screen.BlockInput(false);' -Context 'Options Graphics apply input unblock'
-    if ($screenText -notmatch 'FE_SetControlType",4210\s*\+\s*this\.DraftVsync') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4210 plus DraftVsync.' }
-    if ($screenText -notmatch 'FE_SetControlType",4990\s*\+\s*this\.ApplySignalToggle') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4990 plus ApplySignalToggle.' }
+    if ($screenText -notmatch 'FE_SetControlType",4210\s*\+\s*this\.DraftVsync\s*,\s*""\s*\)') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4210 plus DraftVsync with an empty second argument.' }
+    if ($screenText -notmatch 'FE_SetControlType",4990\s*\+\s*this\.ApplySignalToggle\s*,\s*""\s*\)') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4990 plus ApplySignalToggle with an empty second argument.' }
 
     $rowDepths = @('141', '133', '125', '117', '109', '101', '93', '85', '77', '69', '61', '53', '45', '37', '29')
     for ($index = 0; $index -lt $rowDepths.Count; $index++) {
@@ -277,6 +291,24 @@ function Assert-AtomicPublicationRegression {
     try {
         . $rebuildPath -FunctionsOnly
         if ($null -eq (Get-Command Invoke-AtomicGraphicsPublication -ErrorAction SilentlyContinue)) { throw 'Atomic publication helper was not loaded.' }
+        if ($null -eq (Get-Command Assert-GraphicsPublicationSameVolume -ErrorAction SilentlyContinue)) { throw 'Same-volume publication guard was not loaded.' }
+        $sameVolumeStagingRoot = Join-Path $regressionRoot 'same-volume-staging'
+        $sameVolumeBackupRoot = Join-Path $regressionRoot 'same-volume-backup'
+        $sameVolumeLivePackRoot = Join-Path $regressionRoot 'same-volume-live\pack'
+        $sameVolumeLiveTargetPath = Join-Path $regressionRoot 'same-volume-live\Frontend.umap'
+        Assert-GraphicsPublicationSameVolume -TempRoot $sameVolumeStagingRoot -BackupRoot $sameVolumeBackupRoot -LivePackRoot $sameVolumeLivePackRoot -LiveTargetPath $sameVolumeLiveTargetPath
+        $stagingVolume = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($sameVolumeStagingRoot))
+        $alternateVolumes = @(Get-PSDrive -PSProvider FileSystem | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Root) -and -not [String]::Equals([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($_.Root)), $stagingVolume, [StringComparison]::OrdinalIgnoreCase) })
+        if ($alternateVolumes.Count -gt 0) {
+            $alternateBackupRoot = Join-Path $alternateVolumes[0].Root 'HelenBatmanGraphicsCrossVolumeBackup'
+            $crossVolumeRejected = $false
+            try {
+                Assert-GraphicsPublicationSameVolume -TempRoot $sameVolumeStagingRoot -BackupRoot $alternateBackupRoot -LivePackRoot $sameVolumeLivePackRoot -LiveTargetPath $sameVolumeLiveTargetPath
+            } catch {
+                $crossVolumeRejected = $true
+            }
+            if (-not $crossVolumeRejected) { throw 'Cross-volume graphics publication roots were accepted.' }
+        }
         $preCommitFailures = @('AfterPackBackup', 'AfterTargetBackup', 'AfterPackActivation', 'AfterTargetActivation', 'AfterTargetVerification')
         foreach ($failureCase in $preCommitFailures) {
             $caseRoot = Join-Path $regressionRoot $failureCase
@@ -452,34 +484,105 @@ $stableGeneratedRoot = Join-Path $BuilderRoot 'generated\graphics-options-experi
 $ffdecPath = Join-Path $BuilderRoot 'extracted\ffdec\ffdec-cli.exe'
 $patcherProjectPath = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\BmGameGfxPatcher\BmGameGfxPatcher.csproj'
 
-foreach ($requiredPath in @($packJsonPath, $buildJsonPath, $bindingsJsonPath, $commandsJsonPath, $filesJsonPath, $deltaPath, $basePath, $targetPath, $ffdecPath, $patcherProjectPath)) {
+foreach ($requiredPath in @($packJsonPath, $buildJsonPath, $bindingsJsonPath, $commandsJsonPath, $hooksJsonPath, $filesJsonPath, $deltaPath, $basePath, $targetPath, $ffdecPath, $patcherProjectPath)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Batman graphics-options package input not found: $requiredPath" }
 }
 Assert-RebuildAtomicSourceContract -ScriptPath (Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1')
 Assert-AtomicPublicationRegression
 Assert-ExactPackFileSet -Root $packRoot -BuildDirectoryName 'steam-goty-1.0'
 if (-not $StagedPackageValidation) { Assert-ExactGeneratedTargetFileSet -Root $stableGeneratedRoot -TargetPath $targetPath }
-if (Test-Path -LiteralPath $hooksJsonPath) { throw 'Graphics-options shell must not contain hooks.json.' }
+if (-not (Test-Path -LiteralPath $hooksJsonPath -PathType Leaf)) { throw 'Graphics-options package must contain hooks.json.' }
 if (Test-Path -LiteralPath $texturesJsonPath) { throw 'Graphics-options shell must not contain textures.json.' }
 
 $pack = Get-Content -LiteralPath $packJsonPath -Raw | ConvertFrom-Json
-Assert-ExactProperties -Object $pack -Names @('schemaVersion', 'id', 'name', 'targets', 'builds') -Context 'pack.json'
-if ($pack.schemaVersion -ne 1 -or $pack.id -ne 'batman-aa-graphics-options' -or $pack.name -ne 'Batman Graphics Options Shell') { throw 'pack.json shell identity drifted.' }
+Assert-ExactOrderedProperties -Object $pack -Names @('schemaVersion', 'id', 'name', 'targets', 'config', 'builds') -Context 'pack.json'
+if ($pack.schemaVersion -ne 1 -or $pack.id -ne 'batman-aa-graphics-options' -or $pack.name -ne 'Batman Graphics Options VSync') { throw 'pack.json VSync identity drifted.' }
 if (@($pack.targets).Count -ne 1 -or $pack.targets[0].gameId -ne 'batman-arkham-asylum' -or @($pack.targets[0].executables).Count -ne 1 -or $pack.targets[0].executables[0] -ne 'ShippingPC-BmGame.exe') { throw 'pack.json target executable drifted.' }
+Assert-ExactOrderedProperties -Object $pack.targets[0] -Names @('gameId', 'executables') -Context 'pack.json target'
+Assert-ExactOrderedProperties -Object $pack.config[0] -Names @('key', 'type', 'defaultValue') -Context 'pack.json config entry'
+$expectedConfigKeys = @('fullscreen', 'resolutionWidth', 'resolutionHeight', 'vsync', 'msaa', 'detailLevel', 'bloom', 'dynamicShadows', 'motionBlur', 'distortion', 'fogVolumes', 'sphericalHarmonicLighting', 'ambientOcclusion', 'physx', 'stereo', 'applySignal')
+if (@($pack.config).Count -ne $expectedConfigKeys.Count) { throw "pack.json config must contain exactly $($expectedConfigKeys.Count) entries." }
+for ($index = 0; $index -lt $expectedConfigKeys.Count; $index++) {
+    $configEntry = $pack.config[$index]
+    Assert-ExactOrderedProperties -Object $configEntry -Names @('key', 'type', 'defaultValue') -Context "pack.json config entry $($index + 1)"
+    if ($configEntry.key -cne $expectedConfigKeys[$index] -or $configEntry.type -cne 'int' -or $configEntry.defaultValue -ne 0) {
+        throw "pack.json config entry $($index + 1) drifted."
+    }
+}
 if (@($pack.builds).Count -ne 1 -or $pack.builds[0] -ne 'steam-goty-1.0') { throw 'pack.json build list drifted.' }
 
 $build = Get-Content -LiteralPath $buildJsonPath -Raw | ConvertFrom-Json
-Assert-ExactProperties -Object $build -Names @('id', 'executable', 'match') -Context 'build.json'
+Assert-ExactOrderedProperties -Object $build -Names @('id', 'executable', 'match', 'startupCommands') -Context 'build.json'
 $expectedMatch = & (Join-Path $PSScriptRoot 'Get-BatmanSteamBuildMatch.ps1')
 if ($build.id -ne $expectedMatch.BuildId -or $build.executable -ne $expectedMatch.Executable -or $build.match.fileSize -ne $expectedMatch.FileSize -or $build.match.sha256 -cne $expectedMatch.Sha256) { throw 'build.json retail executable identity drifted.' }
 Assert-ExactProperties -Object $build.match -Names @('fileSize', 'sha256') -Context 'build.json match'
+if (@($build.startupCommands).Count -ne 1 -or $build.startupCommands[0] -cne 'loadBatmanGraphicsDraftIntoConfig') { throw 'build.json startup command drifted.' }
 
 $bindings = Get-Content -LiteralPath $bindingsJsonPath -Raw | ConvertFrom-Json
 Assert-ExactProperties -Object $bindings -Names @('bindings') -Context 'bindings.json'
 if (@($bindings.bindings).Count -ne 0) { throw 'bindings.json must contain zero bindings.' }
 $commands = Get-Content -LiteralPath $commandsJsonPath -Raw | ConvertFrom-Json
 Assert-ExactProperties -Object $commands -Names @('commands') -Context 'commands.json'
-if (@($commands.commands).Count -ne 0) { throw 'commands.json must contain zero commands.' }
+if (@($commands.commands).Count -ne 2) { throw 'commands.json must contain exactly two commands.' }
+$loadCommand = $commands.commands[0]
+$applyCommand = $commands.commands[1]
+Assert-ExactOrderedProperties -Object $loadCommand -Names @('id', 'name', 'steps') -Context 'commands.json load command'
+Assert-ExactOrderedProperties -Object $applyCommand -Names @('id', 'name', 'steps') -Context 'commands.json apply command'
+if ($loadCommand.id -cne 'loadBatmanGraphicsDraftIntoConfig' -or $loadCommand.name -cne 'Load Batman Graphics Draft Into Config' -or @($loadCommand.steps).Count -ne 1) { throw 'commands.json load command identity drifted.' }
+if ($applyCommand.id -cne 'applyBatmanGraphicsDraft' -or $applyCommand.name -cne 'Apply Batman Graphics Draft' -or @($applyCommand.steps).Count -ne 2) { throw 'commands.json apply command identity drifted.' }
+Assert-ExactOrderedProperties -Object $loadCommand.steps[0] -Names @('kind') -Context 'commands.json load step'
+Assert-ExactOrderedProperties -Object $applyCommand.steps[0] -Names @('kind') -Context 'commands.json apply config step'
+Assert-ExactOrderedProperties -Object $applyCommand.steps[1] -Names @('kind') -Context 'commands.json apply load step'
+if ($loadCommand.steps[0].kind -cne 'load-batman-graphics-draft-into-config' -or $applyCommand.steps[0].kind -cne 'apply-batman-graphics-config' -or $applyCommand.steps[1].kind -cne 'load-batman-graphics-draft-into-config') { throw 'commands.json step kinds drifted.' }
+
+$hooks = Get-Content -LiteralPath $hooksJsonPath -Raw | ConvertFrom-Json
+Assert-ExactOrderedProperties -Object $hooks -Names @('runtimeSlots', 'stateObservers', 'hooks') -Context 'hooks.json'
+if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($hooks.stateObservers).Count -ne 2) { throw 'hooks.json runtime slots, observers, or hooks count drifted.' }
+
+function Assert-GraphicsCarrierChecks {
+    param([Parameter(Mandatory = $true)] [psobject]$Observer, [Parameter(Mandatory = $true)] [string]$Context)
+    if (@($Observer.checks).Count -ne 11) { throw "$Context must contain exactly eleven checks." }
+    $expectedConstantChecks = @(
+        @{ offset = -16; expectedValue = 50 },
+        @{ offset = -12; expectedValue = 100 },
+        @{ offset = -8; expectedValue = 100 },
+        @{ offset = -4; expectedValue = 100 },
+        @{ offset = 4; expectedValue = 1 },
+        @{ offset = 8; expectedValue = 0 },
+        @{ offset = 12; expectedValue = 1 },
+        @{ offset = 20; expectedValue = 2 },
+        @{ offset = 28; expectedValue = 3 },
+        @{ offset = 32; expectedValue = 3 }
+    )
+    for ($index = 0; $index -lt $expectedConstantChecks.Count; $index++) {
+        $checkIndex = if ($index -lt 7) { $index } else { $index + 1 }
+        $check = $Observer.checks[$checkIndex]
+        Assert-ExactOrderedProperties -Object $check -Names @('comparison', 'offset', 'expectedValue') -Context "$Context check $($checkIndex + 1)"
+        $expected = $expectedConstantChecks[$index]
+        if ($check.comparison -cne 'equals-constant' -or $check.offset -ne $expected.offset -or $check.expectedValue -ne $expected.expectedValue) { throw "$Context constant check $($checkIndex + 1) drifted." }
+    }
+    $offsetCheck = $Observer.checks[7]
+    Assert-ExactOrderedProperties -Object $offsetCheck -Names @('comparison', 'offset', 'compareOffset') -Context "$Context value-at-offset check"
+    if ($offsetCheck.comparison -cne 'equals-value-at-offset' -or $offsetCheck.offset -ne 16 -or $offsetCheck.compareOffset -ne 0) { throw "$Context value-at-offset check drifted." }
+}
+
+$expectedObserverProperties = @('id', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings')
+$vsyncObserver = $hooks.stateObservers[0]
+$applyObserver = $hooks.stateObservers[1]
+Assert-ExactOrderedProperties -Object $vsyncObserver -Names $expectedObserverProperties -Context 'hooks.json graphicsObserverVsync'
+Assert-ExactOrderedProperties -Object $applyObserver -Names @('id', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'command') -Context 'hooks.json graphicsObserverApplySignal'
+foreach ($observer in @($vsyncObserver, $applyObserver)) {
+    if ($observer.scanStartAddress -cne '0x2B000000' -or $observer.scanEndAddress -cne '0x30000000' -or $observer.scanStride -ne 4 -or $observer.valueOffset -ne 0 -or $observer.pollIntervalMs -ne 50) { throw 'hooks.json observer scan geometry drifted.' }
+    $expectedAddressMatchValues = @(4101, 4102, 4103, 4104, 4105, 4106, 4210, 4211, 4990, 4991)
+    if (@($observer.addressMatchValues).Count -ne $expectedAddressMatchValues.Count -or (@($observer.addressMatchValues) -join ',') -cne ($expectedAddressMatchValues -join ',')) { throw "hooks.json $($observer.id) addressMatchValues drifted." }
+    Assert-GraphicsCarrierChecks -Observer $observer -Context "hooks.json $($observer.id)"
+    if (@($observer.mappings).Count -ne 2) { throw "hooks.json $($observer.id) must contain exactly two mappings." }
+    foreach ($mapping in @($observer.mappings)) { Assert-ExactOrderedProperties -Object $mapping -Names @('match', 'value') -Context "hooks.json $($observer.id) mapping" }
+}
+if ($vsyncObserver.id -cne 'graphicsObserverVsync' -or $vsyncObserver.targetConfigKey -cne 'vsync' -or $vsyncObserver.PSObject.Properties.Name -contains 'command') { throw 'hooks.json VSync observer identity drifted.' }
+if ($applyObserver.id -cne 'graphicsObserverApplySignal' -or $applyObserver.targetConfigKey -cne 'applySignal' -or $applyObserver.command -cne 'applyBatmanGraphicsDraft') { throw 'hooks.json apply observer identity drifted.' }
+if ($vsyncObserver.mappings[0].match -ne 4210 -or $vsyncObserver.mappings[0].value -ne 0 -or $vsyncObserver.mappings[1].match -ne 4211 -or $vsyncObserver.mappings[1].value -ne 1) { throw 'hooks.json VSync mappings drifted.' }
+if ($applyObserver.mappings[0].match -ne 4990 -or $applyObserver.mappings[0].value -ne 0 -or $applyObserver.mappings[1].match -ne 4991 -or $applyObserver.mappings[1].value -ne 1) { throw 'hooks.json apply mappings drifted.' }
 
 $files = Get-Content -LiteralPath $filesJsonPath -Raw | ConvertFrom-Json
 Assert-ExactProperties -Object $files -Names @('virtualFiles') -Context 'files.json'

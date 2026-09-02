@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -86,6 +87,8 @@ void RunPackRepositoryTests()
         const std::filesystem::path malformed_delta_hash_build_root = malformed_delta_hash_pack_root / "builds" / "malformed-delta-hash-build";
         const std::filesystem::path duplicate_missing_path_pack_root = packs_root / "duplicate-missing-path-pack";
         const std::filesystem::path duplicate_missing_path_build_root = duplicate_missing_path_pack_root / "builds" / "duplicate-missing-path-build";
+        const std::filesystem::path empty_address_match_pack_root = packs_root / "empty-address-match-pack";
+        const std::filesystem::path empty_address_match_build_root = empty_address_match_pack_root / "builds" / "empty-address-match-build";
         std::filesystem::create_directories(valid_build_root);
         std::filesystem::create_directories(packset_subtitles_build_root);
         std::filesystem::create_directories(skip_videos_build_root);
@@ -93,6 +96,7 @@ void RunPackRepositoryTests()
         std::filesystem::create_directories(mode_mismatch_build_root);
         std::filesystem::create_directories(malformed_delta_hash_build_root);
         std::filesystem::create_directories(duplicate_missing_path_build_root);
+        std::filesystem::create_directories(empty_address_match_build_root);
 
         WriteAllText(
             valid_pack_root / "pack.json",
@@ -603,6 +607,63 @@ void RunPackRepositoryTests()
         WriteAllText(duplicate_missing_path_build_root / "textures.json", R"({ "replacements": [] })");
         WriteAllText(duplicate_missing_path_build_root / "commands.json", R"({ "commands": [] })");
 
+        WriteAllText(
+            empty_address_match_pack_root / "pack.json",
+            R"({
+  "schemaVersion": 1,
+  "id": "empty-address-match-pack",
+  "name": "Empty Address Match Pack",
+  "targets": [
+    {
+      "executables": [
+        "EmptyAddressMatchGame.exe"
+      ]
+    }
+  ],
+  "builds": [
+    "empty-address-match-build"
+  ]
+})");
+        WriteAllText(
+            empty_address_match_build_root / "build.json",
+            R"({
+  "id": "empty-address-match-build",
+  "executable": "EmptyAddressMatchGame.exe",
+  "match": {
+    "fileSize": 2222,
+    "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  }
+})");
+        WriteAllText(
+            empty_address_match_build_root / "hooks.json",
+            R"({
+  "stateObservers": [
+    {
+      "id": "emptyAddressMatchObserver",
+      "scanStartAddress": "0x2B000000",
+      "scanEndAddress": "0x30000000",
+      "scanStride": 4,
+      "valueOffset": 0,
+      "pollIntervalMs": 50,
+      "targetConfigKey": "empty.addressMatch",
+      "checks": [
+        {
+          "comparison": "equals-constant",
+          "offset": -16,
+          "expectedValue": 50
+        }
+      ],
+      "mappings": [
+        {
+          "match": 4101,
+          "value": 0
+        }
+      ],
+      "addressMatchValues": []
+    }
+  ]
+})");
+
         const std::optional<helen::LoadedBuildPack> loaded_valid_pack = repository.LoadForExecutable(
             packs_root,
             "ShippingPC-BmGame.exe",
@@ -667,6 +728,10 @@ void RunPackRepositoryTests()
         Expect(valid_frontend_file->Source.ChunkSize == 65536, "Frontend virtual file chunk size mismatch.");
         Expect(loaded_valid_pack->Build.RuntimeSlots.size() == 1, "Loaded runtime slot count mismatch.");
         Expect(loaded_valid_pack->Build.StateObservers.size() == 1, "Loaded state observer count mismatch.");
+        Expect(loaded_valid_pack->Build.StateObservers[0].AddressMatchValues.size() == 3, "Legacy observer address-match value count mismatch.");
+        Expect(loaded_valid_pack->Build.StateObservers[0].AddressMatchValues[0] == 4101, "Legacy observer first address-match value mismatch.");
+        Expect(loaded_valid_pack->Build.StateObservers[0].AddressMatchValues[1] == 4102, "Legacy observer second address-match value mismatch.");
+        Expect(loaded_valid_pack->Build.StateObservers[0].AddressMatchValues[2] == 4103, "Legacy observer third address-match value mismatch.");
         Expect(loaded_valid_pack->Build.Hooks.size() == 1, "Loaded hook count mismatch.");
         Expect(loaded_valid_pack->Build.TextureReplacements.size() == 1, "Loaded texture replacement count mismatch.");
         Expect(loaded_valid_pack->Build.Commands.size() == 2, "Loaded command count mismatch.");
@@ -687,6 +752,13 @@ void RunPackRepositoryTests()
             loaded_valid_pack->Build.TextureReplacements[0].SamplerStage.has_value() &&
                 *loaded_valid_pack->Build.TextureReplacements[0].SamplerStage == 0,
             "Loaded texture replacement sampler stage mismatch.");
+
+        const std::optional<helen::LoadedBuildPack> empty_address_match_pack = repository.LoadForExecutable(
+            packs_root,
+            "EmptyAddressMatchGame.exe",
+            2222,
+            "2222222222222222222222222222222222222222222222222222222222222222");
+        Expect(!empty_address_match_pack.has_value(), "Pack repository accepted an explicitly empty observer address-match list.");
 
         const std::optional<helen::LoadedBuildPack> mismatched_valid_pack = repository.LoadForExecutable(
             packs_root,
@@ -731,19 +803,43 @@ void RunPackRepositoryTests()
         Expect(loaded_batman_pack.has_value(), "Expected the checked-in Batman pack to load for the matching executable fingerprint.");
         Expect(loaded_batman_pack->Pack.Id == "batman-aa-graphics-options", "Checked-in Batman graphics pack identifier mismatch.");
         Expect(loaded_batman_pack->Build.VirtualFiles.size() == 1, "Checked-in Batman graphics pack virtual file count mismatch.");
-        Expect(loaded_batman_pack->Build.StartupCommandIds.empty(), "Checked-in Batman graphics pack should not declare startup commands.");
+        Expect(loaded_batman_pack->Build.StartupCommandIds.size() == 1, "Checked-in Batman graphics pack startup command count mismatch.");
+        Expect(loaded_batman_pack->Build.StartupCommandIds[0] == "loadBatmanGraphicsDraftIntoConfig", "Checked-in Batman graphics startup command mismatch.");
         Expect(loaded_batman_pack->Build.MissingPaths.empty(), "Checked-in Batman graphics pack should not hide game paths.");
         Expect(!loaded_batman_pack->Build.EnableD3d9TextureReplacementHooks, "Checked-in Batman graphics pack should disable D3D9 texture replacement hooks.");
         Expect(!loaded_batman_pack->Build.EnableD3d9TextureHashLogging, "Checked-in Batman graphics pack should leave D3D9 texture hash logging disabled.");
         Expect(!loaded_batman_pack->Build.EnableD3d9TextureImageDumping, "Checked-in Batman graphics pack should leave D3D9 texture image dumping disabled.");
         Expect(loaded_batman_pack->Build.RuntimeSlots.empty(), "Checked-in Batman graphics pack unexpectedly declared runtime slots.");
-        Expect(loaded_batman_pack->Build.StateObservers.empty(), "Checked-in Batman graphics pack unexpectedly declared state observers.");
+        Expect(loaded_batman_pack->Build.StateObservers.size() == 2, "Checked-in Batman graphics pack state-observer count mismatch.");
         Expect(loaded_batman_pack->Build.Hooks.empty(), "Checked-in Batman graphics pack unexpectedly declared hooks.");
         Expect(loaded_batman_pack->Build.TextureReplacements.empty(), "Checked-in Batman graphics pack unexpectedly declared texture replacements.");
-        Expect(loaded_batman_pack->Build.Commands.empty(), "Checked-in Batman graphics pack unexpectedly declared commands.");
+        Expect(loaded_batman_pack->Build.Commands.size() == 2, "Checked-in Batman graphics pack command count mismatch.");
         Expect(loaded_batman_pack->Build.ExternalBindings.empty(), "Checked-in Batman graphics pack unexpectedly declared external bindings.");
-        Expect(loaded_batman_pack->Pack.ConfigEntries.empty(), "Checked-in Batman graphics pack unexpectedly declared config entries.");
+        Expect(loaded_batman_pack->Pack.ConfigEntries.size() == 16, "Checked-in Batman graphics pack config-entry count mismatch.");
         Expect(loaded_batman_pack->Pack.Features.empty(), "Checked-in Batman graphics pack unexpectedly declared features.");
+        const helen::MemoryStateObserverDefinition& checked_in_vsync_observer = loaded_batman_pack->Build.StateObservers[0];
+        const helen::MemoryStateObserverDefinition& checked_in_apply_observer = loaded_batman_pack->Build.StateObservers[1];
+        Expect(checked_in_vsync_observer.Id == "graphicsObserverVsync", "Checked-in Batman VSync observer id mismatch.");
+        Expect(checked_in_vsync_observer.TargetConfigKey == "vsync", "Checked-in Batman VSync observer target mismatch.");
+        Expect(!checked_in_vsync_observer.CommandId.has_value(), "Checked-in Batman VSync observer unexpectedly declared a command.");
+        Expect(checked_in_apply_observer.Id == "graphicsObserverApplySignal", "Checked-in Batman apply observer id mismatch.");
+        Expect(checked_in_apply_observer.TargetConfigKey == "applySignal", "Checked-in Batman apply observer target mismatch.");
+        Expect(checked_in_apply_observer.CommandId.has_value() && *checked_in_apply_observer.CommandId == "applyBatmanGraphicsDraft", "Checked-in Batman apply observer command mismatch.");
+        const int expected_graphics_address_match_values[] = { 4101, 4102, 4103, 4104, 4105, 4106, 4210, 4211, 4990, 4991 };
+        for (const helen::MemoryStateObserverDefinition* observer : { &checked_in_vsync_observer, &checked_in_apply_observer })
+        {
+            Expect(observer->AddressMatchValues.size() == std::size(expected_graphics_address_match_values), "Checked-in Batman graphics address-match value count mismatch.");
+            for (std::size_t index = 0; index < std::size(expected_graphics_address_match_values); ++index)
+            {
+                Expect(observer->AddressMatchValues[index] == expected_graphics_address_match_values[index], "Checked-in Batman graphics address-match value mismatch.");
+            }
+        }
+        Expect(checked_in_vsync_observer.Mappings.size() == 2, "Checked-in Batman VSync mapping count mismatch.");
+        Expect(checked_in_vsync_observer.Mappings[0].Match == 4210 && checked_in_vsync_observer.Mappings[0].Value == 0, "Checked-in Batman VSync first mapping mismatch.");
+        Expect(checked_in_vsync_observer.Mappings[1].Match == 4211 && checked_in_vsync_observer.Mappings[1].Value == 1, "Checked-in Batman VSync second mapping mismatch.");
+        Expect(checked_in_apply_observer.Mappings.size() == 2, "Checked-in Batman apply mapping count mismatch.");
+        Expect(checked_in_apply_observer.Mappings[0].Match == 4990 && checked_in_apply_observer.Mappings[0].Value == 0, "Checked-in Batman apply first mapping mismatch.");
+        Expect(checked_in_apply_observer.Mappings[1].Match == 4991 && checked_in_apply_observer.Mappings[1].Value == 1, "Checked-in Batman apply second mapping mismatch.");
 
         const helen::VirtualFileDefinition* checked_in_graphics_frontend_file = nullptr;
         for (const helen::VirtualFileDefinition& virtual_file : loaded_batman_pack->Build.VirtualFiles)
@@ -783,15 +879,16 @@ void RunPackRepositoryTests()
             active_pack_set_builder.TryBuild(*checked_in_batman_pack_set, checked_in_active_pack_set, checked_in_failure_reason),
             "Expected the checked-in Batman subtitles plus graphics pack set to merge into an active pack set.");
         Expect(checked_in_active_pack_set.LoadedPacks.size() == 2, "Checked-in Batman active pack-set loaded-pack count mismatch.");
-        Expect(checked_in_active_pack_set.StartupCommandIds.size() == 1, "Checked-in Batman active pack-set startup-command count mismatch.");
+        Expect(checked_in_active_pack_set.StartupCommandIds.size() == 2, "Checked-in Batman active pack-set startup-command count mismatch.");
         Expect(checked_in_active_pack_set.StartupCommandIds[0] == "applySavedSubtitleSize", "Checked-in Batman active pack-set startup command mismatch.");
+        Expect(checked_in_active_pack_set.StartupCommandIds[1] == "loadBatmanGraphicsDraftIntoConfig", "Checked-in Batman active graphics startup command mismatch.");
         Expect(checked_in_active_pack_set.MissingPaths.empty(), "Checked-in Batman active pack-set should not hide game paths.");
         Expect(checked_in_active_pack_set.VirtualFiles.size() == 2, "Checked-in Batman active pack-set virtual-file count mismatch.");
         Expect(checked_in_active_pack_set.Hooks.size() == 1, "Checked-in Batman active pack-set hook count mismatch.");
         Expect(checked_in_active_pack_set.TextureReplacements.size() == 1, "Checked-in Batman active pack-set texture replacement count mismatch.");
-        Expect(checked_in_active_pack_set.Commands.size() == 2, "Checked-in Batman active pack-set command count mismatch.");
+        Expect(checked_in_active_pack_set.Commands.size() == 4, "Checked-in Batman active pack-set command count mismatch.");
         Expect(checked_in_active_pack_set.ExternalBindings.size() == 3, "Checked-in Batman active pack-set external-binding count mismatch.");
-        Expect(checked_in_active_pack_set.StateObservers.size() == 1, "Checked-in Batman active pack-set state-observer count mismatch.");
+        Expect(checked_in_active_pack_set.StateObservers.size() == 3, "Checked-in Batman active pack-set state-observer count mismatch.");
         Expect(checked_in_active_pack_set.RuntimeSlots.size() == 1, "Checked-in Batman active pack-set runtime-slot count mismatch.");
         Expect(checked_in_active_pack_set.EnableD3d9TextureReplacementHooks, "Checked-in Batman active pack-set should enable D3D9 texture replacement hooks.");
         Expect(!checked_in_active_pack_set.EnableD3d9TextureHashLogging, "Checked-in Batman active pack-set should leave D3D9 texture hash logging disabled.");

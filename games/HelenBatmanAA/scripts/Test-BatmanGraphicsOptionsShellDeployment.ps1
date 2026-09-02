@@ -12,6 +12,7 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
 
 $DeployScriptPath = Join-Path $BatmanRoot 'scripts\Deploy-BatmanGraphicsOptionsExperiment.ps1'
 $ConfigSourcePath = Join-Path $BatmanRoot 'helengamehook\config\packs.json'
+$PackSourcePath = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-graphics-options'
 
 function Assert-ContainsOrdinal {
     param(
@@ -73,6 +74,9 @@ function Reset-DeploymentFixture {
         Remove-Item -LiteralPath $LivePackRoot -Recurse -Force
     }
 
+    foreach ($sourceChild in @(Get-ChildItem -LiteralPath $PackSourcePath -Force)) {
+        Copy-Item -LiteralPath $sourceChild.FullName -Destination $StagedPackRoot -Recurse -Force
+    }
     [IO.File]::WriteAllText((Join-Path $StagedPackRoot 'state.txt'), 'new-pack')
     [IO.File]::WriteAllText($StagedConfigPath, (Get-Content -LiteralPath $ConfigSourcePath -Raw))
     [IO.File]::WriteAllBytes($StagedHelenGameHookPath, [Text.Encoding]::ASCII.GetBytes('new-helen-game-hook'))
@@ -152,6 +156,7 @@ foreach ($RequiredToken in @(
     'Initialize-DeploymentRoots',
     'AfterRecoveryRootCreation',
     'Get-DirectorySnapshot',
+    'Assert-BatmanGraphicsVsyncHooks',
     'Remove-DeploymentStagingRoot',
     'GetPathRoot',
     'Split-Path -Parent $PackDestination',
@@ -228,6 +233,7 @@ try {
         throw 'Deployment staging and recovery roots must share the GameBin volume.'
     }
     Reset-DeploymentFixture -LivePackRoot $LivePackRoot -LiveConfigPath $LiveConfigPath -LiveHelenGameHookPath $LiveHelenGameHookPath -LiveProxyPath $LiveProxyPath -SubtitlePackRoot $SubtitlePackRoot -StagingRoot $StagingRoot -RecoveryRoot $RecoveryRoot -StagedPackRoot $StagedPackRoot -StagedConfigPath $StagedConfigPath -StagedHelenGameHookPath $StagedHelenGameHookPath -StagedProxyPath $StagedProxyPath -IncludeExistingGraphicsPack $true
+    Assert-BatmanGraphicsVsyncHooks -PackRoot $StagedPackRoot -Context 'Staged deployment fixture'
     $ExpectedHelenGameHookHash = (Get-FileHash -LiteralPath $StagedHelenGameHookPath -Algorithm SHA256).Hash
     $ExpectedProxyHash = (Get-FileHash -LiteralPath $StagedProxyPath -Algorithm SHA256).Hash
 
@@ -282,6 +288,7 @@ try {
     $VerifyPublication = {
         param($LivePackPath, $LiveConfigPathForVerification, $LiveHelenPath, $LiveProxyPath)
         if ((Get-Content -LiteralPath (Join-Path $LivePackPath 'state.txt') -Raw) -cne 'new-pack') { throw 'Verifier saw the wrong graphics pack.' }
+        Assert-BatmanGraphicsVsyncHooks -PackRoot $LivePackPath -Context 'Activated deployment fixture'
         $config = Get-Content -LiteralPath $LiveConfigPathForVerification -Raw | ConvertFrom-Json
         $packs = @($config.enabledPacksByExecutable.'ShippingPC-BmGame.exe')
         if ($packs.Count -ne 2 -or $packs[0] -ne 'batman-aa-subtitles' -or $packs[1] -ne 'batman-aa-graphics-options') { throw 'Verifier saw the wrong pack order.' }
