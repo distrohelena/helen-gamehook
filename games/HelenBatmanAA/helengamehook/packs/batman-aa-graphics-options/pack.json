@@ -1,7 +1,7 @@
 {
     "schemaVersion":  1,
     "id":  "batman-aa-graphics-options",
-    "name":  "Batman Graphics Options VSync",
+    "name":  "Batman Graphics Options",
     "targets":  [
                     {
                         "gameId":  "batman-arkham-asylum",
@@ -88,6 +88,11 @@
                    },
                    {
                        "key":  "applySignal",
+                       "type":  "int",
+                       "defaultValue":  0
+                   },
+                   {
+                       "key":  "rollbackSignal",
                        "type":  "int",
                        "defaultValue":  0
                    }

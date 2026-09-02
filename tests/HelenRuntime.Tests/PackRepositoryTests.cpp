@@ -1287,43 +1287,166 @@ void RunPackRepositoryTests()
         Expect(!loaded_batman_pack->Build.EnableD3d9TextureHashLogging, "Checked-in Batman graphics pack should leave D3D9 texture hash logging disabled.");
         Expect(!loaded_batman_pack->Build.EnableD3d9TextureImageDumping, "Checked-in Batman graphics pack should leave D3D9 texture image dumping disabled.");
         Expect(loaded_batman_pack->Build.RuntimeSlots.empty(), "Checked-in Batman graphics pack unexpectedly declared runtime slots.");
-        Expect(loaded_batman_pack->Build.StateObservers.size() == 2, "Checked-in Batman graphics pack state-observer count mismatch.");
+        Expect(loaded_batman_pack->Build.StateObservers.size() == 6, "Checked-in Batman graphics pack state-observer count mismatch.");
         Expect(loaded_batman_pack->Build.Hooks.empty(), "Checked-in Batman graphics pack unexpectedly declared hooks.");
         Expect(loaded_batman_pack->Build.TextureReplacements.empty(), "Checked-in Batman graphics pack unexpectedly declared texture replacements.");
         Expect(loaded_batman_pack->Build.Commands.size() == 2, "Checked-in Batman graphics pack command count mismatch.");
+        Expect(loaded_batman_pack->Build.Commands[0].Id == "loadBatmanGraphicsDraftIntoConfig", "Checked-in Batman load command id mismatch.");
+        Expect(loaded_batman_pack->Build.Commands[0].Name == "Load Batman Graphics Draft Into Config", "Checked-in Batman load command name mismatch.");
+        Expect(loaded_batman_pack->Build.Commands[0].Steps.size() == 1, "Checked-in Batman load command step count mismatch.");
+        Expect(loaded_batman_pack->Build.Commands[0].Steps[0].Kind == "load-batman-graphics-draft-into-config", "Checked-in Batman load command step mismatch.");
+        Expect(loaded_batman_pack->Build.Commands[1].Id == "applyBatmanGraphicsDraft", "Checked-in Batman apply command id mismatch.");
+        Expect(loaded_batman_pack->Build.Commands[1].Name == "Apply Batman Graphics Draft", "Checked-in Batman apply command name mismatch.");
+        Expect(loaded_batman_pack->Build.Commands[1].Steps.size() == 2, "Checked-in Batman apply command step count mismatch.");
+        Expect(loaded_batman_pack->Build.Commands[1].Steps[0].Kind == "apply-batman-graphics-config", "Checked-in Batman apply command first step mismatch.");
+        Expect(loaded_batman_pack->Build.Commands[1].Steps[1].Kind == "load-batman-graphics-draft-into-config", "Checked-in Batman apply command second step mismatch.");
         Expect(loaded_batman_pack->Build.ExternalBindings.empty(), "Checked-in Batman graphics pack unexpectedly declared external bindings.");
-        Expect(loaded_batman_pack->Pack.ConfigEntries.size() == 16, "Checked-in Batman graphics pack config-entry count mismatch.");
-        Expect(loaded_batman_pack->Pack.Features.empty(), "Checked-in Batman graphics pack unexpectedly declared features.");
-        const helen::MemoryStateObserverDefinition& checked_in_vsync_observer = loaded_batman_pack->Build.StateObservers[0];
-        const helen::MemoryStateObserverDefinition& checked_in_apply_observer = loaded_batman_pack->Build.StateObservers[1];
-        Expect(checked_in_vsync_observer.Id == "graphicsObserverVsync", "Checked-in Batman VSync observer id mismatch.");
-        Expect(checked_in_vsync_observer.TargetConfigKey == "vsync", "Checked-in Batman VSync observer target mismatch.");
-        Expect(!checked_in_vsync_observer.CommandId.has_value(), "Checked-in Batman VSync observer unexpectedly declared a command.");
-        Expect(checked_in_apply_observer.Id == "graphicsObserverApplySignal", "Checked-in Batman apply observer id mismatch.");
-        Expect(checked_in_apply_observer.TargetConfigKey == "applySignal", "Checked-in Batman apply observer target mismatch.");
-        Expect(checked_in_apply_observer.CommandId.has_value() && *checked_in_apply_observer.CommandId == "applyBatmanGraphicsDraft", "Checked-in Batman apply observer command mismatch.");
-        const int expected_graphics_address_match_values[] = { 4101, 4102, 4103, 4104, 4105, 4106, 4200, 4210, 4211, 4990, 4991 };
-        for (const helen::MemoryStateObserverDefinition* observer : { &checked_in_vsync_observer, &checked_in_apply_observer })
+        Expect(loaded_batman_pack->Pack.Name == "Batman Graphics Options", "Checked-in Batman graphics pack name mismatch.");
+        Expect(loaded_batman_pack->Pack.ConfigEntries.size() == 17, "Checked-in Batman graphics pack config-entry count mismatch.");
+        const char* expected_graphics_config_keys[] = {
+            "fullscreen",
+            "resolutionWidth",
+            "resolutionHeight",
+            "vsync",
+            "msaa",
+            "detailLevel",
+            "bloom",
+            "dynamicShadows",
+            "motionBlur",
+            "distortion",
+            "fogVolumes",
+            "sphericalHarmonicLighting",
+            "ambientOcclusion",
+            "physx",
+            "stereo",
+            "applySignal",
+            "rollbackSignal"
+        };
+        for (std::size_t index = 0; index < std::size(expected_graphics_config_keys); ++index)
         {
-            Expect(observer->ScanStartAddress == 0x10000000, "Checked-in Batman graphics scan start mismatch.");
-            Expect(observer->ScanEndAddress == 0x30000000, "Checked-in Batman graphics scan end must cover the observed randomized heap range.");
-            Expect(observer->AddressMatchValues.size() == std::size(expected_graphics_address_match_values), "Checked-in Batman graphics address-match value count mismatch.");
+            const helen::ConfigEntryDefinition& config_entry = loaded_batman_pack->Pack.ConfigEntries[index];
+            Expect(config_entry.Key == expected_graphics_config_keys[index], "Checked-in Batman graphics config-key order mismatch.");
+            Expect(config_entry.Type == "int", "Checked-in Batman graphics config-entry type mismatch.");
+            Expect(config_entry.DefaultValue == 0, "Checked-in Batman graphics config-entry default mismatch.");
+        }
+        Expect(loaded_batman_pack->Pack.Features.empty(), "Checked-in Batman graphics pack unexpectedly declared features.");
+        const char* expected_graphics_observer_ids[] = {
+            "graphicsObserverVsync",
+            "graphicsObserverMsaa",
+            "graphicsObserverPhysx",
+            "graphicsObserverStereo",
+            "graphicsObserverApplySignal",
+            "graphicsObserverRollbackSignal"
+        };
+        const char* expected_graphics_observer_targets[] = { "vsync", "msaa", "physx", "stereo", "applySignal", "rollbackSignal" };
+        const int expected_graphics_address_match_values[] = {
+            4200, 4210, 4211, 4220, 4221, 4230, 4231, 4299,
+            4300, 4310, 4311, 4312, 4313, 4314, 4320, 4321, 4322, 4323, 4324, 4330, 4331, 4332, 4333, 4334, 4399,
+            4400, 4410, 4411, 4412, 4420, 4421, 4422, 4430, 4431, 4432, 4499,
+            4500, 4510, 4511, 4520, 4521, 4530, 4531, 4599,
+            4960, 4961, 4969, 4970, 4971, 4980, 4981, 4989, 4990, 4991
+        };
+        for (std::size_t observer_index = 0; observer_index < std::size(expected_graphics_observer_ids); ++observer_index)
+        {
+            const helen::MemoryStateObserverDefinition& observer = loaded_batman_pack->Build.StateObservers[observer_index];
+            Expect(observer.Id == expected_graphics_observer_ids[observer_index], "Checked-in Batman graphics observer order mismatch.");
+            Expect(observer.TargetConfigKey == expected_graphics_observer_targets[observer_index], "Checked-in Batman graphics observer target mismatch.");
+            Expect(observer.AddressGroup.has_value() && *observer.AddressGroup == "batmanFrontendControlType", "Checked-in Batman graphics observer address group mismatch.");
+            Expect(observer.ScanStartAddress == 0x10000000, "Checked-in Batman graphics scan start mismatch.");
+            Expect(observer.ScanEndAddress == 0x30000000, "Checked-in Batman graphics scan end must cover the observed randomized heap range.");
+            Expect(observer.ScanStride == 4, "Checked-in Batman graphics scan stride mismatch.");
+            Expect(observer.ValueOffset == 12, "Checked-in Batman graphics value offset mismatch.");
+            Expect(observer.PollIntervalMs == 50, "Checked-in Batman graphics poll interval mismatch.");
+            Expect(observer.Checks.size() == 11, "Checked-in Batman graphics structural-check count mismatch.");
+            Expect(observer.AddressMatchValues.size() == std::size(expected_graphics_address_match_values), "Checked-in Batman graphics address-match value count mismatch.");
             for (std::size_t index = 0; index < std::size(expected_graphics_address_match_values); ++index)
             {
-                Expect(observer->AddressMatchValues[index] == expected_graphics_address_match_values[index], "Checked-in Batman graphics address-match value mismatch.");
+                Expect(observer.AddressMatchValues[index] == expected_graphics_address_match_values[index], "Checked-in Batman graphics address-match value mismatch.");
             }
         }
+        const helen::MemoryStateObserverDefinition& checked_in_vsync_observer = loaded_batman_pack->Build.StateObservers[0];
+        const helen::MemoryStateObserverDefinition& checked_in_msaa_observer = loaded_batman_pack->Build.StateObservers[1];
+        const helen::MemoryStateObserverDefinition& checked_in_physx_observer = loaded_batman_pack->Build.StateObservers[2];
+        const helen::MemoryStateObserverDefinition& checked_in_stereo_observer = loaded_batman_pack->Build.StateObservers[3];
+        const helen::MemoryStateObserverDefinition& checked_in_apply_observer = loaded_batman_pack->Build.StateObservers[4];
+        const helen::MemoryStateObserverDefinition& checked_in_rollback_observer = loaded_batman_pack->Build.StateObservers[5];
         Expect(checked_in_vsync_observer.Mappings.size() == 2, "Checked-in Batman VSync mapping count mismatch.");
-        Expect(checked_in_vsync_observer.Mappings[0].Match == 4210 && checked_in_vsync_observer.Mappings[0].Value == 0, "Checked-in Batman VSync first mapping mismatch.");
-        Expect(checked_in_vsync_observer.Mappings[1].Match == 4211 && checked_in_vsync_observer.Mappings[1].Value == 1, "Checked-in Batman VSync second mapping mismatch.");
+        Expect(checked_in_vsync_observer.Mappings[0].Match == 4220 && checked_in_vsync_observer.Mappings[0].Value == 0, "Checked-in Batman VSync first mapping mismatch.");
+        Expect(checked_in_vsync_observer.Mappings[1].Match == 4221 && checked_in_vsync_observer.Mappings[1].Value == 1, "Checked-in Batman VSync second mapping mismatch.");
         Expect(checked_in_vsync_observer.ResponseRequestValue.has_value() && *checked_in_vsync_observer.ResponseRequestValue == 4200, "Checked-in Batman VSync response request mismatch.");
         Expect(checked_in_vsync_observer.ResponseMappings.size() == 2, "Checked-in Batman VSync response mapping count mismatch.");
         Expect(checked_in_vsync_observer.ResponseMappings[0].Match == 0 && checked_in_vsync_observer.ResponseMappings[0].Value == 4210, "Checked-in Batman VSync disabled response mapping mismatch.");
         Expect(checked_in_vsync_observer.ResponseMappings[1].Match == 1 && checked_in_vsync_observer.ResponseMappings[1].Value == 4211, "Checked-in Batman VSync enabled response mapping mismatch.");
-        Expect(!checked_in_apply_observer.ResponseRequestValue.has_value() && checked_in_apply_observer.ResponseMappings.empty(), "Checked-in Batman apply observer unexpectedly declared a response mapping.");
+        Expect(checked_in_vsync_observer.AcknowledgementMappings.size() == 2, "Checked-in Batman VSync acknowledgement mapping count mismatch.");
+        Expect(checked_in_vsync_observer.AcknowledgementMappings[0].Match == 4220 && checked_in_vsync_observer.AcknowledgementMappings[0].Value == 4230, "Checked-in Batman VSync disabled acknowledgement mismatch.");
+        Expect(checked_in_vsync_observer.AcknowledgementMappings[1].Match == 4221 && checked_in_vsync_observer.AcknowledgementMappings[1].Value == 4231, "Checked-in Batman VSync enabled acknowledgement mismatch.");
+        Expect(checked_in_vsync_observer.FailureResponseValue.has_value() && *checked_in_vsync_observer.FailureResponseValue == 4299, "Checked-in Batman VSync failure response mismatch.");
+
+        Expect(checked_in_msaa_observer.Mappings.size() == 5, "Checked-in Batman MSAA mapping count mismatch.");
+        Expect(checked_in_msaa_observer.ResponseMappings.size() == 5, "Checked-in Batman MSAA response mapping count mismatch.");
+        Expect(checked_in_msaa_observer.AcknowledgementMappings.size() == 5, "Checked-in Batman MSAA acknowledgement mapping count mismatch.");
+        const int expected_msaa_mapping_matches[] = { 4320, 4321, 4322, 4323, 4324 };
+        const int expected_msaa_mapping_values[] = { 0, 1, 2, 3, 5 };
+        const int expected_msaa_response_values[] = { 4310, 4311, 4312, 4313, 4314 };
+        const int expected_msaa_acknowledgement_values[] = { 4330, 4331, 4332, 4333, 4334 };
+        for (std::size_t index = 0; index < std::size(expected_msaa_mapping_matches); ++index)
+        {
+            Expect(checked_in_msaa_observer.Mappings[index].Match == expected_msaa_mapping_matches[index] && checked_in_msaa_observer.Mappings[index].Value == expected_msaa_mapping_values[index], "Checked-in Batman MSAA mapping mismatch.");
+            Expect(checked_in_msaa_observer.ResponseMappings[index].Match == expected_msaa_mapping_values[index] && checked_in_msaa_observer.ResponseMappings[index].Value == expected_msaa_response_values[index], "Checked-in Batman MSAA response mapping mismatch.");
+            Expect(checked_in_msaa_observer.AcknowledgementMappings[index].Match == expected_msaa_mapping_matches[index] && checked_in_msaa_observer.AcknowledgementMappings[index].Value == expected_msaa_acknowledgement_values[index], "Checked-in Batman MSAA acknowledgement mapping mismatch.");
+        }
+        Expect(checked_in_msaa_observer.ResponseRequestValue.has_value() && *checked_in_msaa_observer.ResponseRequestValue == 4300, "Checked-in Batman MSAA response request mismatch.");
+        Expect(checked_in_msaa_observer.FailureResponseValue.has_value() && *checked_in_msaa_observer.FailureResponseValue == 4399, "Checked-in Batman MSAA failure response mismatch.");
+
+        Expect(checked_in_physx_observer.Mappings.size() == 3, "Checked-in Batman PhysX mapping count mismatch.");
+        Expect(checked_in_physx_observer.ResponseMappings.size() == 3, "Checked-in Batman PhysX response mapping count mismatch.");
+        Expect(checked_in_physx_observer.AcknowledgementMappings.size() == 3, "Checked-in Batman PhysX acknowledgement mapping count mismatch.");
+        const int expected_physx_mapping_matches[] = { 4420, 4421, 4422 };
+        const int expected_physx_response_values[] = { 4410, 4411, 4412 };
+        const int expected_physx_acknowledgement_values[] = { 4430, 4431, 4432 };
+        for (std::size_t index = 0; index < std::size(expected_physx_mapping_matches); ++index)
+        {
+            Expect(checked_in_physx_observer.Mappings[index].Match == expected_physx_mapping_matches[index] && checked_in_physx_observer.Mappings[index].Value == static_cast<int>(index), "Checked-in Batman PhysX mapping mismatch.");
+            Expect(checked_in_physx_observer.ResponseMappings[index].Match == static_cast<int>(index) && checked_in_physx_observer.ResponseMappings[index].Value == expected_physx_response_values[index], "Checked-in Batman PhysX response mapping mismatch.");
+            Expect(checked_in_physx_observer.AcknowledgementMappings[index].Match == expected_physx_mapping_matches[index] && checked_in_physx_observer.AcknowledgementMappings[index].Value == expected_physx_acknowledgement_values[index], "Checked-in Batman PhysX acknowledgement mapping mismatch.");
+        }
+        Expect(checked_in_physx_observer.ResponseRequestValue.has_value() && *checked_in_physx_observer.ResponseRequestValue == 4400, "Checked-in Batman PhysX response request mismatch.");
+        Expect(checked_in_physx_observer.FailureResponseValue.has_value() && *checked_in_physx_observer.FailureResponseValue == 4499, "Checked-in Batman PhysX failure response mismatch.");
+
+        Expect(checked_in_stereo_observer.Mappings.size() == 2, "Checked-in Batman Stereo mapping count mismatch.");
+        Expect(checked_in_stereo_observer.ResponseMappings.size() == 2, "Checked-in Batman Stereo response mapping count mismatch.");
+        Expect(checked_in_stereo_observer.AcknowledgementMappings.size() == 2, "Checked-in Batman Stereo acknowledgement mapping count mismatch.");
+        const int expected_stereo_mapping_matches[] = { 4520, 4521 };
+        const int expected_stereo_response_values[] = { 4510, 4511 };
+        const int expected_stereo_acknowledgement_values[] = { 4530, 4531 };
+        for (std::size_t index = 0; index < std::size(expected_stereo_mapping_matches); ++index)
+        {
+            Expect(checked_in_stereo_observer.Mappings[index].Match == expected_stereo_mapping_matches[index] && checked_in_stereo_observer.Mappings[index].Value == static_cast<int>(index), "Checked-in Batman Stereo mapping mismatch.");
+            Expect(checked_in_stereo_observer.ResponseMappings[index].Match == static_cast<int>(index) && checked_in_stereo_observer.ResponseMappings[index].Value == expected_stereo_response_values[index], "Checked-in Batman Stereo response mapping mismatch.");
+            Expect(checked_in_stereo_observer.AcknowledgementMappings[index].Match == expected_stereo_mapping_matches[index] && checked_in_stereo_observer.AcknowledgementMappings[index].Value == expected_stereo_acknowledgement_values[index], "Checked-in Batman Stereo acknowledgement mapping mismatch.");
+        }
+        Expect(checked_in_stereo_observer.ResponseRequestValue.has_value() && *checked_in_stereo_observer.ResponseRequestValue == 4500, "Checked-in Batman Stereo response request mismatch.");
+        Expect(checked_in_stereo_observer.FailureResponseValue.has_value() && *checked_in_stereo_observer.FailureResponseValue == 4599, "Checked-in Batman Stereo failure response mismatch.");
+
         Expect(checked_in_apply_observer.Mappings.size() == 2, "Checked-in Batman apply mapping count mismatch.");
         Expect(checked_in_apply_observer.Mappings[0].Match == 4990 && checked_in_apply_observer.Mappings[0].Value == 0, "Checked-in Batman apply first mapping mismatch.");
         Expect(checked_in_apply_observer.Mappings[1].Match == 4991 && checked_in_apply_observer.Mappings[1].Value == 1, "Checked-in Batman apply second mapping mismatch.");
+        Expect(!checked_in_apply_observer.ResponseRequestValue.has_value() && checked_in_apply_observer.ResponseMappings.empty(), "Checked-in Batman apply observer unexpectedly declared a response mapping.");
+        Expect(checked_in_apply_observer.AcknowledgementMappings.size() == 2, "Checked-in Batman apply acknowledgement mapping count mismatch.");
+        Expect(checked_in_apply_observer.AcknowledgementMappings[0].Match == 4990 && checked_in_apply_observer.AcknowledgementMappings[0].Value == 4980, "Checked-in Batman apply first acknowledgement mismatch.");
+        Expect(checked_in_apply_observer.AcknowledgementMappings[1].Match == 4991 && checked_in_apply_observer.AcknowledgementMappings[1].Value == 4981, "Checked-in Batman apply second acknowledgement mismatch.");
+        Expect(checked_in_apply_observer.FailureResponseValue.has_value() && *checked_in_apply_observer.FailureResponseValue == 4989, "Checked-in Batman apply failure response mismatch.");
+        Expect(checked_in_apply_observer.CommandId.has_value() && *checked_in_apply_observer.CommandId == "applyBatmanGraphicsDraft", "Checked-in Batman apply observer command mismatch.");
+
+        Expect(checked_in_rollback_observer.Mappings.size() == 2, "Checked-in Batman rollback mapping count mismatch.");
+        Expect(checked_in_rollback_observer.Mappings[0].Match == 4970 && checked_in_rollback_observer.Mappings[0].Value == 0, "Checked-in Batman rollback first mapping mismatch.");
+        Expect(checked_in_rollback_observer.Mappings[1].Match == 4971 && checked_in_rollback_observer.Mappings[1].Value == 1, "Checked-in Batman rollback second mapping mismatch.");
+        Expect(!checked_in_rollback_observer.ResponseRequestValue.has_value() && checked_in_rollback_observer.ResponseMappings.empty(), "Checked-in Batman rollback observer unexpectedly declared a response mapping.");
+        Expect(checked_in_rollback_observer.AcknowledgementMappings.size() == 2, "Checked-in Batman rollback acknowledgement mapping count mismatch.");
+        Expect(checked_in_rollback_observer.AcknowledgementMappings[0].Match == 4970 && checked_in_rollback_observer.AcknowledgementMappings[0].Value == 4960, "Checked-in Batman rollback first acknowledgement mismatch.");
+        Expect(checked_in_rollback_observer.AcknowledgementMappings[1].Match == 4971 && checked_in_rollback_observer.AcknowledgementMappings[1].Value == 4961, "Checked-in Batman rollback second acknowledgement mismatch.");
+        Expect(checked_in_rollback_observer.FailureResponseValue.has_value() && *checked_in_rollback_observer.FailureResponseValue == 4969, "Checked-in Batman rollback failure response mismatch.");
+        Expect(checked_in_rollback_observer.CommandId.has_value() && *checked_in_rollback_observer.CommandId == "loadBatmanGraphicsDraftIntoConfig", "Checked-in Batman rollback observer command mismatch.");
 
         const helen::VirtualFileDefinition* checked_in_graphics_frontend_file = nullptr;
         for (const helen::VirtualFileDefinition& virtual_file : loaded_batman_pack->Build.VirtualFiles)
@@ -1372,7 +1495,7 @@ void RunPackRepositoryTests()
         Expect(checked_in_active_pack_set.TextureReplacements.size() == 1, "Checked-in Batman active pack-set texture replacement count mismatch.");
         Expect(checked_in_active_pack_set.Commands.size() == 4, "Checked-in Batman active pack-set command count mismatch.");
         Expect(checked_in_active_pack_set.ExternalBindings.size() == 3, "Checked-in Batman active pack-set external-binding count mismatch.");
-        Expect(checked_in_active_pack_set.StateObservers.size() == 3, "Checked-in Batman active pack-set state-observer count mismatch.");
+        Expect(checked_in_active_pack_set.StateObservers.size() == 7, "Checked-in Batman active pack-set state-observer count mismatch.");
         Expect(checked_in_active_pack_set.RuntimeSlots.size() == 1, "Checked-in Batman active pack-set runtime-slot count mismatch.");
         Expect(checked_in_active_pack_set.EnableD3d9TextureReplacementHooks, "Checked-in Batman active pack-set should enable D3D9 texture replacement hooks.");
         Expect(!checked_in_active_pack_set.EnableD3d9TextureHashLogging, "Checked-in Batman active pack-set should leave D3D9 texture hash logging disabled.");

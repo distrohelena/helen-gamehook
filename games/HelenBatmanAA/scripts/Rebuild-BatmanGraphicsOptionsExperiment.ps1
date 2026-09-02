@@ -83,40 +83,62 @@ function New-GraphicsCarrierChecks {
     )
 }
 
+$graphicsProtocol = @(
+    [ordered]@{ Id='graphicsObserverVsync'; Key='vsync'; Read=4200; Responses=@(4210,4211); Writes=@(4220,4221); Acks=@(4230,4231); Failure=4299; ConfigValues=@(0,1) },
+    [ordered]@{ Id='graphicsObserverMsaa'; Key='msaa'; Read=4300; Responses=@(4310,4311,4312,4313,4314); Writes=@(4320,4321,4322,4323,4324); Acks=@(4330,4331,4332,4333,4334); Failure=4399; ConfigValues=@(0,1,2,3,5) },
+    [ordered]@{ Id='graphicsObserverPhysx'; Key='physx'; Read=4400; Responses=@(4410,4411,4412); Writes=@(4420,4421,4422); Acks=@(4430,4431,4432); Failure=4499; ConfigValues=@(0,1,2) },
+    [ordered]@{ Id='graphicsObserverStereo'; Key='stereo'; Read=4500; Responses=@(4510,4511); Writes=@(4520,4521); Acks=@(4530,4531); Failure=4599; ConfigValues=@(0,1) }
+)
+
 function New-GraphicsCarrierObserver {
     <#
     Build one declarative observer for a graphics state code carried by the shared
     retail structure. Geometry and checks are fixed for collision-free discovery,
-    mappings remain observer-specific, and the optional command is omitted entirely
-    for the passive VSync observer so the generated schema stays exact.
+    mappings remain observer-specific, and optional response, acknowledgement, failure,
+    and command fields are emitted only when their complete declarations are supplied.
     #>
     param(
         [Parameter(Mandatory = $true)] [string]$Id,
         [Parameter(Mandatory = $true)] [string]$TargetConfigKey,
+        [Parameter(Mandatory = $true)] [object[]]$AddressMatchValues,
         [Parameter(Mandatory = $true)] [object[]]$Mappings,
         [Nullable[int]]$ResponseRequestValue = $null,
         [object[]]$ResponseMappings = @(),
+        [object[]]$AcknowledgementMappings = @(),
+        [Nullable[int]]$FailureResponseValue = $null,
         [AllowEmptyString()] [string]$Command = ''
     )
 
+    $responseRequestSupplied = $PSBoundParameters.ContainsKey('ResponseRequestValue')
+    $responseMappingsSupplied = $PSBoundParameters.ContainsKey('ResponseMappings')
+    if ($responseRequestSupplied -and @($ResponseMappings).Count -eq 0) { throw "Graphics carrier observer '$Id' declares a response request without response mappings." }
+    if ($responseMappingsSupplied -and -not $responseRequestSupplied -and @($ResponseMappings).Count -ne 0) { throw "Graphics carrier observer '$Id' declares response mappings without a request value." }
+
+    $acknowledgementMappingsSupplied = $PSBoundParameters.ContainsKey('AcknowledgementMappings')
+    $failureResponseSupplied = $PSBoundParameters.ContainsKey('FailureResponseValue')
+    if ($acknowledgementMappingsSupplied -and @($AcknowledgementMappings).Count -eq 0) { throw "Graphics carrier observer '$Id' declares empty acknowledgement mappings." }
+    if ($acknowledgementMappingsSupplied -ne $failureResponseSupplied) { throw "Graphics carrier observer '$Id' must declare acknowledgement mappings and a failure response together." }
+
     $observer = [ordered]@{
         id = $Id
+        addressGroup = 'batmanFrontendControlType'
         scanStartAddress = '0x10000000'
         scanEndAddress = '0x30000000'
         scanStride = [int]4
         valueOffset = [int]12
         pollIntervalMs = [int]50
         targetConfigKey = $TargetConfigKey
-        addressMatchValues = @([int]4101, [int]4102, [int]4103, [int]4104, [int]4105, [int]4106, [int]4200, [int]4210, [int]4211, [int]4990, [int]4991)
+        addressMatchValues = @($AddressMatchValues | ForEach-Object { [int]$_ })
         checks = @(New-GraphicsCarrierChecks)
         mappings = $Mappings
     }
-    if ($null -ne $ResponseRequestValue) {
-        if ($ResponseMappings.Count -eq 0) { throw "Graphics carrier observer '$Id' declares a response request without response mappings." }
+    if ($responseRequestSupplied) {
         $observer.responseRequestValue = [int]$ResponseRequestValue
         $observer.responseMappings = $ResponseMappings
-    } elseif ($ResponseMappings.Count -ne 0) {
-        throw "Graphics carrier observer '$Id' declares response mappings without a request value."
+    }
+    if ($acknowledgementMappingsSupplied) {
+        $observer.acknowledgementMappings = $AcknowledgementMappings
+        $observer.failureResponseValue = [int]$FailureResponseValue
     }
     if (-not [string]::IsNullOrWhiteSpace($Command)) { $observer.command = $Command }
     return $observer
@@ -479,6 +501,17 @@ try {
             }
         })
     }
+    $graphicsCommandValues = @(4960,4961,4969,4970,4971,4980,4981,4989,4990,4991)
+    $graphicsAddressMatchValues = [Collections.Generic.List[int]]::new()
+    foreach ($protocol in $graphicsProtocol) {
+        foreach ($addressValue in @($protocol.Read) + @($protocol.Responses) + @($protocol.Writes) + @($protocol.Acks) + @($protocol.Failure)) {
+            $graphicsAddressMatchValues.Add([int]$addressValue)
+        }
+    }
+    foreach ($addressValue in $graphicsCommandValues) {
+        $graphicsAddressMatchValues.Add([int]$addressValue)
+    }
+    $graphicsAddressMatchValues = @($graphicsAddressMatchValues | Sort-Object -Unique | ForEach-Object { [int]$_ })
     $configKeys = @(
         'fullscreen',
         'resolutionWidth',
@@ -495,7 +528,8 @@ try {
         'ambientOcclusion',
         'physx',
         'stereo',
-        'applySignal'
+        'applySignal',
+        'rollbackSignal'
     )
     $config = @(
         foreach ($configKey in $configKeys) {
@@ -530,27 +564,51 @@ try {
     $commands = [ordered]@{
         commands = @($loadGraphicsDraftCommand, $applyGraphicsDraftCommand)
     }
+    $settingObservers = @(
+        foreach ($protocol in $graphicsProtocol) {
+            $settingMappings = @(
+                for ($mappingIndex = 0; $mappingIndex -lt @($protocol.Writes).Count; $mappingIndex++) {
+                    [ordered]@{ match = [int]$protocol.Writes[$mappingIndex]; value = [int]$protocol.ConfigValues[$mappingIndex] }
+                }
+            )
+            $settingResponseMappings = @(
+                for ($mappingIndex = 0; $mappingIndex -lt @($protocol.ConfigValues).Count; $mappingIndex++) {
+                    [ordered]@{ match = [int]$protocol.ConfigValues[$mappingIndex]; value = [int]$protocol.Responses[$mappingIndex] }
+                }
+            )
+            $settingAcknowledgementMappings = @(
+                for ($mappingIndex = 0; $mappingIndex -lt @($protocol.Writes).Count; $mappingIndex++) {
+                    [ordered]@{ match = [int]$protocol.Writes[$mappingIndex]; value = [int]$protocol.Acks[$mappingIndex] }
+                }
+            )
+            New-GraphicsCarrierObserver -Id $protocol.Id -TargetConfigKey $protocol.Key -AddressMatchValues $graphicsAddressMatchValues -Mappings $settingMappings -ResponseRequestValue ([int]$protocol.Read) -ResponseMappings $settingResponseMappings -AcknowledgementMappings $settingAcknowledgementMappings -FailureResponseValue ([int]$protocol.Failure)
+        }
+    )
+    $applyAcknowledgementMappings = @(
+        [ordered]@{ match = [int]4990; value = [int]4980 },
+        [ordered]@{ match = [int]4991; value = [int]4981 }
+    )
+    $rollbackAcknowledgementMappings = @(
+        [ordered]@{ match = [int]4970; value = [int]4960 },
+        [ordered]@{ match = [int]4971; value = [int]4961 }
+    )
+    $applyObserver = New-GraphicsCarrierObserver -Id 'graphicsObserverApplySignal' -TargetConfigKey 'applySignal' -AddressMatchValues $graphicsAddressMatchValues -Mappings @(
+        [ordered]@{ match = [int]4990; value = [int]0 },
+        [ordered]@{ match = [int]4991; value = [int]1 }
+    ) -AcknowledgementMappings $applyAcknowledgementMappings -FailureResponseValue ([int]4989) -Command 'applyBatmanGraphicsDraft'
+    $rollbackObserver = New-GraphicsCarrierObserver -Id 'graphicsObserverRollbackSignal' -TargetConfigKey 'rollbackSignal' -AddressMatchValues $graphicsAddressMatchValues -Mappings @(
+        [ordered]@{ match = [int]4970; value = [int]0 },
+        [ordered]@{ match = [int]4971; value = [int]1 }
+    ) -AcknowledgementMappings $rollbackAcknowledgementMappings -FailureResponseValue ([int]4969) -Command 'loadBatmanGraphicsDraftIntoConfig'
     $hooks = [ordered]@{
         runtimeSlots = @()
-        stateObservers = @(
-            (New-GraphicsCarrierObserver -Id 'graphicsObserverVsync' -TargetConfigKey 'vsync' -Mappings @(
-                    [ordered]@{ match = [int]4210; value = [int]0 },
-                    [ordered]@{ match = [int]4211; value = [int]1 }
-                ) -ResponseRequestValue 4200 -ResponseMappings @(
-                    [ordered]@{ match = [int]0; value = [int]4210 },
-                    [ordered]@{ match = [int]1; value = [int]4211 }
-                )),
-            (New-GraphicsCarrierObserver -Id 'graphicsObserverApplySignal' -TargetConfigKey 'applySignal' -Command 'applyBatmanGraphicsDraft' -Mappings @(
-                    [ordered]@{ match = [int]4990; value = [int]0 },
-                    [ordered]@{ match = [int]4991; value = [int]1 }
-                ))
-        )
+        stateObservers = @($settingObservers + @($applyObserver, $rollbackObserver))
         hooks = @()
     }
     $pack = [ordered]@{
         schemaVersion = 1
         id = 'batman-aa-graphics-options'
-        name = 'Batman Graphics Options VSync'
+        name = 'Batman Graphics Options'
         targets = @([ordered]@{ gameId = 'batman-arkham-asylum'; executables = @($buildMatch.Executable) })
         config = $config
         builds = @($buildMatch.BuildId)

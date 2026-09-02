@@ -496,11 +496,11 @@ if (Test-Path -LiteralPath $texturesJsonPath) { throw 'Graphics-options shell mu
 
 $pack = Get-Content -LiteralPath $packJsonPath -Raw | ConvertFrom-Json
 Assert-ExactOrderedProperties -Object $pack -Names @('schemaVersion', 'id', 'name', 'targets', 'config', 'builds') -Context 'pack.json'
-if ($pack.schemaVersion -ne 1 -or $pack.id -ne 'batman-aa-graphics-options' -or $pack.name -ne 'Batman Graphics Options VSync') { throw 'pack.json VSync identity drifted.' }
+if ($pack.schemaVersion -ne 1 -or $pack.id -ne 'batman-aa-graphics-options' -or $pack.name -ne 'Batman Graphics Options') { throw 'pack.json graphics-options identity drifted.' }
 if (@($pack.targets).Count -ne 1 -or $pack.targets[0].gameId -ne 'batman-arkham-asylum' -or @($pack.targets[0].executables).Count -ne 1 -or $pack.targets[0].executables[0] -ne 'ShippingPC-BmGame.exe') { throw 'pack.json target executable drifted.' }
 Assert-ExactOrderedProperties -Object $pack.targets[0] -Names @('gameId', 'executables') -Context 'pack.json target'
 Assert-ExactOrderedProperties -Object $pack.config[0] -Names @('key', 'type', 'defaultValue') -Context 'pack.json config entry'
-$expectedConfigKeys = @('fullscreen', 'resolutionWidth', 'resolutionHeight', 'vsync', 'msaa', 'detailLevel', 'bloom', 'dynamicShadows', 'motionBlur', 'distortion', 'fogVolumes', 'sphericalHarmonicLighting', 'ambientOcclusion', 'physx', 'stereo', 'applySignal')
+$expectedConfigKeys = @('fullscreen', 'resolutionWidth', 'resolutionHeight', 'vsync', 'msaa', 'detailLevel', 'bloom', 'dynamicShadows', 'motionBlur', 'distortion', 'fogVolumes', 'sphericalHarmonicLighting', 'ambientOcclusion', 'physx', 'stereo', 'applySignal', 'rollbackSignal')
 if (@($pack.config).Count -ne $expectedConfigKeys.Count) { throw "pack.json config must contain exactly $($expectedConfigKeys.Count) entries." }
 for ($index = 0; $index -lt $expectedConfigKeys.Count; $index++) {
     $configEntry = $pack.config[$index]
@@ -537,7 +537,7 @@ if ($loadCommand.steps[0].kind -cne 'load-batman-graphics-draft-into-config' -or
 
 $hooks = Get-Content -LiteralPath $hooksJsonPath -Raw | ConvertFrom-Json
 Assert-ExactOrderedProperties -Object $hooks -Names @('runtimeSlots', 'stateObservers', 'hooks') -Context 'hooks.json'
-if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($hooks.stateObservers).Count -ne 2) { throw 'hooks.json runtime slots, observers, or hooks count drifted.' }
+if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($hooks.stateObservers).Count -ne 6) { throw 'hooks.json runtime slots, observers, or hooks count drifted.' }
 
 function Assert-GraphicsCarrierChecks {
     param([Parameter(Mandatory = $true)] [psobject]$Observer, [Parameter(Mandatory = $true)] [string]$Context)
@@ -563,24 +563,62 @@ function Assert-GraphicsCarrierChecks {
     }
 }
 
-$expectedObserverProperties = @('id', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'responseRequestValue', 'responseMappings')
-$vsyncObserver = $hooks.stateObservers[0]
-$applyObserver = $hooks.stateObservers[1]
-Assert-ExactOrderedProperties -Object $vsyncObserver -Names $expectedObserverProperties -Context 'hooks.json graphicsObserverVsync'
-Assert-ExactOrderedProperties -Object $applyObserver -Names @('id', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'command') -Context 'hooks.json graphicsObserverApplySignal'
-foreach ($observer in @($vsyncObserver, $applyObserver)) {
-    if ($observer.scanStartAddress -cne '0x10000000' -or $observer.scanEndAddress -cne '0x30000000' -or $observer.scanStride -ne 4 -or $observer.valueOffset -ne 12 -or $observer.pollIntervalMs -ne 50) { throw 'hooks.json observer scan geometry drifted.' }
-    $expectedAddressMatchValues = @(4101, 4102, 4103, 4104, 4105, 4106, 4200, 4210, 4211, 4990, 4991)
+$expectedObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'responseRequestValue', 'responseMappings', 'acknowledgementMappings', 'failureResponseValue')
+$expectedCommandObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'acknowledgementMappings', 'failureResponseValue', 'command')
+$expectedObserverIds = @('graphicsObserverVsync', 'graphicsObserverMsaa', 'graphicsObserverPhysx', 'graphicsObserverStereo', 'graphicsObserverApplySignal', 'graphicsObserverRollbackSignal')
+$expectedObserverTargets = @('vsync', 'msaa', 'physx', 'stereo', 'applySignal', 'rollbackSignal')
+$expectedAddressMatchValues = @(
+    4200, 4210, 4211, 4220, 4221, 4230, 4231, 4299,
+    4300, 4310, 4311, 4312, 4313, 4314, 4320, 4321, 4322, 4323, 4324, 4330, 4331, 4332, 4333, 4334, 4399,
+    4400, 4410, 4411, 4412, 4420, 4421, 4422, 4430, 4431, 4432, 4499,
+    4500, 4510, 4511, 4520, 4521, 4530, 4531, 4599,
+    4960, 4961, 4969, 4970, 4971, 4980, 4981, 4989, 4990, 4991
+)
+for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observerIndex++) {
+    $observer = $hooks.stateObservers[$observerIndex]
+    $expectedProperties = if ($observerIndex -lt 4) { $expectedObserverProperties } else { $expectedCommandObserverProperties }
+    Assert-ExactOrderedProperties -Object $observer -Names $expectedProperties -Context "hooks.json $($expectedObserverIds[$observerIndex])"
+    if ($observer.id -cne $expectedObserverIds[$observerIndex] -or $observer.targetConfigKey -cne $expectedObserverTargets[$observerIndex]) { throw "hooks.json observer $($observerIndex + 1) identity drifted." }
+    if ($observer.addressGroup -cne 'batmanFrontendControlType') { throw "hooks.json $($observer.id) address group drifted." }
+    if ($observer.scanStartAddress -cne '0x10000000' -or $observer.scanEndAddress -cne '0x30000000' -or $observer.scanStride -ne 4 -or $observer.valueOffset -ne 12 -or $observer.pollIntervalMs -ne 50) { throw "hooks.json $($observer.id) scan geometry drifted." }
     if (@($observer.addressMatchValues).Count -ne $expectedAddressMatchValues.Count -or (@($observer.addressMatchValues) -join ',') -cne ($expectedAddressMatchValues -join ',')) { throw "hooks.json $($observer.id) addressMatchValues drifted." }
     Assert-GraphicsCarrierChecks -Observer $observer -Context "hooks.json $($observer.id)"
-    if (@($observer.mappings).Count -ne 2) { throw "hooks.json $($observer.id) must contain exactly two mappings." }
-    foreach ($mapping in @($observer.mappings)) { Assert-ExactOrderedProperties -Object $mapping -Names @('match', 'value') -Context "hooks.json $($observer.id) mapping" }
+    $mappingNames = if ($observerIndex -lt 4) { @('mappings', 'responseMappings', 'acknowledgementMappings') } else { @('mappings', 'acknowledgementMappings') }
+    foreach ($mappingName in $mappingNames) {
+        foreach ($entry in @($observer.$mappingName)) { Assert-ExactOrderedProperties -Object $entry -Names @('match', 'value') -Context "hooks.json $($observer.id) $mappingName" }
+    }
 }
-if ($vsyncObserver.id -cne 'graphicsObserverVsync' -or $vsyncObserver.targetConfigKey -cne 'vsync' -or $vsyncObserver.PSObject.Properties.Name -contains 'command') { throw 'hooks.json VSync observer identity drifted.' }
+
+$expectedGraphicsProtocols = @(
+    [pscustomobject]@{ Id = 'graphicsObserverVsync'; Read = 4200; Responses = @(4210, 4211); Writes = @(4220, 4221); Acks = @(4230, 4231); Failure = 4299; ConfigValues = @(0, 1) },
+    [pscustomobject]@{ Id = 'graphicsObserverMsaa'; Read = 4300; Responses = @(4310, 4311, 4312, 4313, 4314); Writes = @(4320, 4321, 4322, 4323, 4324); Acks = @(4330, 4331, 4332, 4333, 4334); Failure = 4399; ConfigValues = @(0, 1, 2, 3, 5) },
+    [pscustomobject]@{ Id = 'graphicsObserverPhysx'; Read = 4400; Responses = @(4410, 4411, 4412); Writes = @(4420, 4421, 4422); Acks = @(4430, 4431, 4432); Failure = 4499; ConfigValues = @(0, 1, 2) },
+    [pscustomobject]@{ Id = 'graphicsObserverStereo'; Read = 4500; Responses = @(4510, 4511); Writes = @(4520, 4521); Acks = @(4530, 4531); Failure = 4599; ConfigValues = @(0, 1) }
+)
+for ($protocolIndex = 0; $protocolIndex -lt $expectedGraphicsProtocols.Count; $protocolIndex++) {
+    $protocol = $expectedGraphicsProtocols[$protocolIndex]
+    $observer = $hooks.stateObservers[$protocolIndex]
+    if (@($observer.mappings).Count -ne $protocol.Writes.Count -or @($observer.responseMappings).Count -ne $protocol.Responses.Count -or @($observer.acknowledgementMappings).Count -ne $protocol.Acks.Count) { throw "hooks.json $($protocol.Id) mapping counts drifted." }
+    if ($observer.responseRequestValue -ne $protocol.Read -or $observer.failureResponseValue -ne $protocol.Failure) { throw "hooks.json $($protocol.Id) request/failure values drifted." }
+    for ($mappingIndex = 0; $mappingIndex -lt $protocol.Writes.Count; $mappingIndex++) {
+        if ($observer.mappings[$mappingIndex].match -ne $protocol.Writes[$mappingIndex] -or $observer.mappings[$mappingIndex].value -ne $protocol.ConfigValues[$mappingIndex]) { throw "hooks.json $($protocol.Id) write mapping drifted." }
+        if ($observer.responseMappings[$mappingIndex].match -ne $protocol.ConfigValues[$mappingIndex] -or $observer.responseMappings[$mappingIndex].value -ne $protocol.Responses[$mappingIndex]) { throw "hooks.json $($protocol.Id) response mapping drifted." }
+        if ($observer.acknowledgementMappings[$mappingIndex].match -ne $protocol.Writes[$mappingIndex] -or $observer.acknowledgementMappings[$mappingIndex].value -ne $protocol.Acks[$mappingIndex]) { throw "hooks.json $($protocol.Id) acknowledgement mapping drifted." }
+    }
+}
+
+$vsyncObserver = $hooks.stateObservers[0]
+$msaaObserver = $hooks.stateObservers[1]
+$physxObserver = $hooks.stateObservers[2]
+$stereoObserver = $hooks.stateObservers[3]
+$applyObserver = $hooks.stateObservers[4]
+$rollbackObserver = $hooks.stateObservers[5]
 if ($applyObserver.id -cne 'graphicsObserverApplySignal' -or $applyObserver.targetConfigKey -cne 'applySignal' -or $applyObserver.command -cne 'applyBatmanGraphicsDraft') { throw 'hooks.json apply observer identity drifted.' }
-if ($vsyncObserver.mappings[0].match -ne 4210 -or $vsyncObserver.mappings[0].value -ne 0 -or $vsyncObserver.mappings[1].match -ne 4211 -or $vsyncObserver.mappings[1].value -ne 1) { throw 'hooks.json VSync mappings drifted.' }
-if ($vsyncObserver.responseRequestValue -ne 4200 -or @($vsyncObserver.responseMappings).Count -ne 2 -or $vsyncObserver.responseMappings[0].match -ne 0 -or $vsyncObserver.responseMappings[0].value -ne 4210 -or $vsyncObserver.responseMappings[1].match -ne 1 -or $vsyncObserver.responseMappings[1].value -ne 4211) { throw 'hooks.json VSync response mappings drifted.' }
+if ($rollbackObserver.id -cne 'graphicsObserverRollbackSignal' -or $rollbackObserver.targetConfigKey -cne 'rollbackSignal' -or $rollbackObserver.command -cne 'loadBatmanGraphicsDraftIntoConfig') { throw 'hooks.json rollback observer identity drifted.' }
 if ($applyObserver.mappings[0].match -ne 4990 -or $applyObserver.mappings[0].value -ne 0 -or $applyObserver.mappings[1].match -ne 4991 -or $applyObserver.mappings[1].value -ne 1) { throw 'hooks.json apply mappings drifted.' }
+if ($applyObserver.acknowledgementMappings[0].match -ne 4990 -or $applyObserver.acknowledgementMappings[0].value -ne 4980 -or $applyObserver.acknowledgementMappings[1].match -ne 4991 -or $applyObserver.acknowledgementMappings[1].value -ne 4981 -or $applyObserver.failureResponseValue -ne 4989) { throw 'hooks.json apply acknowledgement/failure mappings drifted.' }
+if ($rollbackObserver.mappings[0].match -ne 4970 -or $rollbackObserver.mappings[0].value -ne 0 -or $rollbackObserver.mappings[1].match -ne 4971 -or $rollbackObserver.mappings[1].value -ne 1) { throw 'hooks.json rollback mappings drifted.' }
+if ($rollbackObserver.acknowledgementMappings[0].match -ne 4970 -or $rollbackObserver.acknowledgementMappings[0].value -ne 4960 -or $rollbackObserver.acknowledgementMappings[1].match -ne 4971 -or $rollbackObserver.acknowledgementMappings[1].value -ne 4961 -or $rollbackObserver.failureResponseValue -ne 4969) { throw 'hooks.json rollback acknowledgement/failure mappings drifted.' }
 
 $files = Get-Content -LiteralPath $filesJsonPath -Raw | ConvertFrom-Json
 Assert-ExactProperties -Object $files -Names @('virtualFiles') -Context 'files.json'

@@ -5,6 +5,7 @@
     "stateObservers":  [
                            {
                                "id":  "graphicsObserverVsync",
+                               "addressGroup":  "batmanFrontendControlType",
                                "scanStartAddress":  "0x10000000",
                                "scanEndAddress":  "0x30000000",
                                "scanStride":  4,
@@ -12,15 +13,58 @@
                                "pollIntervalMs":  50,
                                "targetConfigKey":  "vsync",
                                "addressMatchValues":  [
-                                                          4101,
-                                                          4102,
-                                                          4103,
-                                                          4104,
-                                                          4105,
-                                                          4106,
                                                           4200,
                                                           4210,
                                                           4211,
+                                                          4220,
+                                                          4221,
+                                                          4230,
+                                                          4231,
+                                                          4299,
+                                                          4300,
+                                                          4310,
+                                                          4311,
+                                                          4312,
+                                                          4313,
+                                                          4314,
+                                                          4320,
+                                                          4321,
+                                                          4322,
+                                                          4323,
+                                                          4324,
+                                                          4330,
+                                                          4331,
+                                                          4332,
+                                                          4333,
+                                                          4334,
+                                                          4399,
+                                                          4400,
+                                                          4410,
+                                                          4411,
+                                                          4412,
+                                                          4420,
+                                                          4421,
+                                                          4422,
+                                                          4430,
+                                                          4431,
+                                                          4432,
+                                                          4499,
+                                                          4500,
+                                                          4510,
+                                                          4511,
+                                                          4520,
+                                                          4521,
+                                                          4530,
+                                                          4531,
+                                                          4599,
+                                                          4960,
+                                                          4961,
+                                                          4969,
+                                                          4970,
+                                                          4971,
+                                                          4980,
+                                                          4981,
+                                                          4989,
                                                           4990,
                                                           4991
                                                       ],
@@ -83,11 +127,11 @@
                                           ],
                                "mappings":  [
                                                 {
-                                                    "match":  4210,
+                                                    "match":  4220,
                                                     "value":  0
                                                 },
                                                 {
-                                                    "match":  4211,
+                                                    "match":  4221,
                                                     "value":  1
                                                 }
                                             ],
@@ -101,10 +145,535 @@
                                                             "match":  1,
                                                             "value":  4211
                                                         }
-                                                    ]
+                                                    ],
+                               "acknowledgementMappings":  [
+                                                               {
+                                                                   "match":  4220,
+                                                                   "value":  4230
+                                                               },
+                                                               {
+                                                                   "match":  4221,
+                                                                   "value":  4231
+                                                               }
+                                                           ],
+                               "failureResponseValue":  4299
+                           },
+                           {
+                               "id":  "graphicsObserverMsaa",
+                               "addressGroup":  "batmanFrontendControlType",
+                               "scanStartAddress":  "0x10000000",
+                               "scanEndAddress":  "0x30000000",
+                               "scanStride":  4,
+                               "valueOffset":  12,
+                               "pollIntervalMs":  50,
+                               "targetConfigKey":  "msaa",
+                               "addressMatchValues":  [
+                                                          4200,
+                                                          4210,
+                                                          4211,
+                                                          4220,
+                                                          4221,
+                                                          4230,
+                                                          4231,
+                                                          4299,
+                                                          4300,
+                                                          4310,
+                                                          4311,
+                                                          4312,
+                                                          4313,
+                                                          4314,
+                                                          4320,
+                                                          4321,
+                                                          4322,
+                                                          4323,
+                                                          4324,
+                                                          4330,
+                                                          4331,
+                                                          4332,
+                                                          4333,
+                                                          4334,
+                                                          4399,
+                                                          4400,
+                                                          4410,
+                                                          4411,
+                                                          4412,
+                                                          4420,
+                                                          4421,
+                                                          4422,
+                                                          4430,
+                                                          4431,
+                                                          4432,
+                                                          4499,
+                                                          4500,
+                                                          4510,
+                                                          4511,
+                                                          4520,
+                                                          4521,
+                                                          4530,
+                                                          4531,
+                                                          4599,
+                                                          4960,
+                                                          4961,
+                                                          4969,
+                                                          4970,
+                                                          4971,
+                                                          4980,
+                                                          4981,
+                                                          4989,
+                                                          4990,
+                                                          4991
+                                                      ],
+                               "checks":  [
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -16,
+                                                  "expectedValue":  50
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -12,
+                                                  "expectedValue":  100
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -8,
+                                                  "expectedValue":  100
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -4,
+                                                  "expectedValue":  100
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  0,
+                                                  "expectedValue":  4102
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  4,
+                                                  "expectedValue":  1
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  8,
+                                                  "expectedValue":  0
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  16,
+                                                  "expectedValue":  4102
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  20,
+                                                  "expectedValue":  2
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  28,
+                                                  "expectedValue":  3
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  32,
+                                                  "expectedValue":  3
+                                              }
+                                          ],
+                               "mappings":  [
+                                                {
+                                                    "match":  4320,
+                                                    "value":  0
+                                                },
+                                                {
+                                                    "match":  4321,
+                                                    "value":  1
+                                                },
+                                                {
+                                                    "match":  4322,
+                                                    "value":  2
+                                                },
+                                                {
+                                                    "match":  4323,
+                                                    "value":  3
+                                                },
+                                                {
+                                                    "match":  4324,
+                                                    "value":  5
+                                                }
+                                            ],
+                               "responseRequestValue":  4300,
+                               "responseMappings":  [
+                                                        {
+                                                            "match":  0,
+                                                            "value":  4310
+                                                        },
+                                                        {
+                                                            "match":  1,
+                                                            "value":  4311
+                                                        },
+                                                        {
+                                                            "match":  2,
+                                                            "value":  4312
+                                                        },
+                                                        {
+                                                            "match":  3,
+                                                            "value":  4313
+                                                        },
+                                                        {
+                                                            "match":  5,
+                                                            "value":  4314
+                                                        }
+                                                    ],
+                               "acknowledgementMappings":  [
+                                                               {
+                                                                   "match":  4320,
+                                                                   "value":  4330
+                                                               },
+                                                               {
+                                                                   "match":  4321,
+                                                                   "value":  4331
+                                                               },
+                                                               {
+                                                                   "match":  4322,
+                                                                   "value":  4332
+                                                               },
+                                                               {
+                                                                   "match":  4323,
+                                                                   "value":  4333
+                                                               },
+                                                               {
+                                                                   "match":  4324,
+                                                                   "value":  4334
+                                                               }
+                                                           ],
+                               "failureResponseValue":  4399
+                           },
+                           {
+                               "id":  "graphicsObserverPhysx",
+                               "addressGroup":  "batmanFrontendControlType",
+                               "scanStartAddress":  "0x10000000",
+                               "scanEndAddress":  "0x30000000",
+                               "scanStride":  4,
+                               "valueOffset":  12,
+                               "pollIntervalMs":  50,
+                               "targetConfigKey":  "physx",
+                               "addressMatchValues":  [
+                                                          4200,
+                                                          4210,
+                                                          4211,
+                                                          4220,
+                                                          4221,
+                                                          4230,
+                                                          4231,
+                                                          4299,
+                                                          4300,
+                                                          4310,
+                                                          4311,
+                                                          4312,
+                                                          4313,
+                                                          4314,
+                                                          4320,
+                                                          4321,
+                                                          4322,
+                                                          4323,
+                                                          4324,
+                                                          4330,
+                                                          4331,
+                                                          4332,
+                                                          4333,
+                                                          4334,
+                                                          4399,
+                                                          4400,
+                                                          4410,
+                                                          4411,
+                                                          4412,
+                                                          4420,
+                                                          4421,
+                                                          4422,
+                                                          4430,
+                                                          4431,
+                                                          4432,
+                                                          4499,
+                                                          4500,
+                                                          4510,
+                                                          4511,
+                                                          4520,
+                                                          4521,
+                                                          4530,
+                                                          4531,
+                                                          4599,
+                                                          4960,
+                                                          4961,
+                                                          4969,
+                                                          4970,
+                                                          4971,
+                                                          4980,
+                                                          4981,
+                                                          4989,
+                                                          4990,
+                                                          4991
+                                                      ],
+                               "checks":  [
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -16,
+                                                  "expectedValue":  50
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -12,
+                                                  "expectedValue":  100
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -8,
+                                                  "expectedValue":  100
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -4,
+                                                  "expectedValue":  100
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  0,
+                                                  "expectedValue":  4102
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  4,
+                                                  "expectedValue":  1
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  8,
+                                                  "expectedValue":  0
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  16,
+                                                  "expectedValue":  4102
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  20,
+                                                  "expectedValue":  2
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  28,
+                                                  "expectedValue":  3
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  32,
+                                                  "expectedValue":  3
+                                              }
+                                          ],
+                               "mappings":  [
+                                                {
+                                                    "match":  4420,
+                                                    "value":  0
+                                                },
+                                                {
+                                                    "match":  4421,
+                                                    "value":  1
+                                                },
+                                                {
+                                                    "match":  4422,
+                                                    "value":  2
+                                                }
+                                            ],
+                               "responseRequestValue":  4400,
+                               "responseMappings":  [
+                                                        {
+                                                            "match":  0,
+                                                            "value":  4410
+                                                        },
+                                                        {
+                                                            "match":  1,
+                                                            "value":  4411
+                                                        },
+                                                        {
+                                                            "match":  2,
+                                                            "value":  4412
+                                                        }
+                                                    ],
+                               "acknowledgementMappings":  [
+                                                               {
+                                                                   "match":  4420,
+                                                                   "value":  4430
+                                                               },
+                                                               {
+                                                                   "match":  4421,
+                                                                   "value":  4431
+                                                               },
+                                                               {
+                                                                   "match":  4422,
+                                                                   "value":  4432
+                                                               }
+                                                           ],
+                               "failureResponseValue":  4499
+                           },
+                           {
+                               "id":  "graphicsObserverStereo",
+                               "addressGroup":  "batmanFrontendControlType",
+                               "scanStartAddress":  "0x10000000",
+                               "scanEndAddress":  "0x30000000",
+                               "scanStride":  4,
+                               "valueOffset":  12,
+                               "pollIntervalMs":  50,
+                               "targetConfigKey":  "stereo",
+                               "addressMatchValues":  [
+                                                          4200,
+                                                          4210,
+                                                          4211,
+                                                          4220,
+                                                          4221,
+                                                          4230,
+                                                          4231,
+                                                          4299,
+                                                          4300,
+                                                          4310,
+                                                          4311,
+                                                          4312,
+                                                          4313,
+                                                          4314,
+                                                          4320,
+                                                          4321,
+                                                          4322,
+                                                          4323,
+                                                          4324,
+                                                          4330,
+                                                          4331,
+                                                          4332,
+                                                          4333,
+                                                          4334,
+                                                          4399,
+                                                          4400,
+                                                          4410,
+                                                          4411,
+                                                          4412,
+                                                          4420,
+                                                          4421,
+                                                          4422,
+                                                          4430,
+                                                          4431,
+                                                          4432,
+                                                          4499,
+                                                          4500,
+                                                          4510,
+                                                          4511,
+                                                          4520,
+                                                          4521,
+                                                          4530,
+                                                          4531,
+                                                          4599,
+                                                          4960,
+                                                          4961,
+                                                          4969,
+                                                          4970,
+                                                          4971,
+                                                          4980,
+                                                          4981,
+                                                          4989,
+                                                          4990,
+                                                          4991
+                                                      ],
+                               "checks":  [
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -16,
+                                                  "expectedValue":  50
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -12,
+                                                  "expectedValue":  100
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -8,
+                                                  "expectedValue":  100
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -4,
+                                                  "expectedValue":  100
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  0,
+                                                  "expectedValue":  4102
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  4,
+                                                  "expectedValue":  1
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  8,
+                                                  "expectedValue":  0
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  16,
+                                                  "expectedValue":  4102
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  20,
+                                                  "expectedValue":  2
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  28,
+                                                  "expectedValue":  3
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  32,
+                                                  "expectedValue":  3
+                                              }
+                                          ],
+                               "mappings":  [
+                                                {
+                                                    "match":  4520,
+                                                    "value":  0
+                                                },
+                                                {
+                                                    "match":  4521,
+                                                    "value":  1
+                                                }
+                                            ],
+                               "responseRequestValue":  4500,
+                               "responseMappings":  [
+                                                        {
+                                                            "match":  0,
+                                                            "value":  4510
+                                                        },
+                                                        {
+                                                            "match":  1,
+                                                            "value":  4511
+                                                        }
+                                                    ],
+                               "acknowledgementMappings":  [
+                                                               {
+                                                                   "match":  4520,
+                                                                   "value":  4530
+                                                               },
+                                                               {
+                                                                   "match":  4521,
+                                                                   "value":  4531
+                                                               }
+                                                           ],
+                               "failureResponseValue":  4599
                            },
                            {
                                "id":  "graphicsObserverApplySignal",
+                               "addressGroup":  "batmanFrontendControlType",
                                "scanStartAddress":  "0x10000000",
                                "scanEndAddress":  "0x30000000",
                                "scanStride":  4,
@@ -112,15 +681,58 @@
                                "pollIntervalMs":  50,
                                "targetConfigKey":  "applySignal",
                                "addressMatchValues":  [
-                                                          4101,
-                                                          4102,
-                                                          4103,
-                                                          4104,
-                                                          4105,
-                                                          4106,
                                                           4200,
                                                           4210,
                                                           4211,
+                                                          4220,
+                                                          4221,
+                                                          4230,
+                                                          4231,
+                                                          4299,
+                                                          4300,
+                                                          4310,
+                                                          4311,
+                                                          4312,
+                                                          4313,
+                                                          4314,
+                                                          4320,
+                                                          4321,
+                                                          4322,
+                                                          4323,
+                                                          4324,
+                                                          4330,
+                                                          4331,
+                                                          4332,
+                                                          4333,
+                                                          4334,
+                                                          4399,
+                                                          4400,
+                                                          4410,
+                                                          4411,
+                                                          4412,
+                                                          4420,
+                                                          4421,
+                                                          4422,
+                                                          4430,
+                                                          4431,
+                                                          4432,
+                                                          4499,
+                                                          4500,
+                                                          4510,
+                                                          4511,
+                                                          4520,
+                                                          4521,
+                                                          4530,
+                                                          4531,
+                                                          4599,
+                                                          4960,
+                                                          4961,
+                                                          4969,
+                                                          4970,
+                                                          4971,
+                                                          4980,
+                                                          4981,
+                                                          4989,
                                                           4990,
                                                           4991
                                                       ],
@@ -191,7 +803,163 @@
                                                     "value":  1
                                                 }
                                             ],
+                               "acknowledgementMappings":  [
+                                                               {
+                                                                   "match":  4990,
+                                                                   "value":  4980
+                                                               },
+                                                               {
+                                                                   "match":  4991,
+                                                                   "value":  4981
+                                                               }
+                                                           ],
+                               "failureResponseValue":  4989,
                                "command":  "applyBatmanGraphicsDraft"
+                           },
+                           {
+                               "id":  "graphicsObserverRollbackSignal",
+                               "addressGroup":  "batmanFrontendControlType",
+                               "scanStartAddress":  "0x10000000",
+                               "scanEndAddress":  "0x30000000",
+                               "scanStride":  4,
+                               "valueOffset":  12,
+                               "pollIntervalMs":  50,
+                               "targetConfigKey":  "rollbackSignal",
+                               "addressMatchValues":  [
+                                                          4200,
+                                                          4210,
+                                                          4211,
+                                                          4220,
+                                                          4221,
+                                                          4230,
+                                                          4231,
+                                                          4299,
+                                                          4300,
+                                                          4310,
+                                                          4311,
+                                                          4312,
+                                                          4313,
+                                                          4314,
+                                                          4320,
+                                                          4321,
+                                                          4322,
+                                                          4323,
+                                                          4324,
+                                                          4330,
+                                                          4331,
+                                                          4332,
+                                                          4333,
+                                                          4334,
+                                                          4399,
+                                                          4400,
+                                                          4410,
+                                                          4411,
+                                                          4412,
+                                                          4420,
+                                                          4421,
+                                                          4422,
+                                                          4430,
+                                                          4431,
+                                                          4432,
+                                                          4499,
+                                                          4500,
+                                                          4510,
+                                                          4511,
+                                                          4520,
+                                                          4521,
+                                                          4530,
+                                                          4531,
+                                                          4599,
+                                                          4960,
+                                                          4961,
+                                                          4969,
+                                                          4970,
+                                                          4971,
+                                                          4980,
+                                                          4981,
+                                                          4989,
+                                                          4990,
+                                                          4991
+                                                      ],
+                               "checks":  [
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -16,
+                                                  "expectedValue":  50
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -12,
+                                                  "expectedValue":  100
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -8,
+                                                  "expectedValue":  100
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  -4,
+                                                  "expectedValue":  100
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  0,
+                                                  "expectedValue":  4102
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  4,
+                                                  "expectedValue":  1
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  8,
+                                                  "expectedValue":  0
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  16,
+                                                  "expectedValue":  4102
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  20,
+                                                  "expectedValue":  2
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  28,
+                                                  "expectedValue":  3
+                                              },
+                                              {
+                                                  "comparison":  "equals-constant",
+                                                  "offset":  32,
+                                                  "expectedValue":  3
+                                              }
+                                          ],
+                               "mappings":  [
+                                                {
+                                                    "match":  4970,
+                                                    "value":  0
+                                                },
+                                                {
+                                                    "match":  4971,
+                                                    "value":  1
+                                                }
+                                            ],
+                               "acknowledgementMappings":  [
+                                                               {
+                                                                   "match":  4970,
+                                                                   "value":  4960
+                                                               },
+                                                               {
+                                                                   "match":  4971,
+                                                                   "value":  4961
+                                                               }
+                                                           ],
+                               "failureResponseValue":  4969,
+                               "command":  "loadBatmanGraphicsDraftIntoConfig"
                            }
                        ],
     "hooks":  [
