@@ -825,9 +825,11 @@ void RunPackRepositoryTests()
         Expect(checked_in_apply_observer.Id == "graphicsObserverApplySignal", "Checked-in Batman apply observer id mismatch.");
         Expect(checked_in_apply_observer.TargetConfigKey == "applySignal", "Checked-in Batman apply observer target mismatch.");
         Expect(checked_in_apply_observer.CommandId.has_value() && *checked_in_apply_observer.CommandId == "applyBatmanGraphicsDraft", "Checked-in Batman apply observer command mismatch.");
-        const int expected_graphics_address_match_values[] = { 4101, 4102, 4103, 4104, 4105, 4106, 4210, 4211, 4990, 4991 };
+        const int expected_graphics_address_match_values[] = { 4101, 4102, 4103, 4104, 4105, 4106, 4200, 4210, 4211, 4990, 4991 };
         for (const helen::MemoryStateObserverDefinition* observer : { &checked_in_vsync_observer, &checked_in_apply_observer })
         {
+            Expect(observer->ScanStartAddress == 0x10000000, "Checked-in Batman graphics scan start mismatch.");
+            Expect(observer->ScanEndAddress == 0x30000000, "Checked-in Batman graphics scan end must cover the observed randomized heap range.");
             Expect(observer->AddressMatchValues.size() == std::size(expected_graphics_address_match_values), "Checked-in Batman graphics address-match value count mismatch.");
             for (std::size_t index = 0; index < std::size(expected_graphics_address_match_values); ++index)
             {
@@ -837,6 +839,11 @@ void RunPackRepositoryTests()
         Expect(checked_in_vsync_observer.Mappings.size() == 2, "Checked-in Batman VSync mapping count mismatch.");
         Expect(checked_in_vsync_observer.Mappings[0].Match == 4210 && checked_in_vsync_observer.Mappings[0].Value == 0, "Checked-in Batman VSync first mapping mismatch.");
         Expect(checked_in_vsync_observer.Mappings[1].Match == 4211 && checked_in_vsync_observer.Mappings[1].Value == 1, "Checked-in Batman VSync second mapping mismatch.");
+        Expect(checked_in_vsync_observer.ResponseRequestValue.has_value() && *checked_in_vsync_observer.ResponseRequestValue == 4200, "Checked-in Batman VSync response request mismatch.");
+        Expect(checked_in_vsync_observer.ResponseMappings.size() == 2, "Checked-in Batman VSync response mapping count mismatch.");
+        Expect(checked_in_vsync_observer.ResponseMappings[0].Match == 0 && checked_in_vsync_observer.ResponseMappings[0].Value == 4210, "Checked-in Batman VSync disabled response mapping mismatch.");
+        Expect(checked_in_vsync_observer.ResponseMappings[1].Match == 1 && checked_in_vsync_observer.ResponseMappings[1].Value == 4211, "Checked-in Batman VSync enabled response mapping mismatch.");
+        Expect(!checked_in_apply_observer.ResponseRequestValue.has_value() && checked_in_apply_observer.ResponseMappings.empty(), "Checked-in Batman apply observer unexpectedly declared a response mapping.");
         Expect(checked_in_apply_observer.Mappings.size() == 2, "Checked-in Batman apply mapping count mismatch.");
         Expect(checked_in_apply_observer.Mappings[0].Match == 4990 && checked_in_apply_observer.Mappings[0].Value == 0, "Checked-in Batman apply first mapping mismatch.");
         Expect(checked_in_apply_observer.Mappings[1].Match == 4991 && checked_in_apply_observer.Mappings[1].Value == 1, "Checked-in Batman apply second mapping mismatch.");

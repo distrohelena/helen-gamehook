@@ -526,12 +526,16 @@ internal static class GraphicsOptionsXmlPatcher
         XmlElement graphicsExitPromptSprite = CloneSpriteWithNewId(yesNoPromptSprite, GraphicsExitPromptSpriteId);
         PatchGraphicsExitPromptSprite(graphicsExitPromptSprite);
 
-        tags.AppendChild(graphicsSprite);
-        tags.AppendChild(CreateExportAssetsTag(tags, ScreenOptionsGraphicsSpriteId, "ScreenOptionsGraphics"));
-        tags.AppendChild(graphicsExitPromptSprite);
-        tags.AppendChild(CreateExportAssetsTag(tags, GraphicsExitPromptSpriteId, "GraphicsExitPrompt"));
-        tags.AppendChild(CloneDoInitActionTagForSprite(tags, ScreenOptionsGamePcSpriteId, ScreenOptionsGraphicsSpriteId));
-        tags.AppendChild(CloneDoInitActionTagForSprite(tags, YesNoPromptSpriteId, GraphicsExitPromptSpriteId));
+        InsertBeforeRootShowFrame(
+            tags,
+            [
+                graphicsSprite,
+                CreateExportAssetsTag(tags, ScreenOptionsGraphicsSpriteId, "ScreenOptionsGraphics"),
+                graphicsExitPromptSprite,
+                CreateExportAssetsTag(tags, GraphicsExitPromptSpriteId, "GraphicsExitPrompt"),
+                CloneDoInitActionTagForSprite(tags, ScreenOptionsGamePcSpriteId, ScreenOptionsGraphicsSpriteId),
+                CloneDoInitActionTagForSprite(tags, YesNoPromptSpriteId, GraphicsExitPromptSpriteId)
+            ]);
     }
 
     /// <summary>
@@ -546,9 +550,34 @@ internal static class GraphicsOptionsXmlPatcher
         XmlElement graphicsSprite = CloneSpriteWithNewId(optionsGamePcSprite, ScreenOptionsGraphicsSpriteId);
         PatchGraphicsScreenSprite(graphicsSprite);
 
-        tags.AppendChild(graphicsSprite);
-        tags.AppendChild(CreateExportAssetsTag(tags, ScreenOptionsGraphicsSpriteId, "ScreenOptionsGraphics"));
-        tags.AppendChild(CloneDoInitActionTagForSprite(tags, ScreenOptionsGamePcSpriteId, ScreenOptionsGraphicsSpriteId));
+        InsertBeforeRootShowFrame(
+            tags,
+            [
+                graphicsSprite,
+                CreateExportAssetsTag(tags, ScreenOptionsGraphicsSpriteId, "ScreenOptionsGraphics"),
+                CloneDoInitActionTagForSprite(tags, ScreenOptionsGamePcSpriteId, ScreenOptionsGraphicsSpriteId)
+            ]);
+    }
+
+    /// <summary>
+    /// Inserts dynamically exported screen definitions and their class initialization actions
+    /// before the root timeline is displayed. Scaleform processes the root <c>ShowFrame</c> as
+    /// the boundary at which queued root actions may execute, so class registrations placed
+    /// after that boundary can leave an exported sprite attached as an untyped movie clip.
+    /// </summary>
+    /// <param name="tags">The root SWF tag collection that owns the single root timeline.</param>
+    /// <param name="insertedTags">The ordered definitions, exports, and initialization actions to insert.</param>
+    private static void InsertBeforeRootShowFrame(XmlElement tags, IEnumerable<XmlElement> insertedTags)
+    {
+        XmlElement rootShowFrame = tags.ChildNodes
+            .OfType<XmlElement>()
+            .FirstOrDefault(node => GetAttribute(node, "type") == "ShowFrameTag")
+            ?? throw new InvalidOperationException("Could not find the root ShowFrame tag required for graphics screen registration.");
+
+        foreach (XmlElement insertedTag in insertedTags)
+        {
+            tags.InsertBefore(insertedTag, rootShowFrame);
+        }
     }
 
     /// <summary>

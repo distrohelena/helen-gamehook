@@ -38,6 +38,18 @@ namespace
     }
 
     /**
+     * @brief Reads one signed 32-bit integer from test-owned process memory.
+     * @param address Readable address whose integer value should be copied.
+     * @return Integer currently stored at the supplied address.
+     */
+    int ReadInt32(std::uintptr_t address)
+    {
+        int value = 0;
+        std::memcpy(&value, reinterpret_cast<const void*>(address), sizeof(value));
+        return value;
+    }
+
+    /**
      * @brief Configures one candidate Batman-style subtitle state block around the supplied base address.
      * @param base_address Candidate observer base address that should satisfy the configured checks.
      * @param raw_value Raw subtitle-size state value written at the observer value offset.
@@ -103,11 +115,11 @@ namespace
         WriteInt32(base_address - 12, 100);
         WriteInt32(base_address - 8, 100);
         WriteInt32(base_address - 4, 100);
-        WriteInt32(base_address, raw_value);
+        WriteInt32(base_address, 4102);
         WriteInt32(base_address + 4, 1);
         WriteInt32(base_address + 8, 0);
-        WriteInt32(base_address + 12, 1);
-        WriteInt32(base_address + 16, raw_value);
+        WriteInt32(base_address + 12, raw_value);
+        WriteInt32(base_address + 16, 4102);
         WriteInt32(base_address + 20, 2);
         WriteInt32(base_address + 28, 3);
         WriteInt32(base_address + 32, 3);
@@ -151,10 +163,10 @@ namespace
         definition.ScanStartAddress = scan_start;
         definition.ScanEndAddress = scan_end;
         definition.ScanStride = 4;
-        definition.ValueOffset = 0;
+        definition.ValueOffset = 12;
         definition.PollIntervalMs = 1;
         definition.TargetConfigKey = target_config_key;
-        definition.AddressMatchValues = { 4101, 4102, 4103, 4104, 4105, 4106, 4210, 4211, 4990, 4991 };
+        definition.AddressMatchValues = { 4101, 4102, 4103, 4104, 4105, 4106, 4200, 4210, 4211, 4990, 4991 };
         if (command != nullptr)
         {
             definition.CommandId = command;
@@ -167,8 +179,8 @@ namespace
             { "equals-constant", -4, 100, std::nullopt },
             { "equals-constant", 4, 1, std::nullopt },
             { "equals-constant", 8, 0, std::nullopt },
-            { "equals-constant", 12, 1, std::nullopt },
-            { "equals-value-at-offset", 16, std::nullopt, 0 },
+            { "equals-constant", 0, 4102, std::nullopt },
+            { "equals-constant", 16, 4102, std::nullopt },
             { "equals-constant", 20, 2, std::nullopt },
             { "equals-constant", 28, 3, std::nullopt },
             { "equals-constant", 32, 3, std::nullopt }
@@ -190,6 +202,21 @@ namespace
             mapping.Match = raw_value;
             mapping.Value = mapped_value++;
             definition.Mappings.push_back(mapping);
+        }
+
+        if (definition.Id == "graphicsObserverVsync")
+        {
+            definition.ResponseRequestValue = 4200;
+
+            helen::MemoryStateObserverMapEntryDefinition disabled_response;
+            disabled_response.Match = 0;
+            disabled_response.Value = 4210;
+            definition.ResponseMappings.push_back(disabled_response);
+
+            helen::MemoryStateObserverMapEntryDefinition enabled_response;
+            enabled_response.Match = 1;
+            enabled_response.Value = 4211;
+            definition.ResponseMappings.push_back(enabled_response);
         }
 
         return definition;
@@ -233,6 +260,15 @@ namespace
             [&updates](const helen::MemoryStateObserverUpdate& update)
             {
                 updates.push_back(update);
+            },
+            [](const std::string& config_key) -> std::optional<int>
+            {
+                if (config_key == "vsync")
+                {
+                    return 1;
+                }
+
+                return std::nullopt;
             });
 
         try
@@ -257,21 +293,31 @@ namespace
                 Expect(debug_view.RescanCount == 1, "Graphics carrier observer rescanned despite an unchanged valid structure.");
             }
 
+            ConfigureGraphicsCarrierStateBlock(candidate_address, 4200);
+            Expect(service.PollOnce(), "Expected the VSync initialization request poll to succeed.");
+            Expect(ReadInt32(candidate_address + 12) == 4211, "VSync initialization request did not receive the mapped live-config response.");
+            Expect(updates.empty(), "VSync initialization request unexpectedly emitted a user-driven config update.");
+
+            Expect(service.PollOnce(), "Expected the VSync initialization response poll to succeed.");
+            Expect(updates.size() == 1, "VSync initialization response did not emit exactly one synchronized update.");
+            Expect(updates[0].ObserverId == "graphicsObserverVsync", "VSync initialization response observer mismatch.");
+            Expect(updates[0].RawValue == 4211 && updates[0].MappedValue == 1, "VSync initialization response values mismatch.");
+
             ConfigureGraphicsCarrierStateBlock(candidate_address, 4210);
             Expect(service.PollOnce(), "Expected the VSync graphics carrier poll to succeed.");
-            Expect(updates.size() == 1, "VSync graphics carrier poll did not emit exactly one update.");
-            Expect(updates[0].ObserverId == "graphicsObserverVsync", "VSync graphics carrier update observer mismatch.");
-            Expect(updates[0].ConfigKey == "vsync", "VSync graphics carrier update config key mismatch.");
-            Expect(updates[0].RawValue == 4210 && updates[0].MappedValue == 0, "VSync graphics carrier update values mismatch.");
-            Expect(!updates[0].CommandId.has_value(), "VSync graphics carrier update unexpectedly carried a command.");
+            Expect(updates.size() == 2, "VSync graphics carrier poll did not emit exactly one additional update.");
+            Expect(updates[1].ObserverId == "graphicsObserverVsync", "VSync graphics carrier update observer mismatch.");
+            Expect(updates[1].ConfigKey == "vsync", "VSync graphics carrier update config key mismatch.");
+            Expect(updates[1].RawValue == 4210 && updates[1].MappedValue == 0, "VSync graphics carrier update values mismatch.");
+            Expect(!updates[1].CommandId.has_value(), "VSync graphics carrier update unexpectedly carried a command.");
 
             ConfigureGraphicsCarrierStateBlock(candidate_address, 4990);
             Expect(service.PollOnce(), "Expected the apply-signal graphics carrier poll to succeed.");
-            Expect(updates.size() == 2, "Apply-signal graphics carrier poll did not add exactly one update.");
-            Expect(updates[1].ObserverId == "graphicsObserverApplySignal", "Apply-signal graphics carrier update observer mismatch.");
-            Expect(updates[1].ConfigKey == "applySignal", "Apply-signal graphics carrier update config key mismatch.");
-            Expect(updates[1].RawValue == 4990 && updates[1].MappedValue == 0, "Apply-signal graphics carrier update values mismatch.");
-            Expect(updates[1].CommandId.has_value() && *updates[1].CommandId == "applyBatmanGraphicsDraft", "Apply-signal graphics carrier command mismatch.");
+            Expect(updates.size() == 3, "Apply-signal graphics carrier poll did not add exactly one update.");
+            Expect(updates[2].ObserverId == "graphicsObserverApplySignal", "Apply-signal graphics carrier update observer mismatch.");
+            Expect(updates[2].ConfigKey == "applySignal", "Apply-signal graphics carrier update config key mismatch.");
+            Expect(updates[2].RawValue == 4990 && updates[2].MappedValue == 0, "Apply-signal graphics carrier update values mismatch.");
+            Expect(updates[2].CommandId.has_value() && *updates[2].CommandId == "applyBatmanGraphicsDraft", "Apply-signal graphics carrier command mismatch.");
 
             debug_views = service.GetDebugViews();
             for (const helen::MemoryStateObserverDebugView& debug_view : debug_views)

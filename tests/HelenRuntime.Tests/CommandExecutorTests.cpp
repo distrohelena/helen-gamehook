@@ -194,6 +194,40 @@ namespace
     }
 
     /**
+     * @brief Writes ASCII fixture text using Batman launcher's native UTF-16LE encoding and byte-order mark.
+     * @param path Target file path that should receive the encoded text.
+     * @param text ASCII-only fixture text whose characters should be widened without transformation.
+     */
+    void WriteAsciiAsUtf16LittleEndianText(const std::filesystem::path& path, std::string_view text)
+    {
+        std::filesystem::create_directories(path.parent_path());
+
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        if (!stream)
+        {
+            throw std::runtime_error("Failed to open the UTF-16LE Batman graphics INI fixture for writing.");
+        }
+
+        const unsigned char byte_order_mark[] = { 0xFF, 0xFE };
+        stream.write(reinterpret_cast<const char*>(byte_order_mark), sizeof(byte_order_mark));
+        for (const unsigned char character : text)
+        {
+            if (character > 0x7F)
+            {
+                throw std::runtime_error("UTF-16LE Batman graphics INI fixtures must contain ASCII text only.");
+            }
+
+            const unsigned char encoded_character[] = { character, 0x00 };
+            stream.write(reinterpret_cast<const char*>(encoded_character), sizeof(encoded_character));
+        }
+
+        if (!stream)
+        {
+            throw std::runtime_error("Failed to write the UTF-16LE Batman graphics INI fixture.");
+        }
+    }
+
+    /**
      * @brief Reads the full UTF-8 text content of a test file.
      * @param path File path that should be loaded from disk.
      * @return Entire file content as one string.
@@ -209,6 +243,37 @@ namespace
         return std::string(
             std::istreambuf_iterator<char>(stream),
             std::istreambuf_iterator<char>());
+    }
+
+    /**
+     * @brief Reads one ASCII-only UTF-16LE fixture while validating that its native encoding was preserved.
+     * @param path UTF-16LE test file that should be decoded.
+     * @return Decoded ASCII text without its byte-order mark.
+     */
+    std::string ReadAsciiFromUtf16LittleEndianText(const std::filesystem::path& path)
+    {
+        const std::string bytes = ReadAllText(path);
+        if (bytes.size() < 2 ||
+            static_cast<unsigned char>(bytes[0]) != 0xFF ||
+            static_cast<unsigned char>(bytes[1]) != 0xFE ||
+            (bytes.size() % 2) != 0)
+        {
+            throw std::runtime_error("Batman graphics INI fixture did not preserve UTF-16LE encoding.");
+        }
+
+        std::string text;
+        text.reserve((bytes.size() - 2) / 2);
+        for (std::size_t index = 2; index < bytes.size(); index += 2)
+        {
+            if (bytes[index + 1] != '\0' || static_cast<unsigned char>(bytes[index]) > 0x7F)
+            {
+                throw std::runtime_error("Batman graphics INI fixture contains unsupported non-ASCII UTF-16LE text.");
+            }
+
+            text.push_back(bytes[index]);
+        }
+
+        return text;
     }
 
     /**
@@ -234,6 +299,16 @@ namespace
     std::filesystem::path GetSiblingBatmanGameIniPath(const std::filesystem::path& engine_ini_path)
     {
         return engine_ini_path.parent_path() / "BmGame.ini";
+    }
+
+    /**
+     * @brief Returns the sibling launcher-owned `UserEngine.ini` path for one generated `BmEngine.ini` path.
+     * @param engine_ini_path Absolute or relative `BmEngine.ini` path used by the graphics-config service.
+     * @return Sibling `UserEngine.ini` path in the same directory as `engine_ini_path`.
+     */
+    std::filesystem::path GetSiblingBatmanUserEngineIniPath(const std::filesystem::path& engine_ini_path)
+    {
+        return engine_ini_path.parent_path() / "UserEngine.ini";
     }
 
     /**
@@ -448,7 +523,9 @@ void RunCommandExecutorTests()
 
     {
         const std::filesystem::path batman_ini_path = CreateTemporaryBatmanGraphicsIniPath();
+        const std::filesystem::path batman_user_ini_path = GetSiblingBatmanUserEngineIniPath(batman_ini_path);
         WriteAllText(batman_ini_path, CreateBatmanGraphicsIniText());
+        WriteAsciiAsUtf16LittleEndianText(batman_user_ini_path, CreateBatmanGraphicsIniText() + "LauncherOwnedSentinel=PreserveMe\r\n");
 
         helen::CommandDispatcher batman_dispatcher;
         RegisterBatmanGraphicsConfigKeys(batman_dispatcher);
@@ -500,7 +577,10 @@ void RunCommandExecutorTests()
         Expect(batman_dispatcher.TryGetInt("detailLevel") == 1, "Batman graphics apply did not preserve the Medium detail preset.");
 
         const std::string saved_ini_text = ReadAllText(batman_ini_path);
+        const std::string saved_user_ini_text = ReadAsciiFromUtf16LittleEndianText(batman_user_ini_path);
         Expect(saved_ini_text.find("UseVsync=True") != std::string::npos, "Batman graphics apply did not persist VSync.");
+        Expect(saved_user_ini_text.find("UseVsync=True") != std::string::npos, "Batman graphics apply did not persist VSync to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("LauncherOwnedSentinel=PreserveMe") != std::string::npos, "Batman graphics apply did not preserve unrelated UserEngine.ini content.");
         Expect(saved_ini_text.find("MaxMultisamples=1") != std::string::npos, "Batman graphics apply did not persist disabled MSAA.");
         Expect(saved_ini_text.find("DetailMode=1") != std::string::npos, "Batman graphics apply did not persist the Medium detail mode.");
         Expect(saved_ini_text.find("Bloom=True") != std::string::npos, "Batman graphics apply did not persist Bloom for Medium.");

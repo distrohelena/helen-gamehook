@@ -31,9 +31,9 @@ namespace helen
         bool LoadIntoDispatcher(CommandDispatcher& dispatcher) const;
 
         /**
-         * @brief Writes the current normalized graphics draft values back into `BmEngine.ini`.
+         * @brief Writes the graphics draft into `BmEngine.ini` and its launcher-owned `UserEngine.ini` sibling.
          * @param dispatcher Config dispatcher that supplies the normalized graphics draft values.
-         * @return True when every required config key is present and every target INI value is updated successfully; otherwise false.
+         * @return True when both files contain every required setting and are written successfully; otherwise false.
          */
         bool ApplyFromDispatcher(const CommandDispatcher& dispatcher) const;
 

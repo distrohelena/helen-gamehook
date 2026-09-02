@@ -2,7 +2,7 @@
 
 ## Goal
 
-Turn the proven callback-free Batman `Graphics Options` shell into one complete, testable vertical slice: show the current VSync value, let the user edit it, persist the change to `BmEngine.ini`, and keep the title-to-main-menu transition stable.
+Turn the proven callback-free Batman `Graphics Options` shell into one complete, testable vertical slice: show the live persisted VSync value, let the user edit it, persist the change through Batman's launcher and generated INI files, and keep the title-to-main-menu transition stable.
 
 ## Confirmed Baseline
 
@@ -76,7 +76,7 @@ The shell initializes one controller with:
 - an apply-in-progress guard
 - an apply timer used to separate the value signal from the commit signal
 
-The generated frontend asset receives the current normalized VSync value from the existing `BmEngine.ini` bootstrap loader. The screen converts `0` to `Off` and `1` to `On`.
+The generated frontend asset does not bake a VSync value. On entry, the controller writes request code `4200` through `FE_SetControlType`, polls `FE_GetControlType`, and waits for HelenHook to replace the carrier value with `4210` for Off or `4211` for On. The VSync row shows `Loading...` during this handshake and `Unavailable` if no response arrives within ten seconds.
 
 All rows except `VSync` and `Apply Changes` remain non-interactive. Their existing placeholder presentation remains unchanged in this slice.
 
@@ -101,15 +101,15 @@ When activated:
 1. reject duplicate activation while an apply is already in progress
 2. block screen input
 3. emit `4210` for VSync Off or `4211` for VSync On through `FE_SetControlType`
-4. wait at least 100 milliseconds, which exceeds the observer's 50-millisecond poll interval
+4. wait one second so the VSync carrier remains observable despite live scan and render-thread scheduling load
 5. emit an alternating commit signal, `4990` or `4991`, through the same stock frontend setter
 6. let HelenHook's state observers update the graphics draft and invoke the existing apply command
 7. clear the apply-in-progress guard and re-enable input after carrier dispatch finishes
-8. keep the local draft marked as pending because this asynchronous frontend route has no reliable success acknowledgement
+8. promote the dispatched draft to the local initial value so Apply remains disabled until another edit
 
 The user stays on `Graphics Options` after apply. The apply action must not call `ReturnFromScreen()`.
 
-`Apply Changes` remains enabled after dispatch. Disabling it would incorrectly present carrier delivery as proof that the INI write succeeded. The live checkpoint uses runtime logs and an INI comparison as the authoritative acknowledgement; a future slice may add a real native-to-GFx result channel.
+`Apply Changes` is enabled only while the local draft differs from the initial value. It remains disabled after dispatch until the user edits VSync again. Runtime logs and the INI comparison remain the authoritative persistence evidence because the stock carrier does not return a command result to GFx.
 
 ### Back behavior
 
@@ -121,10 +121,12 @@ The graphics pack declares the complete existing graphics draft schema because `
 
 Only two state observers are enabled for this slice:
 
-- the VSync observer maps `4210` and `4211` into the `vsync` config key
+- the VSync observer answers request `4200` from the current `vsync` config value and maps `4210` and `4211` back into that key
 - the apply observer maps `4990` and `4991` and invokes `applyBatmanGraphicsDraft`
 
 No observer for another graphics row is included. The carrier codes are distinct from the subtitle-size range `4101` through `4106`.
+
+Both observers scan the structurally validated frontend carrier across `0x10000000..0x30000000`. This range covers the independently observed randomized heap locations near `0x10DF`, `0x1209`, and `0x2B24`; the resolved address is cached for normal polling.
 
 The apply command reuses the existing sequence:
 
@@ -137,7 +139,7 @@ This preserves established failure behavior. A missing or invalid required graph
 
 - Keep `GraphicsOptionsAssetBuilder.BuildShell(...)` and `GraphicsOptionsXmlPatcher.PatchShell(...)` as the active build path.
 - Extend the shell script templates with a dedicated VSync controller instead of importing `BatmanGraphicsOptionsController`.
-- Generate the VSync bootstrap literal through the existing typed `BatmanGraphicsIniBootstrapSnapshot`.
+- Request the current VSync state at screen entry instead of embedding a build-time INI snapshot in the package.
 - Make the third fixed row interactive and bind it to the shell controller.
 - Make the fifteenth fixed row the visible Apply action.
 - Keep other fixed-row actions callback-free and no-op.
@@ -146,14 +148,14 @@ This preserves established failure behavior. A missing or invalid required graph
 
 ## Failure Handling
 
-- Invalid or missing `BmEngine.ini` bootstrap data fails package generation explicitly.
+- Invalid or missing required graphics INI data fails package generation explicitly.
 - A malformed package manifest fails validation.
 - Missing startup graphics configuration prevents apply rather than creating defaults.
 - Unknown carrier values are ignored by exact mapping.
 - Duplicate apply activation is rejected while input is blocked.
-- The UI must not report persisted success or capture a new baseline because the stock carrier is asynchronous. Runtime logs and an INI comparison provide the authoritative persistence evidence for the live checkpoint.
+- A missing initial-state response leaves the setting explicitly unavailable rather than substituting a baked or default value.
 
-The last constraint means the first implementation does not show a success banner and leaves `Apply Changes` enabled after dispatch. This is intentionally conservative: the menu remains usable and permits a retry, while the live test confirms the native result independently.
+The implementation does not show a success banner. It updates the local baseline after dispatch for conventional dirty-state behavior, while the live test confirms the native result independently.
 
 ## Test Strategy
 
@@ -161,13 +163,13 @@ Add failing regression coverage before implementation for the following behavior
 
 ### Generated ActionScript
 
-- the shell reads the generated VSync bootstrap literal
+- the shell requests and polls for the live VSync value without embedding a build-time state
 - the VSync row shows `Off` and `On`
 - only the VSync row has working increment, decrement, and action handlers
 - the VSync edit remains local until Apply
 - Apply dispatches only `4210` or `4211`, followed by `4990` or `4991`
-- Apply separates the value and commit signals by at least 100 milliseconds
-- Apply retains the dirty state after dispatch instead of claiming persistence without acknowledgement
+- Apply separates the value and commit signals by one second
+- Apply clears the local dirty state after dispatch and stays disabled until another edit
 - no graphics shell script calls `Helen_GetInt`, `Helen_SetInt`, `Helen_RunCommand`, or the historical direct apply export
 - Apply does not return from the screen
 - Back retains the proven shell return path
@@ -176,7 +178,7 @@ Add failing regression coverage before implementation for the following behavior
 
 - all required graphics config keys are declared and loaded at startup
 - only the VSync and apply state observers are present
-- VSync maps only `4210` and `4211`
+- VSync answers `4200` with `4210` or `4211` and maps those response values back into config
 - Apply maps only `4990` and `4991`
 - the apply command writes and reloads the graphics draft
 - no historical unused bindings are restored
@@ -202,12 +204,13 @@ Add failing regression coverage before implementation for the following behavior
 
 ### Checkpoint 2: Persistence
 
-1. Record the original `UseVsync` value in `BmEngine.ini`.
+1. Record the original `UseVsync` value in `UserEngine.ini` and `BmEngine.ini`.
 2. Toggle VSync and activate `Apply Changes`.
 3. Close the game normally.
 4. Confirm runtime logs observed the expected VSync and apply carrier codes.
-5. Confirm `UseVsync` changed in `BmEngine.ini` while unrelated sampled graphics values remained unchanged.
-6. Restore the original VSync value if the test is not intended to keep the change.
+5. Confirm `UseVsync` changed in both INIs while unrelated sampled graphics values remained unchanged.
+6. Relaunch and confirm Batman regenerates `BmEngine.ini` from the launcher-owned `UserEngine.ini` value and the menu reports that live state.
+7. Restore the original VSync value if the test is not intended to keep the change.
 
 ## Risks and Mitigations
 
@@ -216,7 +219,8 @@ Add failing regression coverage before implementation for the following behavior
 - **Unrelated INI changes:** Load the complete current graphics state at startup and compare sampled unrelated keys during the live test.
 - **Asynchronous false success:** Treat logs and the INI as authoritative; do not add a fake success callback or banner.
 - **Scope creep from historical code:** Extend the shell directly and prohibit importing the old full controller, prompt sprite, or all-row observer manifest.
-- **Stale generated bootstrap after external INI edits:** The generated screen reflects the INI snapshot used during package generation. Dynamic external edits after generation remain outside this slice and can be addressed after the one-setting path is proven.
+- **Randomized carrier address:** Scan the full observed heap span and validate the complete carrier structure before accepting an address.
+- **Launcher overwrite:** Persist the authoritative UTF-16LE `UserEngine.ini` as well as generated `BmEngine.ini`, preserving each file's encoding and unrelated content.
 
 ## Acceptance Criteria
 
@@ -226,7 +230,7 @@ The slice is successful when:
 - `Graphics Options` opens reliably.
 - VSync alone displays a real value and is editable.
 - Apply emits only the VSync and commit carrier signals.
-- `BmEngine.ini` persists the selected `UseVsync` value.
+- `UserEngine.ini` and `BmEngine.ini` persist the selected `UseVsync` value across relaunch.
 - unrelated sampled graphics values are unchanged.
 - the other graphics rows remain inactive.
 - Back works without a prompt or stuck input.

@@ -6,32 +6,40 @@ using UELib.Core;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-if (args.Length == 0)
+try
 {
-    PrintUsage();
+    if (args.Length == 0)
+    {
+        PrintUsage();
+        return 1;
+    }
+
+    string command = args[0];
+
+    if (!command.StartsWith("-", StringComparison.Ordinal) &&
+        command is not "dump-function" &&
+        command is not "inspect-object" &&
+        command is not "inspect-property-meta" &&
+        command is not "find-name" &&
+        args.Length == 3)
+    {
+        return DumpFunction(args[0], args[1], args[2]);
+    }
+
+    return command switch
+    {
+        "dump-function" when args.Length == 4 => DumpFunction(args[1], args[2], args[3]),
+        "inspect-object" when args.Length == 4 => InspectObject(args[1], args[2], args[3]),
+        "inspect-property-meta" when args.Length == 4 => InspectPropertyMeta(args[1], args[2], args[3]),
+        "find-name" when args.Length == 3 => FindName(args[1], args[2]),
+        _ => FailUsage()
+    };
+}
+catch (Exception exception)
+{
+    Console.Error.WriteLine($"UELibFunctionDump failed: {exception}");
     return 1;
 }
-
-string command = args[0];
-
-if (!command.StartsWith("-", StringComparison.Ordinal) &&
-    command is not "dump-function" &&
-    command is not "inspect-object" &&
-    command is not "inspect-property-meta" &&
-    command is not "find-name" &&
-    args.Length == 3)
-{
-    return DumpFunction(args[0], args[1], args[2]);
-}
-
-return command switch
-{
-    "dump-function" when args.Length == 4 => DumpFunction(args[1], args[2], args[3]),
-    "inspect-object" when args.Length == 4 => InspectObject(args[1], args[2], args[3]),
-    "inspect-property-meta" when args.Length == 4 => InspectPropertyMeta(args[1], args[2], args[3]),
-    "find-name" when args.Length == 3 => FindName(args[1], args[2]),
-    _ => FailUsage()
-};
 
 static int DumpFunction(string packagePathArg, string ownerName, string functionName)
 {

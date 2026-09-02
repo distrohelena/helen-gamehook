@@ -1182,6 +1182,37 @@ namespace
             }
         }
 
+        definition.ResponseRequestValue = TryGetInt(FindObjectMember(value, "responseRequestValue"));
+        const helen::JsonValue* response_mappings_value = FindObjectMember(value, "responseMappings");
+        if (definition.ResponseRequestValue.has_value())
+        {
+            const helen::JsonValue::Array* response_mappings =
+                response_mappings_value != nullptr ? response_mappings_value->AsArray() : nullptr;
+            if (response_mappings == nullptr || response_mappings->empty() ||
+                std::find(
+                    definition.AddressMatchValues.begin(),
+                    definition.AddressMatchValues.end(),
+                    *definition.ResponseRequestValue) == definition.AddressMatchValues.end())
+            {
+                return false;
+            }
+
+            for (const helen::JsonValue& response_mapping_value : *response_mappings)
+            {
+                helen::MemoryStateObserverMapEntryDefinition mapping;
+                if (!ParseStateObserverMapping(response_mapping_value, mapping))
+                {
+                    return false;
+                }
+
+                definition.ResponseMappings.push_back(std::move(mapping));
+            }
+        }
+        else if (response_mappings_value != nullptr)
+        {
+            return false;
+        }
+
         return true;
     }
 

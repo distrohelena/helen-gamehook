@@ -1,5 +1,3 @@
-using System.Globalization;
-
 namespace SubtitleSizeModBuilder;
 
 /// <summary>
@@ -55,34 +53,38 @@ internal static class GraphicsOptionsShellScriptTemplates
     """;
 
     /// <summary>
-    /// Initializes the graphics screen and its focused VSync controller using the normalized INI
-    /// snapshot. The fifteen rows form one closed navigation loop, including the visible Apply row.
+    /// Initializes the graphics screen and its focused VSync controller. The controller requests the
+    /// live persisted value through the shared frontend carrier before enabling interaction.
     /// </summary>
     /// <param name="snapshot">The normalized user graphics snapshot supplying the initial VSync state.</param>
     /// <returns>The generated screen-frame ActionScript.</returns>
     public static string CreateScreenFrame1(BatmanGraphicsIniBootstrapSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        string initialVsync = snapshot.Vsync.ToString(CultureInfo.InvariantCulture);
-
-        return $$"""
+        return """
         class rs.ui.BatmanGraphicsVsyncController
         {
            var Screen;
            var InitialVsync;
            var DraftVsync;
+           var InitialStateResolved;
+           var InitialStateFailed;
+           var InitialStateTimerId;
+           var InitialStatePollCount;
            var ApplySignalToggle;
            var ApplyInProgress;
-           var ApplyWasDispatched;
            var ApplyTimerId;
-           function BatmanGraphicsVsyncController(screen, initialVsync)
+           function BatmanGraphicsVsyncController(screen)
            {
               this.Screen = screen;
-              this.InitialVsync = this.NormalizeVsync(initialVsync);
-              this.DraftVsync = this.InitialVsync;
+              this.InitialVsync = 0;
+              this.DraftVsync = 0;
+              this.InitialStateResolved = false;
+              this.InitialStateFailed = false;
+              this.InitialStateTimerId = undefined;
+              this.InitialStatePollCount = 0;
               this.ApplySignalToggle = 0;
               this.ApplyInProgress = false;
-              this.ApplyWasDispatched = false;
               this.ApplyTimerId = undefined;
            }
            function NormalizeVsync(value)
@@ -99,11 +101,45 @@ internal static class GraphicsOptionsShellScriptTemplates
            }
            function CanApply()
            {
-              return !this.ApplyInProgress && (this.IsDirty() || this.ApplyWasDispatched);
+              return this.InitialStateResolved && !this.ApplyInProgress && this.IsDirty();
+           }
+           function BeginInitialStateRequest()
+           {
+              this.ApplyInProgress = true;
+              this.Screen.BlockInput(true);
+              flash.external.ExternalInterface.call("FE_SetControlType",4200,"");
+              this.InitialStateTimerId = setInterval(this,"PollInitialState",50);
+              this.RefreshRows();
+           }
+           function PollInitialState()
+           {
+              var rawValue = int(flash.external.ExternalInterface.call("FE_GetControlType"));
+              if(rawValue == 4210 || rawValue == 4211)
+              {
+                 clearInterval(this.InitialStateTimerId);
+                 this.InitialStateTimerId = undefined;
+                 this.InitialVsync = rawValue - 4210;
+                 this.DraftVsync = this.InitialVsync;
+                 this.InitialStateResolved = true;
+                 this.ApplyInProgress = false;
+                 this.Screen.BlockInput(false);
+                 this.RefreshRows();
+                 return undefined;
+              }
+              this.InitialStatePollCount = this.InitialStatePollCount + 1;
+              if(this.InitialStatePollCount >= 200)
+              {
+                 clearInterval(this.InitialStateTimerId);
+                 this.InitialStateTimerId = undefined;
+                 this.InitialStateFailed = true;
+                 this.ApplyInProgress = false;
+                 this.Screen.BlockInput(false);
+                 this.RefreshRows();
+              }
            }
            function SetVsync(value, forward)
            {
-              if(this.ApplyInProgress)
+              if(!this.InitialStateResolved || this.ApplyInProgress)
               {
                  return undefined;
               }
@@ -154,7 +190,7 @@ internal static class GraphicsOptionsShellScriptTemplates
               this.Screen.BlockInput(true);
               this.RefreshRows();
               flash.external.ExternalInterface.call("FE_SetControlType",4210+this.DraftVsync,"");
-              this.ApplyTimerId = setInterval(this,"CompleteApply",100);
+              this.ApplyTimerId = setInterval(this,"CompleteApply",1000);
            }
            function CompleteApply()
            {
@@ -165,13 +201,18 @@ internal static class GraphicsOptionsShellScriptTemplates
               }
               this.ApplySignalToggle = this.ApplySignalToggle == 0 ? 1 : 0;
               flash.external.ExternalInterface.call("FE_SetControlType",4990+this.ApplySignalToggle,"");
-              this.ApplyWasDispatched = true;
+              this.InitialVsync = this.DraftVsync;
               this.ApplyInProgress = false;
               this.Screen.BlockInput(false);
               this.RefreshRows();
            }
            function Destroy()
            {
+              if(this.InitialStateTimerId != undefined)
+              {
+                 clearInterval(this.InitialStateTimerId);
+                 this.InitialStateTimerId = undefined;
+              }
               if(this.ApplyTimerId != undefined)
               {
                  clearInterval(this.ApplyTimerId);
@@ -195,7 +236,7 @@ internal static class GraphicsOptionsShellScriptTemplates
         {
            this.Title.text = "Graphics Options";
         }
-        this.GraphicsVsyncController = new rs.ui.BatmanGraphicsVsyncController(this,{{initialVsync}});
+        this.GraphicsVsyncController = new rs.ui.BatmanGraphicsVsyncController(this);
         this.AddItem(GraphicsRow1,14,1,-1,-1);
         this.AddItem(GraphicsRow2,0,2,-1,-1);
         this.AddItem(GraphicsRow3,1,3,-1,-1);
@@ -212,6 +253,7 @@ internal static class GraphicsOptionsShellScriptTemplates
         this.AddItem(GraphicsRow14,12,14,-1,-1);
         this.AddItem(GraphicsRow15,13,0,-1,-1);
         GraphicsRow15._visible = true;
+        this.GraphicsVsyncController.BeginInitialStateRequest();
         _rotation = -2;
         """;
     }
@@ -236,7 +278,7 @@ internal static class GraphicsOptionsShellScriptTemplates
         [
             CreateRowClipAction("Fullscreen", "Not active", true),
             CreateRowClipAction("Resolution", "Not active", true),
-            CreateVsyncRowClipAction(snapshot.Vsync),
+            CreateVsyncRowClipAction(),
             CreateRowClipAction("MSAA", "Not active", true),
             CreateRowClipAction("Detail Level", "Not active", true),
             CreateRowClipAction("Bloom", "Not active", true),
@@ -255,16 +297,15 @@ internal static class GraphicsOptionsShellScriptTemplates
     /// <summary>
     /// Creates the focused VSync row, including its two visible values and controller-backed actions.
     /// </summary>
-    /// <param name="initialVsync">The normalized VSync state read from the user INI.</param>
     /// <returns>An ActionScript load handler for row three.</returns>
-    private static string CreateVsyncRowClipAction(int initialVsync)
+    private static string CreateVsyncRowClipAction()
     {
-        string normalizedVsync = initialVsync == 0 ? "0" : "1";
-        return $$"""
+        return """
         onClipEvent(load){
+           this.LabelName = "VSync";
            this.Names = new Array("Off","On");
-           this.State = {{normalizedVsync}};
-           this.Initial = {{normalizedVsync}};
+           this.State = 0;
+           this.Initial = 0;
            this.Default = 0;
            this.Update = function()
            {
@@ -284,6 +325,14 @@ internal static class GraphicsOptionsShellScriptTemplates
               {
                  this.Label.text = "VSync";
               }
+              if(_parent.GraphicsVsyncController == undefined || !_parent.GraphicsVsyncController.InitialStateResolved)
+              {
+                 this.ItemText.text = _parent.GraphicsVsyncController != undefined && _parent.GraphicsVsyncController.InitialStateFailed ? "Unavailable" : "Loading...";
+                 this.LeftClicker._visible = false;
+                 this.RightClicker._visible = false;
+                 return undefined;
+              }
+              this.Initial = _parent.GraphicsVsyncController.InitialVsync;
               this.ItemText.text = this.Names[this.State];
               if(this.LeftClicker != undefined)
               {
@@ -334,6 +383,7 @@ internal static class GraphicsOptionsShellScriptTemplates
     {
         return """
         onClipEvent(load){
+           this.LabelName = "Apply Changes";
            this.Names = new Array("");
            this.State = 0;
            this.Initial = 0;
@@ -421,6 +471,7 @@ internal static class GraphicsOptionsShellScriptTemplates
 
         return $$"""
         onClipEvent(load){
+           this.LabelName = "{{escapedLabel}}";
            this.Names = new Array("{{escapedValue}}");
            this.State = 0;
            this.Initial = 0;

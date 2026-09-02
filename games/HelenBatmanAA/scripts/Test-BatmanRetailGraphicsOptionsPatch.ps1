@@ -7,6 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$env:MSBUILDDISABLENODEREUSE = '1'
 . (Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1')
 
 function Assert-ContainsOrdinal {
@@ -120,27 +121,29 @@ function New-MalformedIniFixture {
 
 function Invoke-ShellBuild {
     param([string]$BuilderProject, [string]$Configuration, [string]$BuilderRoot, [string]$OutputDirectory, [string]$FfdecPath, [string]$IniPath)
-    $result = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--project', $BuilderProject, '-c', $Configuration, '--', 'build-main-menu-graphics-shell', '--root', $BuilderRoot, '--output-dir', $OutputDirectory, '--ffdec', $FfdecPath, '--ini', $IniPath)
+    $result = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--no-build', '--project', $BuilderProject, '-c', $Configuration, '--', 'build-main-menu-graphics-shell', '--root', $BuilderRoot, '--output-dir', $OutputDirectory, '--ffdec', $FfdecPath, '--ini', $IniPath)
     if ($result.ExitCode -ne 0) { throw "Shell build failed for INI '$IniPath': $($result.Output -join [Environment]::NewLine)" }
 }
 
-function Assert-ShellBootstrapExport {
-    param([string]$GfxPath, [string]$ExportRoot, [string]$FfdecPath, [int]$ExpectedVsync, [string]$Context)
+function Assert-ShellLiveHandshakeExport {
+    param([string]$GfxPath, [string]$ExportRoot, [string]$FfdecPath, [string]$Context)
     $export = Invoke-ExternalProcess -FilePath $FfdecPath -Arguments @('-export', 'script', $ExportRoot, $GfxPath)
     if ($export.ExitCode -ne 0) { throw "FFDec failed to export $Context shell scripts: $($export.Output -join [Environment]::NewLine)" }
     $screenDirectory = @(Get-ChildItem -LiteralPath (Join-Path $ExportRoot 'scripts') -Recurse -Directory | Where-Object { $_.Name -eq 'DefineSprite_600_ScreenOptionsGraphics' })
     if ($screenDirectory.Count -ne 1) { throw "$Context export did not contain exactly one graphics screen directory." }
     $screenText = Get-Content -LiteralPath (Join-Path $screenDirectory[0].FullName 'frame_1\DoAction.as') -Raw
-    Assert-ContainsOrdinal -Text $screenText -Token "this.GraphicsVsyncController = new rs.ui.BatmanGraphicsVsyncController(this,$ExpectedVsync);" -Context "$Context controller bootstrap"
+    Assert-ContainsOrdinal -Text $screenText -Token 'this.GraphicsVsyncController = new rs.ui.BatmanGraphicsVsyncController(this);' -Context "$Context controller initialization"
+    Assert-ContainsOrdinal -Text $screenText -Token 'flash.external.ExternalInterface.call("FE_SetControlType",4200,"");' -Context "$Context live-state request"
+    Assert-ContainsOrdinal -Text $screenText -Token 'flash.external.ExternalInterface.call("FE_GetControlType")' -Context "$Context live-state response poll"
     $rowPath = Join-Path $screenDirectory[0].FullName 'frame_1\PlaceObject2_290_List_Template_125\CLIPACTIONRECORD onClipEvent(load).as'
     $rowText = Get-Content -LiteralPath $rowPath -Raw
-    Assert-ContainsOrdinal -Text $rowText -Token "this.State = $ExpectedVsync;" -Context "$Context VSync row state"
-    Assert-ContainsOrdinal -Text $rowText -Token "this.Initial = $ExpectedVsync;" -Context "$Context VSync row initial state"
+    Assert-ContainsOrdinal -Text $rowText -Token 'this.State = 0;' -Context "$Context unresolved VSync row state"
+    Assert-ContainsOrdinal -Text $rowText -Token '"Unavailable" : "Loading..."' -Context "$Context explicit unresolved state"
 }
 
 function Assert-BuilderRejectsIni {
     param([string]$BuilderProject, [string]$Configuration, [string]$BuilderRoot, [string]$OutputDirectory, [string]$FfdecPath, [string]$IniPath, [string]$ExpectedDiagnostic, [string]$Context)
-    $result = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--project', $BuilderProject, '-c', $Configuration, '--', 'build-main-menu-graphics-shell', '--root', $BuilderRoot, '--output-dir', $OutputDirectory, '--ffdec', $FfdecPath, '--ini', $IniPath)
+    $result = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--no-build', '--project', $BuilderProject, '-c', $Configuration, '--', 'build-main-menu-graphics-shell', '--root', $BuilderRoot, '--output-dir', $OutputDirectory, '--ffdec', $FfdecPath, '--ini', $IniPath)
     if ($result.ExitCode -eq 0) { throw "$Context unexpectedly accepted INI '$IniPath'." }
     Assert-ContainsOrdinal -Text ($result.Output -join [Environment]::NewLine) -Token $ExpectedDiagnostic -Context "$Context diagnostic"
     $outputPath = Join-Path $OutputDirectory 'MainV2-graphics-options.gfx'
@@ -170,6 +173,11 @@ $patcherProject = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\BmGameG
 $ffdec = Join-Path $BuilderRoot 'extracted\ffdec\ffdec-cli.exe'
 foreach ($path in @($builderProject, $patcherProject, $ffdec, $RetailFrontendPackagePath)) { if (-not (Test-Path -LiteralPath $path)) { throw "Required retail patch input not found: $path" } }
 
+foreach ($projectPath in @($builderProject, $patcherProject)) {
+    $build = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('build', $projectPath, '-c', $Configuration, '--nologo', '--disable-build-servers', '-nr:false', '-p:UseSharedCompilation=false')
+    if ($build.ExitCode -ne 0) { throw "Retail patch dependency build failed for '$projectPath': $($build.Output -join [Environment]::NewLine)" }
+}
+
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('HelenBatmanGraphicsRetailPatch-' + [Guid]::NewGuid().ToString('N'))
 $bootstrapFalseIniPath = Join-Path $tempRoot 'bootstrap-false.ini'
 $bootstrapTrueIniPath = Join-Path $tempRoot 'bootstrap-true.ini'
@@ -197,19 +205,22 @@ try {
     Assert-BuilderRejectsIni -BuilderProject $builderProject -Configuration $Configuration -BuilderRoot $BuilderRoot -OutputDirectory $invalidMalformedOutputRoot -FfdecPath $ffdec -IniPath $malformedIniPath -ExpectedDiagnostic "INI value 'SystemSettings.UseVsync' must be a boolean-like value but was 'Malformed'." -Context 'Malformed INI validation'
     Invoke-ShellBuild -BuilderProject $builderProject -Configuration $Configuration -BuilderRoot $BuilderRoot -OutputDirectory $bootstrapFalseRoot -FfdecPath $ffdec -IniPath $bootstrapFalseIniPath
     Invoke-ShellBuild -BuilderProject $builderProject -Configuration $Configuration -BuilderRoot $BuilderRoot -OutputDirectory $bootstrapTrueRoot -FfdecPath $ffdec -IniPath $bootstrapTrueIniPath
-    Assert-ShellBootstrapExport -GfxPath (Join-Path $bootstrapFalseRoot 'MainV2-graphics-options.gfx') -ExportRoot $bootstrapFalseExportRoot -FfdecPath $ffdec -ExpectedVsync 0 -Context 'UseVsync=False bootstrap'
-    Assert-ShellBootstrapExport -GfxPath (Join-Path $bootstrapTrueRoot 'MainV2-graphics-options.gfx') -ExportRoot $bootstrapTrueExportRoot -FfdecPath $ffdec -ExpectedVsync 1 -Context 'UseVsync=True bootstrap'
+    Assert-ShellLiveHandshakeExport -GfxPath (Join-Path $bootstrapFalseRoot 'MainV2-graphics-options.gfx') -ExportRoot $bootstrapFalseExportRoot -FfdecPath $ffdec -Context 'UseVsync=False input'
+    Assert-ShellLiveHandshakeExport -GfxPath (Join-Path $bootstrapTrueRoot 'MainV2-graphics-options.gfx') -ExportRoot $bootstrapTrueExportRoot -FfdecPath $ffdec -Context 'UseVsync=True input'
+    $falseShellHash = (Get-FileHash -LiteralPath (Join-Path $bootstrapFalseRoot 'MainV2-graphics-options.gfx') -Algorithm SHA256).Hash
+    $trueShellHash = (Get-FileHash -LiteralPath (Join-Path $bootstrapTrueRoot 'MainV2-graphics-options.gfx') -Algorithm SHA256).Hash
+    if ($falseShellHash -cne $trueShellHash) { throw 'Graphics shell still bakes the build-time VSync snapshot instead of using the live handshake.' }
     if (-not (Test-Path -LiteralPath $prototypeGfx)) { throw "Shell prototype was not generated: $prototypeGfx" }
 
     $manifest = [ordered]@{ name = 'MainV2 graphics-options shell retail patch'; patches = @([ordered]@{ owner = 'MainMenu'; exportName = 'MainV2'; exportType = 'GFxMovieInfo'; replacementPath = $prototypeGfx; payloadMagic = 'GFX' }) }
     [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
-    $patch = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--project', $patcherProject, '-c', $Configuration, '--', 'patch', '--package', $RetailFrontendPackagePath, '--manifest', $manifestPath, '--output', $patchedPackage)
+    $patch = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--no-build', '--project', $patcherProject, '-c', $Configuration, '--', 'patch', '--package', $RetailFrontendPackagePath, '--manifest', $manifestPath, '--output', $patchedPackage)
     if ($patch.ExitCode -ne 0) { throw "Retail patch failed: $($patch.Output -join [Environment]::NewLine)" }
 
     . (Join-Path $PSScriptRoot 'BatmanPackVerificationHelpers.ps1')
     $patchedStorage = Get-UnrealPackageStorageInfo -Path $patchedPackage
     if ($patchedStorage.CompressionChunkCount -le 0) { throw 'Retail patch output must remain chunk-compressed.' }
-    $extract = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--project', $patcherProject, '-c', $Configuration, '--', 'extract-gfx', '--package', $patchedPackage, '--owner', 'MainMenu', '--name', 'MainV2', '--output', $extractedGfx)
+    $extract = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--no-build', '--project', $patcherProject, '-c', $Configuration, '--', 'extract-gfx', '--package', $patchedPackage, '--owner', 'MainMenu', '--name', 'MainV2', '--output', $extractedGfx)
     if ($extract.ExitCode -ne 0) { throw 'Failed to extract patched retail MainV2.' }
     $xmlResult = Invoke-ExternalProcess -FilePath $ffdec -Arguments @('-swf2xml', $extractedGfx, $xmlPath)
     if ($xmlResult.ExitCode -ne 0) { throw 'FFDec failed to reopen patched retail MainV2.' }
@@ -238,16 +249,16 @@ try {
     Assert-ContainsOrdinal $menuText 'Graphics Options' 'Options menu script'
     foreach ($required in @('Graphics Options', 'CancelScreen', 'ReturnFromScreen', 'FE_SetActiveScreenName","Graphics Options')) { Assert-ContainsOrdinal $screenText $required 'Options Graphics screen script' }
     Assert-RowShellContract -ScreenDirectory $screenDirectory.FullName
-    foreach ($required in @('rs.ui.BatmanGraphicsVsyncController', 'InitialVsync', 'DraftVsync', 'ApplyWasDispatched = false')) { Assert-ContainsOrdinal -Text $screenText -Token $required -Context 'Options Graphics screen script' }
+    foreach ($required in @('rs.ui.BatmanGraphicsVsyncController', 'InitialVsync', 'DraftVsync', 'InitialStateResolved', 'InitialStateFailed', 'return this.InitialStateResolved && !this.ApplyInProgress && this.IsDirty();', 'this.InitialVsync = this.DraftVsync;', 'FE_SetControlType",4200', 'FE_GetControlType')) { Assert-ContainsOrdinal -Text $screenText -Token $required -Context 'Options Graphics screen script' }
     if ($screenText -notmatch 'IncrementVsync\s*=\s*function\s*\(\)\s*\{\s*this\.SetVsync\(this\.DraftVsync\s*==\s*0\s*\?\s*1\s*:\s*0,true\);\s*\}') { throw 'IncrementVsync must wrap DraftVsync through the guarded setter.' }
     if ($screenText -notmatch 'DecrementVsync\s*=\s*function\s*\(\)\s*\{\s*this\.SetVsync\(this\.DraftVsync\s*==\s*0\s*\?\s*1\s*:\s*0,false\);\s*\}') { throw 'DecrementVsync must wrap DraftVsync through the guarded setter.' }
-    Assert-ContainsOrdinal -Text $screenText -Token 'setInterval(this,"CompleteApply",100)' -Context 'Options Graphics screen timer'
+    Assert-ContainsOrdinal -Text $screenText -Token 'setInterval(this,"CompleteApply",1000)' -Context 'Options Graphics screen timer'
     Assert-ContainsOrdinal -Text $screenText -Token 'this.Screen.BlockInput(true);' -Context 'Options Graphics apply input block'
     Assert-ContainsOrdinal -Text $screenText -Token 'this.Screen.BlockInput(false);' -Context 'Options Graphics apply input unblock'
     if ($screenText -notmatch 'FE_SetControlType",4210\s*\+\s*this\.DraftVsync\s*,\s*""\s*\)') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4210 plus DraftVsync with an empty second argument.' }
     if ($screenText -notmatch 'FE_SetControlType",4990\s*\+\s*this\.ApplySignalToggle\s*,\s*""\s*\)') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4990 plus ApplySignalToggle with an empty second argument.' }
     foreach ($forbidden in @('Helen_GetInt', 'Helen_SetInt', 'Helen_RunCommand', 'Helen_ApplyBatmanGraphicsDraft', 'GraphicsExitPrompt', 'CaptureInitialState')) { Assert-NotContainsOrdinal -Text $screenText -Token $forbidden -Context 'Options Graphics screen script' }
-    foreach ($forbidden in @('Helen_', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft', 'Unsaved graphics changes', 'Some changes require a restart')) { foreach ($file in $scriptFiles) { Assert-NotContainsOrdinal -Text (Get-Content -LiteralPath $file.FullName -Raw) -Token $forbidden -Context $file.Name } }
+    foreach ($forbidden in @('Helen_', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft', 'Unsaved graphics changes', 'Some changes require a restart', 'ApplyWasDispatched')) { foreach ($file in $scriptFiles) { Assert-NotContainsOrdinal -Text (Get-Content -LiteralPath $file.FullName -Raw) -Token $forbidden -Context $file.Name } }
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }

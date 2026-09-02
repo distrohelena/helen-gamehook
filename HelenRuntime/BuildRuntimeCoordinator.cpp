@@ -24,6 +24,10 @@ namespace helen
                 [this](const MemoryStateObserverUpdate& update)
                 {
                     HandleObserverUpdate(update);
+                },
+                [this](const std::string& config_key)
+                {
+                    return command_dispatcher_.TryGetInt(config_key);
                 });
         }
     }

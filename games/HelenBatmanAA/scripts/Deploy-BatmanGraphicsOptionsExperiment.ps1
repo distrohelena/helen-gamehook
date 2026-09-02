@@ -251,10 +251,10 @@ function Assert-BatmanGraphicsVsyncChecks {
         [pscustomobject]@{ Comparison = 'equals-constant'; Offset = -12; ExpectedValue = 100 },
         [pscustomobject]@{ Comparison = 'equals-constant'; Offset = -8; ExpectedValue = 100 },
         [pscustomobject]@{ Comparison = 'equals-constant'; Offset = -4; ExpectedValue = 100 },
+        [pscustomobject]@{ Comparison = 'equals-constant'; Offset = 0; ExpectedValue = 4102 },
         [pscustomobject]@{ Comparison = 'equals-constant'; Offset = 4; ExpectedValue = 1 },
         [pscustomobject]@{ Comparison = 'equals-constant'; Offset = 8; ExpectedValue = 0 },
-        [pscustomobject]@{ Comparison = 'equals-constant'; Offset = 12; ExpectedValue = 1 },
-        [pscustomobject]@{ Comparison = 'equals-value-at-offset'; Offset = 16; CompareOffset = 0 },
+        [pscustomobject]@{ Comparison = 'equals-constant'; Offset = 16; ExpectedValue = 4102 },
         [pscustomobject]@{ Comparison = 'equals-constant'; Offset = 20; ExpectedValue = 2 },
         [pscustomobject]@{ Comparison = 'equals-constant'; Offset = 28; ExpectedValue = 3 },
         [pscustomobject]@{ Comparison = 'equals-constant'; Offset = 32; ExpectedValue = 3 }
@@ -266,16 +266,9 @@ function Assert-BatmanGraphicsVsyncChecks {
     for ($index = 0; $index -lt $expectedChecks.Count; $index++) {
         $expected = $expectedChecks[$index]
         $actual = $Observer.checks[$index]
-        if ($expected.Comparison -eq 'equals-value-at-offset') {
-            Assert-BatmanGraphicsVsyncExactProperties -Object $actual -Names @('comparison', 'offset', 'compareOffset') -Context "$Context check $($index + 1)"
-            if ($actual.comparison -cne $expected.Comparison -or $actual.offset -ne $expected.Offset -or $actual.compareOffset -ne $expected.CompareOffset) {
-                throw "$Context check $($index + 1) drifted."
-            }
-        } else {
-            Assert-BatmanGraphicsVsyncExactProperties -Object $actual -Names @('comparison', 'offset', 'expectedValue') -Context "$Context check $($index + 1)"
-            if ($actual.comparison -cne $expected.Comparison -or $actual.offset -ne $expected.Offset -or $actual.expectedValue -ne $expected.ExpectedValue) {
-                throw "$Context check $($index + 1) drifted."
-            }
+        Assert-BatmanGraphicsVsyncExactProperties -Object $actual -Names @('comparison', 'offset', 'expectedValue') -Context "$Context check $($index + 1)"
+        if ($actual.comparison -cne $expected.Comparison -or $actual.offset -ne $expected.Offset -or $actual.expectedValue -ne $expected.ExpectedValue) {
+            throw "$Context check $($index + 1) drifted."
         }
     }
 }
@@ -315,16 +308,16 @@ function Assert-BatmanGraphicsVsyncHooks {
 
     $vsyncObserver = $hooks.stateObservers[0]
     $applyObserver = $hooks.stateObservers[1]
-    Assert-BatmanGraphicsVsyncExactProperties -Object $vsyncObserver -Names @('id', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings') -Context "$Context graphicsObserverVsync"
+    Assert-BatmanGraphicsVsyncExactProperties -Object $vsyncObserver -Names @('id', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'responseRequestValue', 'responseMappings') -Context "$Context graphicsObserverVsync"
     Assert-BatmanGraphicsVsyncExactProperties -Object $applyObserver -Names @('id', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'command') -Context "$Context graphicsObserverApplySignal"
     if ($vsyncObserver.id -cne 'graphicsObserverVsync' -or $vsyncObserver.targetConfigKey -cne 'vsync') { throw "$Context VSync observer identity drifted." }
     if ($applyObserver.id -cne 'graphicsObserverApplySignal' -or $applyObserver.targetConfigKey -cne 'applySignal' -or $applyObserver.command -cne 'applyBatmanGraphicsDraft') { throw "$Context apply observer identity drifted." }
 
     foreach ($observer in @($vsyncObserver, $applyObserver)) {
-        if ($observer.scanStartAddress -cne '0x2B000000' -or $observer.scanEndAddress -cne '0x30000000' -or $observer.scanStride -ne 4 -or $observer.valueOffset -ne 0 -or $observer.pollIntervalMs -ne 50) {
+        if ($observer.scanStartAddress -cne '0x10000000' -or $observer.scanEndAddress -cne '0x30000000' -or $observer.scanStride -ne 4 -or $observer.valueOffset -ne 12 -or $observer.pollIntervalMs -ne 50) {
             throw "$Context $($observer.id) scan geometry drifted."
         }
-        $expectedAddressMatchValues = @(4101, 4102, 4103, 4104, 4105, 4106, 4210, 4211, 4990, 4991)
+        $expectedAddressMatchValues = @(4101, 4102, 4103, 4104, 4105, 4106, 4200, 4210, 4211, 4990, 4991)
         if (@($observer.addressMatchValues).Count -ne $expectedAddressMatchValues.Count -or (@($observer.addressMatchValues) -join ',') -cne ($expectedAddressMatchValues -join ',')) {
             throw "$Context $($observer.id) addressMatchValues drifted."
         }
@@ -332,6 +325,9 @@ function Assert-BatmanGraphicsVsyncHooks {
     }
     Assert-BatmanGraphicsVsyncMappings -Observer $vsyncObserver -FirstMatch 4210 -Context "$Context graphicsObserverVsync"
     Assert-BatmanGraphicsVsyncMappings -Observer $applyObserver -FirstMatch 4990 -Context "$Context graphicsObserverApplySignal"
+    if ($vsyncObserver.responseRequestValue -ne 4200 -or @($vsyncObserver.responseMappings).Count -ne 2 -or $vsyncObserver.responseMappings[0].match -ne 0 -or $vsyncObserver.responseMappings[0].value -ne 4210 -or $vsyncObserver.responseMappings[1].match -ne 1 -or $vsyncObserver.responseMappings[1].value -ne 4211) {
+        throw "$Context graphicsObserverVsync response mapping drifted."
+    }
 }
 
 function Test-ExpectedGraphicsVirtualFile {
@@ -760,7 +756,7 @@ try {
         if (-not [String]::Equals((Get-FileHash -LiteralPath $LiveHelenGameHookPathForVerification -Algorithm SHA256).Hash, $StagedHelenGameHookHash, [StringComparison]::OrdinalIgnoreCase)) { throw 'Activated HelenGameHook.dll differs from the staged binary.' }
         if (-not [String]::Equals((Get-FileHash -LiteralPath $LiveProxyPathForVerification -Algorithm SHA256).Hash, $StagedProxyHash, [StringComparison]::OrdinalIgnoreCase)) { throw 'Activated dinput8.dll differs from the staged binary.' }
         Assert-DirectorySnapshotEqual -Expected $SubtitleSnapshot -ActualRoot $SubtitlePackDestination -Context 'Activated subtitle pack'
-    }.GetNewClosure()
+    }
 
     Invoke-AtomicGraphicsDeployment -GameBin $GameBin -LivePackRoot $PackDestination -LiveConfigPath $ConfigDestinationPath -LiveHelenGameHookPath (Join-Path $GameBin 'HelenGameHook.dll') -LiveProxyPath (Join-Path $GameBin 'dinput8.dll') -StagedPackRoot $PackStagingDestination -StagedConfigPath $ConfigStagingPath -StagedHelenGameHookPath $HelenGameHookStagingPath -StagedProxyPath $ProxyStagingPath -PackBackupRoot $PackBackupRoot -ConfigBackupPath $ConfigBackupPath -HelenGameHookBackupPath $HelenGameHookBackupPath -ProxyBackupPath $ProxyBackupPath -RecoveryRoot $DeploymentRecoveryRoot -StagingRoot $DeploymentStagingRoot -VerifyPublication $verifyPublication
 

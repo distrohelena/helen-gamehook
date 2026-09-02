@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$env:MSBUILDDISABLENODEREUSE = '1'
 
 if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
     $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -160,7 +161,7 @@ if (-not (Test-Path -LiteralPath $BuilderProjectPath -PathType Leaf)) {
     throw "Batman graphics-options builder project was not found: $BuilderProjectPath"
 }
 
-$BuildOutput = & dotnet build $BuilderProjectPath -c Debug --nologo 2>&1
+$BuildOutput = & dotnet build $BuilderProjectPath -c Debug --nologo --disable-build-servers -nr:false -p:UseSharedCompilation=false 2>&1
 if ($LASTEXITCODE -ne 0) {
     throw "Batman graphics-options builder failed to build:`n$($BuildOutput -join [Environment]::NewLine)"
 }
@@ -325,6 +326,30 @@ function Assert-RetailStartupSpritesPreserved {
     $builtDocument = New-Object System.Xml.XmlDocument
     $builtDocument.PreserveWhitespace = $true
     $builtDocument.Load($builtXmlPath)
+
+    $rootTags = @($builtDocument.SelectSingleNode('/swf/tags').ChildNodes | Where-Object { $_ -is [System.Xml.XmlElement] })
+    $rootShowFrameIndex = [Array]::FindIndex(
+        $rootTags,
+        [Predicate[object]] { param($Node) $Node.GetAttribute('type') -eq 'ShowFrameTag' })
+    $graphicsSpriteIndex = [Array]::FindIndex(
+        $rootTags,
+        [Predicate[object]] { param($Node) $Node.GetAttribute('type') -eq 'DefineSpriteTag' -and $Node.GetAttribute('spriteId') -eq '600' })
+    $graphicsExportIndex = [Array]::FindIndex(
+        $rootTags,
+        [Predicate[object]] {
+            param($Node)
+            $Node.GetAttribute('type') -eq 'ExportAssetsTag' -and
+                @($Node.SelectNodes('names/item') | Where-Object { $_.InnerText -eq 'ScreenOptionsGraphics' }).Count -eq 1
+        })
+    $graphicsInitIndex = [Array]::FindIndex(
+        $rootTags,
+        [Predicate[object]] { param($Node) $Node.GetAttribute('type') -eq 'DoInitActionTag' -and $Node.GetAttribute('spriteId') -eq '600' })
+    if ($rootShowFrameIndex -lt 0 -or $graphicsSpriteIndex -lt 0 -or $graphicsExportIndex -lt 0 -or $graphicsInitIndex -lt 0) {
+        throw 'Built graphics shell is missing its root ShowFrame, sprite, export, or class initialization tag.'
+    }
+    if ($graphicsSpriteIndex -ge $rootShowFrameIndex -or $graphicsExportIndex -ge $rootShowFrameIndex -or $graphicsInitIndex -ge $rootShowFrameIndex) {
+        throw "Graphics shell sprite, export, and class initialization must precede the root ShowFrame so Scaleform constructs ScreenOptionsGraphics as rs.ui.Screen. Indices: sprite=$graphicsSpriteIndex export=$graphicsExportIndex init=$graphicsInitIndex showFrame=$rootShowFrameIndex."
+    }
 
     foreach ($spriteId in @(3, 232)) {
         $retailSprites = @($retailDocument.SelectNodes("/swf/tags/item[@type='DefineSpriteTag' and @spriteId='$spriteId']"))
@@ -559,7 +584,7 @@ function Get-ReflectionContract {
         Set-Content -LiteralPath $BridgeProjectPath -Value $BridgeProject -Encoding UTF8
         Set-Content -LiteralPath $BridgeSourcePath -Value $BridgeSource -Encoding UTF8
 
-        $BridgeBuildOutput = & dotnet build $BridgeProjectPath -c Debug --nologo 2>&1
+        $BridgeBuildOutput = & dotnet build $BridgeProjectPath -c Debug --nologo --disable-build-servers -nr:false -p:UseSharedCompilation=false 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "Reflection bridge failed to build:`n$($BridgeBuildOutput -join [Environment]::NewLine)"
         }
@@ -601,22 +626,37 @@ try {
 $ScreenFrame = [string]$ReflectionContract.ScreenFrame
 foreach ($RequiredScreenToken in @(
     'class rs.ui.BatmanGraphicsVsyncController',
-    'this.InitialVsync = this.NormalizeVsync(initialVsync);',
+    'this.InitialStateResolved = false;',
+    'this.InitialStateFailed = false;',
+    'function BeginInitialStateRequest()',
+    'flash.external.ExternalInterface.call("FE_SetControlType",4200,"");',
+    'this.InitialStateTimerId = setInterval(this,"PollInitialState",50);',
+    'if(this.InitialStatePollCount >= 200)',
+    'var rawValue = int(flash.external.ExternalInterface.call("FE_GetControlType"));',
+    'if(rawValue == 4210 || rawValue == 4211)',
+    'this.InitialVsync = rawValue - 4210;',
     'this.DraftVsync = this.InitialVsync;',
-    'this.ApplyWasDispatched = false;',
+    'return this.InitialStateResolved && !this.ApplyInProgress && this.IsDirty();',
     'this.SetVsync(this.DraftVsync == 0 ? 1 : 0,true);',
     'this.SetVsync(this.DraftVsync == 0 ? 1 : 0,false);',
     'this.Screen.BlockInput(true);',
     'this.Screen.BlockInput(false);',
     'flash.external.ExternalInterface.call("FE_SetControlType",4210+this.DraftVsync,"");',
-    'this.ApplyTimerId = setInterval(this,"CompleteApply",100);',
+    'this.ApplyTimerId = setInterval(this,"CompleteApply",1000);',
     'flash.external.ExternalInterface.call("FE_SetControlType",4990+this.ApplySignalToggle,"");',
+    'this.InitialVsync = this.DraftVsync;',
     'this.AddItem(GraphicsRow15,13,0,-1,-1);',
-    'GraphicsRow15._visible = true;'
+    'GraphicsRow15._visible = true;',
+    'this.GraphicsVsyncController.BeginInitialStateRequest();'
 )) {
     Assert-ContainsOrdinal -Text $ScreenFrame -Token $RequiredScreenToken -Context 'Graphics shell screen frame'
 }
-foreach ($ForbiddenScreenToken in @('Helen_', 'GraphicsExitPrompt', 'YesNoPrompt', 'CaptureInitialState', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft')) {
+foreach ($BakedControllerToken in @('new rs.ui.BatmanGraphicsVsyncController(this,0)', 'new rs.ui.BatmanGraphicsVsyncController(this,1)')) {
+    if ($ScreenFrame.IndexOf($BakedControllerToken, [System.StringComparison]::Ordinal) -ge 0) {
+        throw "Graphics shell screen frame still contains baked VSync state: $BakedControllerToken"
+    }
+}
+foreach ($ForbiddenScreenToken in @('Helen_', 'GraphicsExitPrompt', 'YesNoPrompt', 'CaptureInitialState', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft', 'ApplyWasDispatched')) {
     if ($ScreenFrame.IndexOf($ForbiddenScreenToken, [System.StringComparison]::Ordinal) -ge 0) {
         throw "Graphics shell screen frame contains forbidden token: $ForbiddenScreenToken"
     }
@@ -750,7 +790,7 @@ function Get-ShellOutputValidationContract {
         Set-Content -LiteralPath $BridgeProjectPath -Value $BridgeProject -Encoding UTF8
         Set-Content -LiteralPath $BridgeSourcePath -Value $ValidationBridgeSource -Encoding UTF8
 
-        $BridgeBuildOutput = & dotnet build $BridgeProjectPath -c Debug --nologo 2>&1
+        $BridgeBuildOutput = & dotnet build $BridgeProjectPath -c Debug --nologo --disable-build-servers -nr:false -p:UseSharedCompilation=false 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "Validation bridge failed to build:`n$($BridgeBuildOutput -join [Environment]::NewLine)"
         }
@@ -891,6 +931,7 @@ try {
         -FilePath 'dotnet' `
         -Arguments @(
             'run',
+            '--no-build',
             '--project',
             $BuilderProjectPath,
             '-c',
@@ -946,6 +987,7 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
     $ExpectedValue = $ExpectedRows[$RowIndex].Value
     $RowContext = "Graphics row action $($RowIndex + 1)"
 
+    Assert-ContainsOrdinal -Text $RowScript -Token "this.LabelName = `"$ExpectedLabel`";" -Context "$RowContext stable label state"
     Assert-ContainsOrdinal -Text $RowScript -Token "this.Label.Label.Text.text = `"$ExpectedLabel`";" -Context $RowContext
     Assert-ContainsOrdinal -Text $RowScript -Token 'this._visible = true;' -Context $RowContext
     Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = 0;' -Context $RowContext
@@ -955,6 +997,8 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
 
     if ($RowIndex -eq 2) {
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.Names = new Array("Off","On");' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token '"Unavailable" : "Loading..."' -Context "$RowContext unresolved state"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = _parent.GraphicsVsyncController.InitialVsync;' -Context "$RowContext resolved initial state"
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.ItemText.text = this.Names[this.State];' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = _parent.GraphicsVsyncController.DraftVsync;' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.LeftClicker._visible = this.State > 0;' -Context $RowContext
@@ -988,6 +1032,7 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
 }
 
 $ApplyRowScript = [string]$RowClipActions[14]
+Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this.LabelName = "Apply Changes";' -Context 'Graphics row action 15 stable label state'
 Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this._visible = true;' -Context 'Graphics row action 15'
 Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this.ItemText.text = "";' -Context 'Graphics row action 15'
 Assert-ContainsOrdinal -Text $ApplyRowScript -Token '_parent.GraphicsVsyncController.ApplyChanges();' -Context 'Graphics row action 15'

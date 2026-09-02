@@ -39,5 +39,9 @@ namespace helen
         std::vector<int> AddressMatchValues;
         /** @brief Raw-to-config mappings that translate observed state codes into Helen-owned config values. */
         std::vector<MemoryStateObserverMapEntryDefinition> Mappings;
+        /** @brief Optional raw request code that asks HelenHook to answer through the resolved carrier value address. */
+        std::optional<int> ResponseRequestValue;
+        /** @brief Config-to-raw mappings used to encode a requested current config value back into process memory. */
+        std::vector<MemoryStateObserverMapEntryDefinition> ResponseMappings;
     };
 }

@@ -228,12 +228,12 @@ function Assert-ScopedExportedShellContract {
     foreach ($token in @('Graphics Options', 'CancelScreen', 'ReturnFromScreen', 'FE_SetActiveScreenName","Graphics Options')) {
         Assert-ContainsOrdinal -Text $screenText -Token $token -Context 'Options Graphics screen script'
     }
-    foreach ($token in @('rs.ui.BatmanGraphicsVsyncController', 'InitialVsync', 'DraftVsync', 'ApplyWasDispatched = false')) {
+    foreach ($token in @('rs.ui.BatmanGraphicsVsyncController', 'InitialVsync', 'DraftVsync', 'InitialStateResolved', 'InitialStateFailed', 'return this.InitialStateResolved && !this.ApplyInProgress && this.IsDirty();', 'this.InitialVsync = this.DraftVsync;', 'FE_SetControlType",4200', 'FE_GetControlType')) {
         Assert-ContainsOrdinal -Text $screenText -Token $token -Context 'Options Graphics screen script'
     }
     if ($screenText -notmatch 'IncrementVsync\s*=\s*function\s*\(\)\s*\{\s*this\.SetVsync\(this\.DraftVsync\s*==\s*0\s*\?\s*1\s*:\s*0,true\);\s*\}') { throw 'IncrementVsync must wrap DraftVsync through the guarded setter.' }
     if ($screenText -notmatch 'DecrementVsync\s*=\s*function\s*\(\)\s*\{\s*this\.SetVsync\(this\.DraftVsync\s*==\s*0\s*\?\s*1\s*:\s*0,false\);\s*\}') { throw 'DecrementVsync must wrap DraftVsync through the guarded setter.' }
-    Assert-ContainsOrdinal -Text $screenText -Token 'setInterval(this,"CompleteApply",100)' -Context 'Options Graphics screen timer'
+    Assert-ContainsOrdinal -Text $screenText -Token 'setInterval(this,"CompleteApply",1000)' -Context 'Options Graphics screen timer'
     Assert-ContainsOrdinal -Text $screenText -Token 'this.Screen.BlockInput(true);' -Context 'Options Graphics apply input block'
     Assert-ContainsOrdinal -Text $screenText -Token 'this.Screen.BlockInput(false);' -Context 'Options Graphics apply input unblock'
     if ($screenText -notmatch 'FE_SetControlType",4210\s*\+\s*this\.DraftVsync\s*,\s*""\s*\)') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4210 plus DraftVsync with an empty second argument.' }
@@ -252,7 +252,7 @@ function Assert-ScopedExportedShellContract {
         }
     }
 
-    foreach ($forbidden in @('Helen_GetInt', 'Helen_SetInt', 'Helen_RunCommand', 'Helen_ApplyBatmanGraphicsDraft', 'GraphicsExitPrompt', 'CaptureInitialState')) {
+    foreach ($forbidden in @('Helen_GetInt', 'Helen_SetInt', 'Helen_RunCommand', 'Helen_ApplyBatmanGraphicsDraft', 'GraphicsExitPrompt', 'CaptureInitialState', 'ApplyWasDispatched')) {
         Assert-NotContainsOrdinal -Text $screenText -Token $forbidden -Context 'Options Graphics screen script'
     }
     foreach ($forbidden in @('Helen_', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft', 'Unsaved graphics changes', 'Some changes require a restart')) {
@@ -547,33 +547,30 @@ function Assert-GraphicsCarrierChecks {
         @{ offset = -12; expectedValue = 100 },
         @{ offset = -8; expectedValue = 100 },
         @{ offset = -4; expectedValue = 100 },
+        @{ offset = 0; expectedValue = 4102 },
         @{ offset = 4; expectedValue = 1 },
         @{ offset = 8; expectedValue = 0 },
-        @{ offset = 12; expectedValue = 1 },
+        @{ offset = 16; expectedValue = 4102 },
         @{ offset = 20; expectedValue = 2 },
         @{ offset = 28; expectedValue = 3 },
         @{ offset = 32; expectedValue = 3 }
     )
     for ($index = 0; $index -lt $expectedConstantChecks.Count; $index++) {
-        $checkIndex = if ($index -lt 7) { $index } else { $index + 1 }
-        $check = $Observer.checks[$checkIndex]
-        Assert-ExactOrderedProperties -Object $check -Names @('comparison', 'offset', 'expectedValue') -Context "$Context check $($checkIndex + 1)"
+        $check = $Observer.checks[$index]
+        Assert-ExactOrderedProperties -Object $check -Names @('comparison', 'offset', 'expectedValue') -Context "$Context check $($index + 1)"
         $expected = $expectedConstantChecks[$index]
-        if ($check.comparison -cne 'equals-constant' -or $check.offset -ne $expected.offset -or $check.expectedValue -ne $expected.expectedValue) { throw "$Context constant check $($checkIndex + 1) drifted." }
+        if ($check.comparison -cne 'equals-constant' -or $check.offset -ne $expected.offset -or $check.expectedValue -ne $expected.expectedValue) { throw "$Context constant check $($index + 1) drifted." }
     }
-    $offsetCheck = $Observer.checks[7]
-    Assert-ExactOrderedProperties -Object $offsetCheck -Names @('comparison', 'offset', 'compareOffset') -Context "$Context value-at-offset check"
-    if ($offsetCheck.comparison -cne 'equals-value-at-offset' -or $offsetCheck.offset -ne 16 -or $offsetCheck.compareOffset -ne 0) { throw "$Context value-at-offset check drifted." }
 }
 
-$expectedObserverProperties = @('id', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings')
+$expectedObserverProperties = @('id', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'responseRequestValue', 'responseMappings')
 $vsyncObserver = $hooks.stateObservers[0]
 $applyObserver = $hooks.stateObservers[1]
 Assert-ExactOrderedProperties -Object $vsyncObserver -Names $expectedObserverProperties -Context 'hooks.json graphicsObserverVsync'
 Assert-ExactOrderedProperties -Object $applyObserver -Names @('id', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'command') -Context 'hooks.json graphicsObserverApplySignal'
 foreach ($observer in @($vsyncObserver, $applyObserver)) {
-    if ($observer.scanStartAddress -cne '0x2B000000' -or $observer.scanEndAddress -cne '0x30000000' -or $observer.scanStride -ne 4 -or $observer.valueOffset -ne 0 -or $observer.pollIntervalMs -ne 50) { throw 'hooks.json observer scan geometry drifted.' }
-    $expectedAddressMatchValues = @(4101, 4102, 4103, 4104, 4105, 4106, 4210, 4211, 4990, 4991)
+    if ($observer.scanStartAddress -cne '0x10000000' -or $observer.scanEndAddress -cne '0x30000000' -or $observer.scanStride -ne 4 -or $observer.valueOffset -ne 12 -or $observer.pollIntervalMs -ne 50) { throw 'hooks.json observer scan geometry drifted.' }
+    $expectedAddressMatchValues = @(4101, 4102, 4103, 4104, 4105, 4106, 4200, 4210, 4211, 4990, 4991)
     if (@($observer.addressMatchValues).Count -ne $expectedAddressMatchValues.Count -or (@($observer.addressMatchValues) -join ',') -cne ($expectedAddressMatchValues -join ',')) { throw "hooks.json $($observer.id) addressMatchValues drifted." }
     Assert-GraphicsCarrierChecks -Observer $observer -Context "hooks.json $($observer.id)"
     if (@($observer.mappings).Count -ne 2) { throw "hooks.json $($observer.id) must contain exactly two mappings." }
@@ -582,6 +579,7 @@ foreach ($observer in @($vsyncObserver, $applyObserver)) {
 if ($vsyncObserver.id -cne 'graphicsObserverVsync' -or $vsyncObserver.targetConfigKey -cne 'vsync' -or $vsyncObserver.PSObject.Properties.Name -contains 'command') { throw 'hooks.json VSync observer identity drifted.' }
 if ($applyObserver.id -cne 'graphicsObserverApplySignal' -or $applyObserver.targetConfigKey -cne 'applySignal' -or $applyObserver.command -cne 'applyBatmanGraphicsDraft') { throw 'hooks.json apply observer identity drifted.' }
 if ($vsyncObserver.mappings[0].match -ne 4210 -or $vsyncObserver.mappings[0].value -ne 0 -or $vsyncObserver.mappings[1].match -ne 4211 -or $vsyncObserver.mappings[1].value -ne 1) { throw 'hooks.json VSync mappings drifted.' }
+if ($vsyncObserver.responseRequestValue -ne 4200 -or @($vsyncObserver.responseMappings).Count -ne 2 -or $vsyncObserver.responseMappings[0].match -ne 0 -or $vsyncObserver.responseMappings[0].value -ne 4210 -or $vsyncObserver.responseMappings[1].match -ne 1 -or $vsyncObserver.responseMappings[1].value -ne 4211) { throw 'hooks.json VSync response mappings drifted.' }
 if ($applyObserver.mappings[0].match -ne 4990 -or $applyObserver.mappings[0].value -ne 0 -or $applyObserver.mappings[1].match -ne 4991 -or $applyObserver.mappings[1].value -ne 1) { throw 'hooks.json apply mappings drifted.' }
 
 $files = Get-Content -LiteralPath $filesJsonPath -Raw | ConvertFrom-Json

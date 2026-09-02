@@ -126,6 +126,25 @@ namespace
     }
 
     /**
+     * @brief Attempts to write one signed 32-bit integer into current-process memory without leaking access violations.
+     * @param address Address whose four bytes should receive the supplied value.
+     * @param value Integer value that should be copied.
+     * @return True when the write completes; otherwise false.
+     */
+    bool TryWriteInt32(std::uintptr_t address, int value) noexcept
+    {
+        __try
+        {
+            std::memcpy(reinterpret_cast<void*>(address), &value, sizeof(value));
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    /**
      * @brief Evaluates only the structural checks that identify one observer's state block.
      * @param definition Observer definition whose checks should be evaluated.
      * @param base_address Candidate base address to validate.
@@ -187,6 +206,25 @@ namespace
         for (const helen::MemoryStateObserverMapEntryDefinition& mapping : definition.Mappings)
         {
             if (mapping.Match == raw_value)
+            {
+                return mapping.Value;
+            }
+        }
+
+        return std::nullopt;
+    }
+
+    /**
+     * @brief Maps one current config value into the raw response code declared by an observer.
+     * @param definition Observer whose config-to-raw response mappings should be evaluated.
+     * @param config_value Current integer value read from the observer's target config key.
+     * @return Raw response code when the config value has a declared mapping; otherwise no value.
+     */
+    std::optional<int> TryMapResponseValue(const helen::MemoryStateObserverDefinition& definition, int config_value)
+    {
+        for (const helen::MemoryStateObserverMapEntryDefinition& mapping : definition.ResponseMappings)
+        {
+            if (mapping.Match == config_value)
             {
                 return mapping.Value;
             }
@@ -282,9 +320,11 @@ namespace helen
 
     MemoryStateObserverService::MemoryStateObserverService(
         std::vector<MemoryStateObserverDefinition> definitions,
-        UpdateCallback update_callback)
+        UpdateCallback update_callback,
+        ConfigValueCallback config_value_callback)
         : definitions_(std::move(definitions)),
-          update_callback_(std::move(update_callback))
+          update_callback_(std::move(update_callback)),
+          config_value_callback_(std::move(config_value_callback))
     {
         debug_views_.reserve(definitions_.size());
         last_poll_ticks_.assign(definitions_.size(), 0);
@@ -554,6 +594,54 @@ namespace helen
             }
         }
 
+        bool response_written = false;
+        if (resolved_address.has_value() &&
+            raw_value.has_value() &&
+            definition.ResponseRequestValue.has_value() &&
+            *raw_value == *definition.ResponseRequestValue)
+        {
+            if (!config_value_callback_)
+            {
+                Logf(L"[observer] response failed id=%hs reason=config-callback-missing", definition.Id.c_str());
+                return false;
+            }
+
+            const std::optional<int> config_value = config_value_callback_(definition.TargetConfigKey);
+            if (!config_value.has_value())
+            {
+                Logf(
+                    L"[observer] response failed id=%hs key=%hs reason=config-value-missing",
+                    definition.Id.c_str(),
+                    definition.TargetConfigKey.c_str());
+                return false;
+            }
+
+            const std::optional<int> response_value = TryMapResponseValue(definition, *config_value);
+            std::uintptr_t response_address = 0;
+            if (!response_value.has_value() ||
+                !TryApplyOffset(*resolved_address, definition.ValueOffset, response_address) ||
+                !TryWriteInt32(response_address, *response_value))
+            {
+                Logf(
+                    L"[observer] response failed id=%hs key=%hs config=%d reason=write-or-mapping-failed",
+                    definition.Id.c_str(),
+                    definition.TargetConfigKey.c_str(),
+                    *config_value);
+                return false;
+            }
+
+            raw_value = response_value;
+            mapped_value = std::nullopt;
+            response_written = true;
+            Logf(
+                L"[observer] response id=%hs key=%hs config=%d raw=%d address=0x%08llX",
+                definition.Id.c_str(),
+                definition.TargetConfigKey.c_str(),
+                *config_value,
+                *response_value,
+                static_cast<unsigned long long>(response_address));
+        }
+
         std::optional<MemoryStateObserverUpdate> update;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -564,7 +652,7 @@ namespace helen
                 debug_view.LastRawValue = raw_value;
             }
 
-            if (mapped_value.has_value())
+            if (mapped_value.has_value() && !response_written)
             {
                 if (!previous_mapped_value.has_value() || *previous_mapped_value != *mapped_value)
                 {

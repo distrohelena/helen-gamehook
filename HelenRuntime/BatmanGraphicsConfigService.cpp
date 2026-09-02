@@ -3,11 +3,16 @@
 #include <HelenHook/Log.h>
 #include <HelenHook/CommandDispatcher.h>
 
+#include <windows.h>
+
 #include <array>
 #include <charconv>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -16,6 +21,28 @@
 
 namespace
 {
+    /**
+     * @brief Identifies the on-disk text encoding that must be preserved for one Batman INI document.
+     */
+    enum class IniTextEncoding
+    {
+        /** @brief Single-byte text used by Batman's generated `BmEngine.ini`. */
+        SingleByte,
+        /** @brief BOM-prefixed UTF-16 little-endian text used by the retail launcher `UserEngine.ini`. */
+        Utf16LittleEndian
+    };
+
+    /**
+     * @brief Stores decoded INI lines together with the original on-disk encoding required for writes.
+     */
+    struct IniTextDocument
+    {
+        /** @brief Decoded UTF-8 lines without trailing carriage-return characters. */
+        std::vector<std::string> Lines;
+        /** @brief Original file encoding that must be retained when the document is persisted. */
+        IniTextEncoding Encoding{ IniTextEncoding::SingleByte };
+    };
+
     /**
      * @brief Stores the normalized Batman graphics draft values used by the ActionScript graphics menu.
      */
@@ -289,6 +316,229 @@ namespace
             }
         }
 
+        return static_cast<bool>(stream);
+    }
+
+    /**
+     * @brief Splits decoded UTF-8 INI text into normalized lines.
+     * @param text Decoded text whose CRLF or LF delimiters should be consumed.
+     * @return Lines without trailing carriage-return characters.
+     */
+    std::vector<std::string> SplitIniTextIntoLines(const std::string& text)
+    {
+        std::istringstream stream(text);
+        std::vector<std::string> lines;
+        std::string line;
+        while (std::getline(stream, line))
+        {
+            if (!line.empty() && line.back() == '\r')
+            {
+                line.pop_back();
+            }
+
+            lines.push_back(line);
+        }
+
+        return lines;
+    }
+
+    /**
+     * @brief Converts one UTF-16 string into UTF-8 without replacing malformed input.
+     * @param text UTF-16 text that should be converted.
+     * @return UTF-8 text when conversion succeeds; otherwise no value.
+     */
+    std::optional<std::string> TryConvertUtf16ToUtf8(const std::wstring& text)
+    {
+        if (text.empty())
+        {
+            return std::string();
+        }
+
+        if (text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        {
+            return std::nullopt;
+        }
+
+        const int text_length = static_cast<int>(text.size());
+        const int required_length = WideCharToMultiByte(
+            CP_UTF8,
+            WC_ERR_INVALID_CHARS,
+            text.data(),
+            text_length,
+            nullptr,
+            0,
+            nullptr,
+            nullptr);
+        if (required_length <= 0)
+        {
+            return std::nullopt;
+        }
+
+        std::string converted(static_cast<std::size_t>(required_length), '\0');
+        const int actual_length = WideCharToMultiByte(
+            CP_UTF8,
+            WC_ERR_INVALID_CHARS,
+            text.data(),
+            text_length,
+            converted.data(),
+            required_length,
+            nullptr,
+            nullptr);
+        if (actual_length != required_length)
+        {
+            return std::nullopt;
+        }
+
+        return converted;
+    }
+
+    /**
+     * @brief Converts one UTF-8 string into UTF-16 without replacing malformed input.
+     * @param text UTF-8 text that should be converted.
+     * @return UTF-16 text when conversion succeeds; otherwise no value.
+     */
+    std::optional<std::wstring> TryConvertUtf8ToUtf16(const std::string& text)
+    {
+        if (text.empty())
+        {
+            return std::wstring();
+        }
+
+        if (text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        {
+            return std::nullopt;
+        }
+
+        const int text_length = static_cast<int>(text.size());
+        const int required_length = MultiByteToWideChar(
+            CP_UTF8,
+            MB_ERR_INVALID_CHARS,
+            text.data(),
+            text_length,
+            nullptr,
+            0);
+        if (required_length <= 0)
+        {
+            return std::nullopt;
+        }
+
+        std::wstring converted(static_cast<std::size_t>(required_length), L'\0');
+        const int actual_length = MultiByteToWideChar(
+            CP_UTF8,
+            MB_ERR_INVALID_CHARS,
+            text.data(),
+            text_length,
+            converted.data(),
+            required_length);
+        if (actual_length != required_length)
+        {
+            return std::nullopt;
+        }
+
+        return converted;
+    }
+
+    /**
+     * @brief Reads one Batman INI while decoding and remembering its native text encoding.
+     * @param path Existing INI path that should be loaded.
+     * @return Decoded document for supported single-byte or UTF-16LE input; otherwise no value.
+     */
+    std::optional<IniTextDocument> TryReadIniDocument(const std::filesystem::path& path)
+    {
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream)
+        {
+            return std::nullopt;
+        }
+
+        const std::string file_bytes{
+            std::istreambuf_iterator<char>(stream),
+            std::istreambuf_iterator<char>() };
+        if (stream.bad())
+        {
+            return std::nullopt;
+        }
+
+        IniTextDocument document;
+        std::string decoded_text;
+        if (file_bytes.size() >= 2 &&
+            static_cast<unsigned char>(file_bytes[0]) == 0xFF &&
+            static_cast<unsigned char>(file_bytes[1]) == 0xFE)
+        {
+            const std::size_t encoded_length = file_bytes.size() - 2;
+            if ((encoded_length % sizeof(wchar_t)) != 0)
+            {
+                return std::nullopt;
+            }
+
+            std::wstring wide_text(encoded_length / sizeof(wchar_t), L'\0');
+            std::memcpy(wide_text.data(), file_bytes.data() + 2, encoded_length);
+            const std::optional<std::string> converted = TryConvertUtf16ToUtf8(wide_text);
+            if (!converted.has_value())
+            {
+                return std::nullopt;
+            }
+
+            decoded_text = *converted;
+            document.Encoding = IniTextEncoding::Utf16LittleEndian;
+        }
+        else
+        {
+            decoded_text = file_bytes;
+            document.Encoding = IniTextEncoding::SingleByte;
+        }
+
+        document.Lines = SplitIniTextIntoLines(decoded_text);
+        return document;
+    }
+
+    /**
+     * @brief Writes one decoded INI document using its original text encoding and CRLF line endings.
+     * @param path File path that should receive the document.
+     * @param document Decoded lines and required on-disk encoding.
+     * @return True when encoding and file output both succeed; otherwise false.
+     */
+    bool WriteIniDocument(const std::filesystem::path& path, const IniTextDocument& document)
+    {
+        std::string text;
+        for (std::size_t index = 0; index < document.Lines.size(); ++index)
+        {
+            text += document.Lines[index];
+            if (index + 1 < document.Lines.size())
+            {
+                text += "\r\n";
+            }
+        }
+
+        if (document.Encoding == IniTextEncoding::SingleByte)
+        {
+            std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+            if (!stream)
+            {
+                return false;
+            }
+
+            stream.write(text.data(), static_cast<std::streamsize>(text.size()));
+            return static_cast<bool>(stream);
+        }
+
+        const std::optional<std::wstring> wide_text = TryConvertUtf8ToUtf16(text);
+        if (!wide_text.has_value())
+        {
+            return false;
+        }
+
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        if (!stream)
+        {
+            return false;
+        }
+
+        const unsigned char byte_order_mark[] = { 0xFF, 0xFE };
+        stream.write(reinterpret_cast<const char*>(byte_order_mark), sizeof(byte_order_mark));
+        stream.write(
+            reinterpret_cast<const char*>(wide_text->data()),
+            static_cast<std::streamsize>(wide_text->size() * sizeof(wchar_t)));
         return static_cast<bool>(stream);
     }
 
@@ -1109,6 +1359,136 @@ namespace
         state.AmbientOcclusion = preset->AmbientOcclusion;
         return true;
     }
+
+    /**
+     * @brief Encodes one normalized Batman graphics draft into an existing engine-configuration document.
+     * @param state Fully populated normalized graphics state that should be persisted.
+     * @param lines Existing INI lines whose required graphics assignments should be replaced in place.
+     * @param failed_setting Receives the section-qualified setting being processed when an update fails.
+     * @return True when every required setting exists and accepts the normalized value; otherwise false.
+     */
+    bool TryApplyDraftStateToIniLines(
+        const BatmanGraphicsDraftState& state,
+        std::vector<std::string>& lines,
+        std::wstring& failed_setting)
+    {
+        std::string encoded_value;
+
+        failed_setting = L"SystemSettings.Fullscreen";
+        if (!TryEncodeBoolValue(state.Fullscreen, encoded_value) ||
+            !UpdateIniValue(lines, "SystemSettings", "Fullscreen", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.ResX";
+        encoded_value = std::to_string(state.ResolutionWidth);
+        if (!UpdateIniValue(lines, "SystemSettings", "ResX", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.ResY";
+        encoded_value = std::to_string(state.ResolutionHeight);
+        if (!UpdateIniValue(lines, "SystemSettings", "ResY", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.UseVsync";
+        if (!TryEncodeBoolValue(state.Vsync, encoded_value) ||
+            !UpdateIniValue(lines, "SystemSettings", "UseVsync", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.MaxMultisamples";
+        int encoded_msaa = 0;
+        if (!TryEncodeMsaaValue(state.Msaa, encoded_msaa))
+        {
+            return false;
+        }
+
+        encoded_value = std::to_string(encoded_msaa);
+        if (!UpdateIniValue(lines, "SystemSettings", "MaxMultisamples", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.DetailMode";
+        encoded_value = std::to_string(DeriveDetailModeFromDraft(state));
+        if (!UpdateIniValue(lines, "SystemSettings", "DetailMode", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.Bloom";
+        if (!TryEncodeBoolValue(state.Bloom, encoded_value) ||
+            !UpdateIniValue(lines, "SystemSettings", "Bloom", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.DynamicShadows";
+        if (!TryEncodeBoolValue(state.DynamicShadows, encoded_value) ||
+            !UpdateIniValue(lines, "SystemSettings", "DynamicShadows", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.MotionBlur";
+        if (!TryEncodeBoolValue(state.MotionBlur, encoded_value) ||
+            !UpdateIniValue(lines, "SystemSettings", "MotionBlur", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.Distortion";
+        if (!TryEncodeBoolValue(state.Distortion, encoded_value) ||
+            !UpdateIniValue(lines, "SystemSettings", "Distortion", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.FogVolumes";
+        if (!TryEncodeBoolValue(state.FogVolumes, encoded_value) ||
+            !UpdateIniValue(lines, "SystemSettings", "FogVolumes", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.DisableSphericalHarmonicLights";
+        const int encoded_disable_spherical_harmonic_lights = state.SphericalHarmonicLighting == 0 ? 1 : 0;
+        if (!TryEncodeBoolValue(encoded_disable_spherical_harmonic_lights, encoded_value) ||
+            !UpdateIniValue(lines, "SystemSettings", "DisableSphericalHarmonicLights", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.AmbientOcclusion";
+        if (!TryEncodeBoolValue(state.AmbientOcclusion, encoded_value) ||
+            !UpdateIniValue(lines, "SystemSettings", "AmbientOcclusion", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"Engine.Engine.PhysXLevel";
+        encoded_value = std::to_string(state.Physx);
+        if (!UpdateIniValue(lines, "Engine.Engine", "PhysXLevel", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting = L"SystemSettings.Stereo";
+        if (!TryEncodeBoolValue(state.Stereo, encoded_value) ||
+            !UpdateIniValue(lines, "SystemSettings", "Stereo", encoded_value))
+        {
+            return false;
+        }
+
+        failed_setting.clear();
+        return true;
+    }
 }
 
 namespace helen
@@ -1150,130 +1530,69 @@ namespace helen
     }
 
     /**
-     * @brief Writes the current normalized graphics draft values back into `BmEngine.ini`.
+     * @brief Writes the current graphics draft into the generated and launcher-owned engine INI files.
      * @param dispatcher Config dispatcher that supplies the normalized graphics draft values.
-     * @return True when every required config key is present and every target INI value is updated successfully; otherwise false.
+     * @return True when both files contain every required setting and are written successfully; otherwise false.
      */
     bool BatmanGraphicsConfigService::ApplyFromDispatcher(const CommandDispatcher& dispatcher) const
     {
         BatmanGraphicsDraftState state;
         if (!TryReadDraftStateFromDispatcher(dispatcher, state))
         {
+            Logf(L"[graphics] Apply failed: one or more graphics draft keys are missing from the dispatcher.");
             return false;
         }
 
         if (state.DetailLevel != 4 && !ApplyDetailPresetToDraftState(state))
         {
+            Logf(L"[graphics] Apply failed: unsupported detailLevel=%d.", state.DetailLevel);
             return false;
         }
 
-        const std::optional<std::vector<std::string>> existing_lines = TryReadAllLines(ini_path_);
-        if (!existing_lines.has_value())
+        const std::filesystem::path user_ini_path = ini_path_.parent_path() / "UserEngine.ini";
+        const std::optional<std::vector<std::string>> existing_engine_lines = TryReadAllLines(ini_path_);
+        const std::optional<IniTextDocument> existing_user_document = TryReadIniDocument(user_ini_path);
+        if (!existing_engine_lines.has_value())
         {
+            Logf(L"[graphics] Apply failed: unable to read generated INI path=%ls.", ini_path_.wstring().c_str());
             return false;
         }
 
-        std::vector<std::string> lines = *existing_lines;
-        std::string encoded_value;
-
-        if (!TryEncodeBoolValue(state.Fullscreen, encoded_value) ||
-            !UpdateIniValue(lines, "SystemSettings", "Fullscreen", encoded_value))
+        if (!existing_user_document.has_value())
         {
+            Logf(L"[graphics] Apply failed: unable to read launcher INI path=%ls.", user_ini_path.wstring().c_str());
             return false;
         }
 
-        encoded_value = std::to_string(state.ResolutionWidth);
-        if (!UpdateIniValue(lines, "SystemSettings", "ResX", encoded_value))
+        std::vector<std::string> engine_lines = *existing_engine_lines;
+        IniTextDocument user_document = *existing_user_document;
+        std::wstring failed_setting;
+        if (!TryApplyDraftStateToIniLines(state, engine_lines, failed_setting))
         {
+            Logf(L"[graphics] Apply failed: generated INI rejected setting=%ls path=%ls.", failed_setting.c_str(), ini_path_.wstring().c_str());
             return false;
         }
 
-        encoded_value = std::to_string(state.ResolutionHeight);
-        if (!UpdateIniValue(lines, "SystemSettings", "ResY", encoded_value))
+        if (!TryApplyDraftStateToIniLines(state, user_document.Lines, failed_setting))
         {
+            Logf(L"[graphics] Apply failed: launcher INI rejected setting=%ls path=%ls.", failed_setting.c_str(), user_ini_path.wstring().c_str());
             return false;
         }
 
-        if (!TryEncodeBoolValue(state.Vsync, encoded_value) ||
-            !UpdateIniValue(lines, "SystemSettings", "UseVsync", encoded_value))
+        if (!WriteIniDocument(user_ini_path, user_document))
         {
+            Logf(L"[graphics] Apply failed: unable to write launcher INI path=%ls.", user_ini_path.wstring().c_str());
             return false;
         }
 
-        int encoded_msaa = 0;
-        if (!TryEncodeMsaaValue(state.Msaa, encoded_msaa))
+        if (!WriteAllLines(ini_path_, engine_lines))
         {
+            Logf(L"[graphics] Apply failed: launcher INI was written, but generated INI write failed path=%ls.", ini_path_.wstring().c_str());
             return false;
         }
 
-        encoded_value = std::to_string(encoded_msaa);
-        if (!UpdateIniValue(lines, "SystemSettings", "MaxMultisamples", encoded_value))
-        {
-            return false;
-        }
-
-        encoded_value = std::to_string(DeriveDetailModeFromDraft(state));
-        if (!UpdateIniValue(lines, "SystemSettings", "DetailMode", encoded_value))
-        {
-            return false;
-        }
-
-        if (!TryEncodeBoolValue(state.Bloom, encoded_value) ||
-            !UpdateIniValue(lines, "SystemSettings", "Bloom", encoded_value))
-        {
-            return false;
-        }
-
-        if (!TryEncodeBoolValue(state.DynamicShadows, encoded_value) ||
-            !UpdateIniValue(lines, "SystemSettings", "DynamicShadows", encoded_value))
-        {
-            return false;
-        }
-
-        if (!TryEncodeBoolValue(state.MotionBlur, encoded_value) ||
-            !UpdateIniValue(lines, "SystemSettings", "MotionBlur", encoded_value))
-        {
-            return false;
-        }
-
-        if (!TryEncodeBoolValue(state.Distortion, encoded_value) ||
-            !UpdateIniValue(lines, "SystemSettings", "Distortion", encoded_value))
-        {
-            return false;
-        }
-
-        if (!TryEncodeBoolValue(state.FogVolumes, encoded_value) ||
-            !UpdateIniValue(lines, "SystemSettings", "FogVolumes", encoded_value))
-        {
-            return false;
-        }
-
-        const int encoded_disable_spherical_harmonic_lights = state.SphericalHarmonicLighting == 0 ? 1 : 0;
-        if (!TryEncodeBoolValue(encoded_disable_spherical_harmonic_lights, encoded_value) ||
-            !UpdateIniValue(lines, "SystemSettings", "DisableSphericalHarmonicLights", encoded_value))
-        {
-            return false;
-        }
-
-        if (!TryEncodeBoolValue(state.AmbientOcclusion, encoded_value) ||
-            !UpdateIniValue(lines, "SystemSettings", "AmbientOcclusion", encoded_value))
-        {
-            return false;
-        }
-
-        encoded_value = std::to_string(state.Physx);
-        if (!UpdateIniValue(lines, "Engine.Engine", "PhysXLevel", encoded_value))
-        {
-            return false;
-        }
-
-        if (!TryEncodeBoolValue(state.Stereo, encoded_value) ||
-            !UpdateIniValue(lines, "SystemSettings", "Stereo", encoded_value))
-        {
-            return false;
-        }
-
-        return WriteAllLines(ini_path_, lines);
+        Logf(L"[graphics] Apply persisted generated and launcher INIs vsync=%d.", state.Vsync);
+        return true;
     }
 
     /**

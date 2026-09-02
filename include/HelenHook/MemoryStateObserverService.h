@@ -4,6 +4,8 @@
 #include <condition_variable>
 #include <functional>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -25,11 +27,20 @@ namespace helen
         using UpdateCallback = std::function<void(const MemoryStateObserverUpdate&)>;
 
         /**
+         * @brief Resolves the current integer value for a registered config key during a carrier response.
+         */
+        using ConfigValueCallback = std::function<std::optional<int>(const std::string&)>;
+
+        /**
          * @brief Creates one observer service bound to the supplied observer definitions and update callback.
          * @param definitions Declarative observers that should be evaluated by the service.
          * @param update_callback Callback invoked whenever an observer emits a new mapped value.
+         * @param config_value_callback Optional callback used by request-response observers to read current config.
          */
-        MemoryStateObserverService(std::vector<MemoryStateObserverDefinition> definitions, UpdateCallback update_callback);
+        MemoryStateObserverService(
+            std::vector<MemoryStateObserverDefinition> definitions,
+            UpdateCallback update_callback,
+            ConfigValueCallback config_value_callback = {});
 
         /**
          * @brief Stops the background polling thread before the service is destroyed.
@@ -86,6 +97,8 @@ namespace helen
         std::vector<std::uint64_t> last_poll_ticks_;
         /** @brief Callback invoked for newly mapped observer updates. */
         UpdateCallback update_callback_;
+        /** @brief Optional callback that supplies current config values for bidirectional carrier responses. */
+        ConfigValueCallback config_value_callback_;
         /** @brief Protects debug views, cached addresses, and thread start-stop state. */
         mutable std::mutex mutex_;
         /** @brief Coordinates timed wakeups and stop requests for the background worker thread. */

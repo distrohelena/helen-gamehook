@@ -7,6 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$env:MSBUILDDISABLENODEREUSE = '1'
 . (Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1')
 
 function Write-Utf8TextFile {
@@ -46,6 +47,11 @@ function New-GraphicsCarrierChecks {
         },
         [ordered]@{
             comparison = 'equals-constant'
+            offset = [int]0
+            expectedValue = [int]4102
+        },
+        [ordered]@{
+            comparison = 'equals-constant'
             offset = [int]4
             expectedValue = [int]1
         },
@@ -56,13 +62,8 @@ function New-GraphicsCarrierChecks {
         },
         [ordered]@{
             comparison = 'equals-constant'
-            offset = [int]12
-            expectedValue = [int]1
-        },
-        [ordered]@{
-            comparison = 'equals-value-at-offset'
             offset = [int]16
-            compareOffset = [int]0
+            expectedValue = [int]4102
         },
         [ordered]@{
             comparison = 'equals-constant'
@@ -93,20 +94,29 @@ function New-GraphicsCarrierObserver {
         [Parameter(Mandatory = $true)] [string]$Id,
         [Parameter(Mandatory = $true)] [string]$TargetConfigKey,
         [Parameter(Mandatory = $true)] [object[]]$Mappings,
+        [Nullable[int]]$ResponseRequestValue = $null,
+        [object[]]$ResponseMappings = @(),
         [AllowEmptyString()] [string]$Command = ''
     )
 
     $observer = [ordered]@{
         id = $Id
-        scanStartAddress = '0x2B000000'
+        scanStartAddress = '0x10000000'
         scanEndAddress = '0x30000000'
         scanStride = [int]4
-        valueOffset = [int]0
+        valueOffset = [int]12
         pollIntervalMs = [int]50
         targetConfigKey = $TargetConfigKey
-        addressMatchValues = @([int]4101, [int]4102, [int]4103, [int]4104, [int]4105, [int]4106, [int]4210, [int]4211, [int]4990, [int]4991)
+        addressMatchValues = @([int]4101, [int]4102, [int]4103, [int]4104, [int]4105, [int]4106, [int]4200, [int]4210, [int]4211, [int]4990, [int]4991)
         checks = @(New-GraphicsCarrierChecks)
         mappings = $Mappings
+    }
+    if ($null -ne $ResponseRequestValue) {
+        if ($ResponseMappings.Count -eq 0) { throw "Graphics carrier observer '$Id' declares a response request without response mappings." }
+        $observer.responseRequestValue = [int]$ResponseRequestValue
+        $observer.responseMappings = $ResponseMappings
+    } elseif ($ResponseMappings.Count -ne 0) {
+        throw "Graphics carrier observer '$Id' declares response mappings without a request value."
     }
     if (-not [string]::IsNullOrWhiteSpace($Command)) { $observer.command = $Command }
     return $observer
@@ -425,9 +435,9 @@ $primaryFailure = $null
 try {
     New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
     Assert-SafeMutationTarget -Path $tempRoot -AllowedDescendantRoots @($systemTempRoot) | Out-Null
-    Invoke-RequiredProcess -FilePath 'dotnet' -Arguments @('build', $builderProjectPath, '-c', $Configuration) -FailureMessage 'SubtitleSizeModBuilder build failed.'
-    Invoke-RequiredProcess -FilePath 'dotnet' -Arguments @('build', $patcherProjectPath, '-c', $Configuration) -FailureMessage 'BmGameGfxPatcher build failed.'
-    Invoke-RequiredProcess -FilePath 'dotnet' -Arguments @('run', '--project', $builderProjectPath, '-c', $Configuration, '--', 'build-main-menu-graphics-shell', '--root', $BuilderRoot, '--output-dir', $prototypeOutputRoot, '--ffdec', $ffdecPath, '--ini', $BatmanUserIniPath) -FailureMessage 'build-main-menu-graphics-shell failed.'
+    Invoke-RequiredProcess -FilePath 'dotnet' -Arguments @('build', $builderProjectPath, '-c', $Configuration, '--disable-build-servers', '-nr:false', '-p:UseSharedCompilation=false') -FailureMessage 'SubtitleSizeModBuilder build failed.'
+    Invoke-RequiredProcess -FilePath 'dotnet' -Arguments @('build', $patcherProjectPath, '-c', $Configuration, '--disable-build-servers', '-nr:false', '-p:UseSharedCompilation=false') -FailureMessage 'BmGameGfxPatcher build failed.'
+    Invoke-RequiredProcess -FilePath 'dotnet' -Arguments @('run', '--no-build', '--project', $builderProjectPath, '-c', $Configuration, '--', 'build-main-menu-graphics-shell', '--root', $BuilderRoot, '--output-dir', $prototypeOutputRoot, '--ffdec', $ffdecPath, '--ini', $BatmanUserIniPath) -FailureMessage 'build-main-menu-graphics-shell failed.'
     if (-not (Test-Path -LiteralPath $prototypeGfxPath)) { throw "Shell prototype GFX was not generated: $prototypeGfxPath" }
 
     $manifest = [ordered]@{
@@ -441,7 +451,7 @@ try {
         })
     }
     Write-Utf8TextFile -Path $patchManifestPath -Contents ($manifest | ConvertTo-Json -Depth 5)
-    Invoke-RequiredProcess -FilePath 'dotnet' -Arguments @('run', '--project', $patcherProjectPath, '-c', $Configuration, '--', 'patch', '--package', $retailBasePath, '--manifest', $patchManifestPath, '--output', $tempTargetPath) -FailureMessage 'Patching the verified retail Frontend.umap failed.'
+    Invoke-RequiredProcess -FilePath 'dotnet' -Arguments @('run', '--no-build', '--project', $patcherProjectPath, '-c', $Configuration, '--', 'patch', '--package', $retailBasePath, '--manifest', $patchManifestPath, '--output', $tempTargetPath) -FailureMessage 'Patching the verified retail Frontend.umap failed.'
     if (-not (Test-Path -LiteralPath $tempTargetPath)) { throw "Current-run shell target was not generated: $tempTargetPath" }
 
     $targetStorage = Get-UnrealPackageStorageInfo -Path $tempTargetPath
@@ -526,6 +536,9 @@ try {
             (New-GraphicsCarrierObserver -Id 'graphicsObserverVsync' -TargetConfigKey 'vsync' -Mappings @(
                     [ordered]@{ match = [int]4210; value = [int]0 },
                     [ordered]@{ match = [int]4211; value = [int]1 }
+                ) -ResponseRequestValue 4200 -ResponseMappings @(
+                    [ordered]@{ match = [int]0; value = [int]4210 },
+                    [ordered]@{ match = [int]1; value = [int]4211 }
                 )),
             (New-GraphicsCarrierObserver -Id 'graphicsObserverApplySignal' -TargetConfigKey 'applySignal' -Command 'applyBatmanGraphicsDraft' -Mappings @(
                     [ordered]@{ match = [int]4990; value = [int]0 },

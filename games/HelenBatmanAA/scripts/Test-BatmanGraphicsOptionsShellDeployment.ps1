@@ -167,6 +167,7 @@ foreach ($RequiredToken in @(
 
 Assert-NotContainsOrdinal -Text $DeployScriptText -Token '$ConflictingPackDestination' -Context 'Batman graphics shell deploy source'
 Assert-NotContainsOrdinal -Text $DeployScriptText -Token 'GetTempPath' -Context 'Batman graphics shell deploy source'
+Assert-NotContainsOrdinal -Text $DeployScriptText -Token '}.GetNewClosure()' -Context 'Batman graphics shell deploy source verifier'
 if ($DeployScriptText -match '(?im)Remove-Item[^`r`n]*batman-aa-subtitles') {
     throw 'Batman graphics shell deploy source must not remove the subtitle pack.'
 }
