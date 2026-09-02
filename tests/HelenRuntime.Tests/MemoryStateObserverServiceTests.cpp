@@ -5,11 +5,14 @@
 
 #include <Windows.h>
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 namespace
@@ -512,6 +515,160 @@ namespace
             throw;
         }
     }
+
+    /**
+     * @brief Verifies a manual poll waits for a worker poll pass whose update callback is still executing.
+     * @remarks Condition variables make the overlap deterministic: the worker callback blocks first, then a started manual poll must remain incomplete until that callback is released.
+     */
+    void RunObserverPollPassSerializationTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for the observer poll serialization test.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 64;
+        ConfigureStateBlock(candidate_address, 4101);
+
+        std::mutex callback_mutex;
+        std::condition_variable callback_entered_condition;
+        std::condition_variable callback_release_condition;
+        bool callback_entered = false;
+        bool callback_release_requested = false;
+        int callback_invocation_count = 0;
+
+        std::mutex manual_poll_mutex;
+        std::condition_variable manual_poll_condition;
+        bool manual_poll_started = false;
+        bool manual_poll_completed = false;
+        bool manual_poll_result = false;
+
+        helen::MemoryStateObserverService service(
+            { CreateObserverDefinition(page_address, page_address + page_size) },
+            [&](const helen::MemoryStateObserverUpdate&)
+            {
+                std::unique_lock<std::mutex> lock(callback_mutex);
+                ++callback_invocation_count;
+                if (callback_invocation_count == 1)
+                {
+                    callback_entered = true;
+                    callback_entered_condition.notify_all();
+                    callback_release_condition.wait(
+                        lock,
+                        [&callback_release_requested]()
+                        {
+                            return callback_release_requested;
+                        });
+                }
+            });
+
+        std::thread manual_poll_thread;
+        try
+        {
+            Expect(service.Start(), "Expected the observer worker to start for the poll serialization test.");
+            {
+                std::unique_lock<std::mutex> lock(callback_mutex);
+                Expect(
+                    callback_entered_condition.wait_for(
+                        lock,
+                        std::chrono::seconds(2),
+                        [&callback_entered]()
+                        {
+                            return callback_entered;
+                        }),
+                    "Worker poll did not enter the blocking update callback.");
+            }
+
+            manual_poll_thread = std::thread(
+                [&service, &manual_poll_mutex, &manual_poll_condition, &manual_poll_started, &manual_poll_completed, &manual_poll_result]()
+                {
+                    {
+                        std::lock_guard<std::mutex> lock(manual_poll_mutex);
+                        manual_poll_started = true;
+                    }
+                    manual_poll_condition.notify_all();
+
+                    const bool poll_result = service.PollOnce();
+                    {
+                        std::lock_guard<std::mutex> lock(manual_poll_mutex);
+                        manual_poll_result = poll_result;
+                        manual_poll_completed = true;
+                    }
+                    manual_poll_condition.notify_all();
+                });
+
+            {
+                std::unique_lock<std::mutex> lock(manual_poll_mutex);
+                Expect(
+                    manual_poll_condition.wait_for(
+                        lock,
+                        std::chrono::seconds(2),
+                        [&manual_poll_started]()
+                        {
+                            return manual_poll_started;
+                        }),
+                    "Manual poll thread did not start for the poll serialization test.");
+                const bool completed_while_callback_blocked = manual_poll_condition.wait_for(
+                    lock,
+                    std::chrono::milliseconds(100),
+                    [&manual_poll_completed]()
+                    {
+                        return manual_poll_completed;
+                    });
+                Expect(!completed_while_callback_blocked, "Manual PollOnce completed while the worker callback remained blocked.");
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(callback_mutex);
+                callback_release_requested = true;
+            }
+            callback_release_condition.notify_all();
+
+            {
+                std::unique_lock<std::mutex> lock(manual_poll_mutex);
+                Expect(
+                    manual_poll_condition.wait_for(
+                        lock,
+                        std::chrono::seconds(2),
+                        [&manual_poll_completed]()
+                        {
+                            return manual_poll_completed;
+                        }),
+                    "Manual PollOnce did not complete after the worker callback was released.");
+                Expect(manual_poll_result, "Manual PollOnce failed after the worker callback was released.");
+            }
+
+            manual_poll_thread.join();
+            service.Stop();
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release the observer poll serialization allocation.");
+        }
+        catch (...)
+        {
+            {
+                std::lock_guard<std::mutex> lock(callback_mutex);
+                callback_release_requested = true;
+            }
+            callback_release_condition.notify_all();
+            if (manual_poll_thread.joinable())
+            {
+                manual_poll_thread.join();
+            }
+
+            service.Stop();
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+    }
 }
 
 /**
@@ -522,6 +679,7 @@ void RunMemoryStateObserverServiceTests()
     RunGraphicsCarrierObserverCoexistenceTest();
     RunGroupedGraphicsCarrierObserverReuseTest();
     RunGroupedGraphicsCarrierObserverStaleCacheTest();
+    RunObserverPollPassSerializationTest();
 
     SYSTEM_INFO system_info{};
     GetSystemInfo(&system_info);

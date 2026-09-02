@@ -382,6 +382,7 @@ namespace helen
 
     bool MemoryStateObserverService::PollOnce()
     {
+        std::lock_guard<std::mutex> poll_lock(poll_mutex_);
         for (std::size_t observer_index = 0; observer_index < definitions_.size(); ++observer_index)
         {
             if (!PollObserver(observer_index))
@@ -436,6 +437,7 @@ namespace helen
 
     bool MemoryStateObserverService::PollDueObservers()
     {
+        std::lock_guard<std::mutex> poll_lock(poll_mutex_);
         const std::uint64_t now = GetTickCount64();
         for (std::size_t observer_index = 0; observer_index < definitions_.size(); ++observer_index)
         {

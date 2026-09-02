@@ -87,6 +87,7 @@ namespace helen
          * @brief Polls one observer and optionally emits a mapped update when the observed value changed.
          * @param observer_index Zero-based observer index inside the stored definition array.
          * @return True when the observer poll completed successfully; otherwise false.
+         * @remarks Callers must hold poll_mutex_ for the complete enclosing pass; this method intentionally does not acquire that serialization mutex itself.
          */
         bool PollObserver(std::size_t observer_index);
 
@@ -129,6 +130,8 @@ namespace helen
         ConfigValueCallback config_value_callback_;
         /** @brief Protects debug views, cached addresses, and thread start-stop state. */
         mutable std::mutex mutex_;
+        /** @brief Serializes complete observer poll passes so manual and worker polling cannot overlap state validation, responses, or callbacks. */
+        std::mutex poll_mutex_;
         /** @brief Coordinates timed wakeups and stop requests for the background worker thread. */
         std::condition_variable stop_condition_;
         /** @brief Background polling thread owned by the service. */
