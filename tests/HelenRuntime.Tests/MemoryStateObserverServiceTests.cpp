@@ -1439,6 +1439,104 @@ namespace
     }
 
     /**
+     * @brief Verifies that unresolved grouped graphics observers perform one discovery scan per manual poll pass.
+     * @remarks The first pass has no carrier and therefore elects only the first group member to scan; a carrier created between passes is then discovered once and shared by all three members.
+     */
+    void RunGroupedGraphicsCarrierSingleScanPerPassTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for the grouped single-scan graphics carrier test.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 128;
+
+        helen::MemoryStateObserverDefinition vsync_definition = CreateGraphicsCarrierObserverDefinition(
+            "graphicsObserverVsync",
+            page_address,
+            page_address + page_size,
+            "vsync",
+            { 4210, 4211 });
+        vsync_definition.AddressGroup = "batmanFrontendControlType";
+
+        helen::MemoryStateObserverDefinition msaa_definition = CreateGraphicsCarrierObserverDefinition(
+            "graphicsObserverMsaa",
+            page_address,
+            page_address + page_size,
+            "msaa",
+            { 4990, 4991 },
+            "applyBatmanMsaa");
+        msaa_definition.AddressGroup = "batmanFrontendControlType";
+
+        helen::MemoryStateObserverDefinition apply_signal_definition = CreateGraphicsCarrierObserverDefinition(
+            "graphicsObserverApplySignal",
+            page_address,
+            page_address + page_size,
+            "applySignal",
+            { 4101, 4102 },
+            "applyBatmanGraphicsDraft");
+        apply_signal_definition.AddressGroup = "batmanFrontendControlType";
+
+        helen::MemoryStateObserverService service(
+            { vsync_definition, msaa_definition, apply_signal_definition },
+            [](const helen::MemoryStateObserverUpdate&)
+            {
+                return true;
+            },
+            [](const std::string& config_key) -> std::optional<int>
+            {
+                if (config_key == "vsync")
+                {
+                    return 1;
+                }
+
+                return std::nullopt;
+            });
+
+        try
+        {
+            Expect(service.PollOnce(), "Grouped unresolved observer pass unexpectedly failed.");
+            std::vector<helen::MemoryStateObserverDebugView> debug_views = service.GetDebugViews();
+            Expect(debug_views.size() == 3, "Grouped single-scan graphics carrier debug view count mismatch.");
+            Expect(debug_views[0].RescanCount == 1, "The first grouped observer did not lead the unresolved scan.");
+            Expect(debug_views[1].RescanCount == 0, "The second grouped observer duplicated the unresolved scan.");
+            Expect(debug_views[2].RescanCount == 0, "The third grouped observer duplicated the unresolved scan.");
+            Expect(debug_views[0].CachedAddress == 0 && debug_views[1].CachedAddress == 0 && debug_views[2].CachedAddress == 0,
+                "Unresolved grouped observers invented a carrier address.");
+
+            ConfigureGraphicsCarrierStateBlock(candidate_address, 4200);
+            Expect(service.PollOnce(), "Late grouped carrier discovery pass unexpectedly failed.");
+            Expect(ReadInt32(candidate_address + 12) == 4211, "The late grouped carrier did not receive the VSync response.");
+
+            debug_views = service.GetDebugViews();
+            Expect(debug_views[0].RescanCount == 2, "The next pass did not retry grouped discovery.");
+            Expect(debug_views[1].RescanCount == 0 && debug_views[2].RescanCount == 0,
+                "Grouped observers performed duplicate scans after late carrier creation.");
+            Expect(debug_views[0].CachedAddress == candidate_address &&
+                   debug_views[1].CachedAddress == candidate_address &&
+                   debug_views[2].CachedAddress == candidate_address,
+                "The resolved late carrier was not shared across the complete group.");
+
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release the grouped single-scan graphics carrier allocation.");
+        }
+        catch (...)
+        {
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+    }
+
+    /**
      * @brief Verifies a stale grouped carrier clears shared state and lets the first observer rescan every group member onto a new carrier.
      * @remarks Carrier A is structurally invalidated before carrier B is activated, so the scan cannot retain stale group state.
      */
@@ -1692,6 +1790,7 @@ void RunMemoryStateObserverServiceTests()
     RunTransactionalObserverGroupedCarrierRelocationTest();
     RunGraphicsCarrierObserverCoexistenceTest();
     RunGroupedGraphicsCarrierObserverReuseTest();
+    RunGroupedGraphicsCarrierSingleScanPerPassTest();
     RunGroupedGraphicsCarrierObserverStaleCacheTest();
     RunObserverPollPassSerializationTest();
 

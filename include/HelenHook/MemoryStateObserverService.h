@@ -8,6 +8,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <HelenHook/MemoryStateObserverDebugView.h>
@@ -91,10 +92,13 @@ namespace helen
         /**
          * @brief Polls one observer and optionally emits an eligible mapped request or update.
          * @param observer_index Zero-based observer index inside the stored definition array.
+         * @param scanned_address_groups Address groups that already performed a broad discovery scan in the enclosing pass; each unresolved group may scan at most once per pass.
          * @return True when the observer poll completed successfully; otherwise false.
-         * @remarks Callers must hold poll_mutex_ for the complete enclosing pass; this method intentionally does not acquire that serialization mutex itself.
+         * @remarks Callers must hold poll_mutex_ for the complete enclosing pass and provide one set shared by every observer in that pass; this method intentionally does not acquire that serialization mutex itself.
          */
-        bool PollObserver(std::size_t observer_index);
+        bool PollObserver(
+            std::size_t observer_index,
+            std::unordered_set<std::string>& scanned_address_groups);
 
         /**
          * @brief Returns the address currently cached for one observer, consulting its shared address group when declared.

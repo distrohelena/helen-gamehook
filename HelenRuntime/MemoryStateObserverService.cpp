@@ -422,9 +422,10 @@ namespace helen
     bool MemoryStateObserverService::PollOnce()
     {
         std::lock_guard<std::mutex> poll_lock(poll_mutex_);
+        std::unordered_set<std::string> scanned_address_groups;
         for (std::size_t observer_index = 0; observer_index < definitions_.size(); ++observer_index)
         {
-            if (!PollObserver(observer_index))
+            if (!PollObserver(observer_index, scanned_address_groups))
             {
                 return false;
             }
@@ -478,6 +479,7 @@ namespace helen
     {
         std::lock_guard<std::mutex> poll_lock(poll_mutex_);
         const std::uint64_t now = GetTickCount64();
+        std::unordered_set<std::string> scanned_address_groups;
         for (std::size_t observer_index = 0; observer_index < definitions_.size(); ++observer_index)
         {
             std::uint64_t last_poll_tick = 0;
@@ -498,7 +500,7 @@ namespace helen
                 last_poll_ticks_[observer_index] = now;
             }
 
-            if (!PollObserver(observer_index))
+            if (!PollObserver(observer_index, scanned_address_groups))
             {
                 return false;
             }
@@ -673,7 +675,9 @@ namespace helen
         return true;
     }
 
-    bool MemoryStateObserverService::PollObserver(std::size_t observer_index)
+    bool MemoryStateObserverService::PollObserver(
+        std::size_t observer_index,
+        std::unordered_set<std::string>& scanned_address_groups)
     {
         const MemoryStateObserverDefinition& definition = definitions_[observer_index];
         const std::uintptr_t cached_address = GetCachedAddress(observer_index);
@@ -726,82 +730,91 @@ namespace helen
                 ClearCachedAddress(observer_index);
             }
 
+            bool may_rescan = true;
+            if (definition.AddressGroup.has_value())
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                ++debug_views_[observer_index].RescanCount;
+                may_rescan = scanned_address_groups.insert(*definition.AddressGroup).second;
             }
 
-            std::uintptr_t region_cursor = definition.ScanStartAddress;
-            while (region_cursor < definition.ScanEndAddress && !resolved_address.has_value())
+            if (may_rescan)
             {
-                MEMORY_BASIC_INFORMATION memory_info{};
-                if (VirtualQuery(reinterpret_cast<const void*>(region_cursor), &memory_info, sizeof(memory_info)) == 0)
                 {
-                    break;
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    ++debug_views_[observer_index].RescanCount;
                 }
 
-                const std::uintptr_t region_start = reinterpret_cast<std::uintptr_t>(memory_info.BaseAddress);
-                const std::uintptr_t region_end = region_start + static_cast<std::uintptr_t>(memory_info.RegionSize);
-                if (region_end <= region_cursor)
+                std::uintptr_t region_cursor = definition.ScanStartAddress;
+                while (region_cursor < definition.ScanEndAddress && !resolved_address.has_value())
                 {
-                    break;
-                }
-
-                const std::uintptr_t scan_region_start = (std::max)(region_cursor, region_start);
-                const std::uintptr_t scan_region_end = (std::min)(definition.ScanEndAddress, region_end);
-                region_cursor = scan_region_end;
-
-                if (memory_info.State != MEM_COMMIT || !IsReadableProtection(memory_info.Protect))
-                {
-                    continue;
-                }
-
-                std::uintptr_t first_candidate = scan_region_start;
-                if (minimum_offset < 0)
-                {
-                    const std::uintptr_t minimum_candidate = scan_region_start + static_cast<std::uintptr_t>(-minimum_offset);
-                    first_candidate = (std::max)(first_candidate, minimum_candidate);
-                }
-
-                std::uintptr_t last_candidate_exclusive = scan_region_end;
-                if (maximum_offset >= 0)
-                {
-                    const std::uintptr_t required_trailing_bytes = static_cast<std::uintptr_t>(maximum_offset) + sizeof(int);
-                    if (scan_region_end < required_trailing_bytes)
+                    MEMORY_BASIC_INFORMATION memory_info{};
+                    if (VirtualQuery(reinterpret_cast<const void*>(region_cursor), &memory_info, sizeof(memory_info)) == 0)
                     {
-                        continue;
-                    }
-
-                    last_candidate_exclusive = scan_region_end - required_trailing_bytes + 1;
-                }
-
-                if (first_candidate >= last_candidate_exclusive)
-                {
-                    continue;
-                }
-
-                const std::uintptr_t stride = static_cast<std::uintptr_t>(definition.ScanStride);
-                for (std::uintptr_t candidate = first_candidate; candidate < last_candidate_exclusive; candidate += stride)
-                {
-                    std::uintptr_t value_address = 0;
-                    if (!TryApplyOffset(candidate, definition.ValueOffset, value_address))
-                    {
-                        continue;
-                    }
-
-                    int candidate_raw_value = 0;
-                    if (!TryReadInt32(value_address, candidate_raw_value))
-                    {
-                        continue;
-                    }
-
-                    if (IsAddressMatchValue(definition, candidate_raw_value)
-                        && MatchesObserverChecks(definition, candidate))
-                    {
-                        resolved_address = candidate;
-                        raw_value = candidate_raw_value;
-                        mapped_value = TryMapObservedValue(definition, candidate_raw_value);
                         break;
+                    }
+
+                    const std::uintptr_t region_start = reinterpret_cast<std::uintptr_t>(memory_info.BaseAddress);
+                    const std::uintptr_t region_end = region_start + static_cast<std::uintptr_t>(memory_info.RegionSize);
+                    if (region_end <= region_cursor)
+                    {
+                        break;
+                    }
+
+                    const std::uintptr_t scan_region_start = (std::max)(region_cursor, region_start);
+                    const std::uintptr_t scan_region_end = (std::min)(definition.ScanEndAddress, region_end);
+                    region_cursor = scan_region_end;
+
+                    if (memory_info.State != MEM_COMMIT || !IsReadableProtection(memory_info.Protect))
+                    {
+                        continue;
+                    }
+
+                    std::uintptr_t first_candidate = scan_region_start;
+                    if (minimum_offset < 0)
+                    {
+                        const std::uintptr_t minimum_candidate = scan_region_start + static_cast<std::uintptr_t>(-minimum_offset);
+                        first_candidate = (std::max)(first_candidate, minimum_candidate);
+                    }
+
+                    std::uintptr_t last_candidate_exclusive = scan_region_end;
+                    if (maximum_offset >= 0)
+                    {
+                        const std::uintptr_t required_trailing_bytes = static_cast<std::uintptr_t>(maximum_offset) + sizeof(int);
+                        if (scan_region_end < required_trailing_bytes)
+                        {
+                            continue;
+                        }
+
+                        last_candidate_exclusive = scan_region_end - required_trailing_bytes + 1;
+                    }
+
+                    if (first_candidate >= last_candidate_exclusive)
+                    {
+                        continue;
+                    }
+
+                    const std::uintptr_t stride = static_cast<std::uintptr_t>(definition.ScanStride);
+                    for (std::uintptr_t candidate = first_candidate; candidate < last_candidate_exclusive; candidate += stride)
+                    {
+                        std::uintptr_t value_address = 0;
+                        if (!TryApplyOffset(candidate, definition.ValueOffset, value_address))
+                        {
+                            continue;
+                        }
+
+                        int candidate_raw_value = 0;
+                        if (!TryReadInt32(value_address, candidate_raw_value))
+                        {
+                            continue;
+                        }
+
+                        if (IsAddressMatchValue(definition, candidate_raw_value)
+                            && MatchesObserverChecks(definition, candidate))
+                        {
+                            resolved_address = candidate;
+                            raw_value = candidate_raw_value;
+                            mapped_value = TryMapObservedValue(definition, candidate_raw_value);
+                            break;
+                        }
                     }
                 }
             }
