@@ -4,6 +4,7 @@
 #include <HelenHook/CommandExecutor.h>
 #include <HelenHook/CommandMapEntryDefinition.h>
 #include <HelenHook/CommandStepDefinition.h>
+#include <HelenHook/Log.h>
 #include <HelenHook/RuntimeSlotDefinition.h>
 #include <HelenHook/RuntimeValueStore.h>
 
@@ -532,8 +533,20 @@ void RunCommandExecutorTests()
             helen::CommandExecutor subtitle_executor(subtitle_dispatcher, subtitle_runtime_values, subtitle_graphics_config_service);
             Expect(subtitle_executor.RegisterCommand(CreateApplySubtitleSizePersistCommand("applySubtitleSizeWithSiblingBmGame")), "Failed to register the subtitle sibling-path persist command.");
 
-            Expect(subtitle_graphics_config_service.LoadSubtitleSizeIntoDispatcher(subtitle_dispatcher), "Subtitle load did not read the sibling BmGame.ini value.");
+            const std::filesystem::path subtitle_load_log_path = engine_ini_path.parent_path() / "subtitle-load.log";
+            std::error_code subtitle_load_log_remove_error;
+            std::filesystem::remove(subtitle_load_log_path, subtitle_load_log_remove_error);
+            Expect(!subtitle_load_log_remove_error, "Subtitle load log fixture could not be isolated.");
+            const std::filesystem::path previous_log_path = helen::GetLogPath();
+            helen::SetLogPath(subtitle_load_log_path);
+            const bool subtitle_load_result = subtitle_graphics_config_service.LoadSubtitleSizeIntoDispatcher(subtitle_dispatcher);
+            helen::SetLogPath(previous_log_path);
+
+            Expect(subtitle_load_result, "Subtitle load did not read the sibling BmGame.ini value.");
             Expect(subtitle_dispatcher.TryGetInt("ui.subtitleSize") == 4, "Subtitle load mapped the sibling BmGame.ini value incorrectly.");
+            Expect(
+                ReadAllText(subtitle_load_log_path).find("Engine.HUD.ConsoleFontSize=9") != std::string::npos,
+                "Subtitle load log did not report the exact persisted ConsoleFontSize value.");
 
             Expect(subtitle_dispatcher.TrySetInt("ui.subtitleSize", 2), "Failed to seed the subtitle size config for sibling BmGame.ini persistence.");
             Expect(subtitle_executor.RunCommand("applySubtitleSizeWithSiblingBmGame"), "Subtitle sibling-path persistence command execution unexpectedly failed.");

@@ -979,9 +979,13 @@ namespace
      * @brief Reads one persisted subtitle-size state from INI file lines.
      * @param lines INI lines already loaded from disk.
      * @param state Receives the mapped subtitle state on success.
+     * @param encoded_value Receives the exact parsed `Engine.HUD.ConsoleFontSize` value on success.
      * @return True when `Engine.HUD.ConsoleFontSize` is present and maps to a supported state; otherwise false.
      */
-    bool TryReadSubtitleSizeStateFromIniLines(const std::vector<std::string>& lines, int& state)
+    bool TryReadSubtitleSizeStateFromIniLines(
+        const std::vector<std::string>& lines,
+        int& state,
+        int& encoded_value)
     {
         const std::optional<std::string> value = TryReadIniValue(lines, "Engine.HUD", "ConsoleFontSize");
         if (!value.has_value())
@@ -989,7 +993,6 @@ namespace
             return false;
         }
 
-        int encoded_value = 0;
         if (!TryParseIntValue(*value, encoded_value))
         {
             return false;
@@ -1731,7 +1734,8 @@ namespace helen
         }
 
         int subtitle_size_state = 0;
-        if (!TryReadSubtitleSizeStateFromIniLines(lines, subtitle_size_state))
+        int subtitle_font_size = 0;
+        if (!TryReadSubtitleSizeStateFromIniLines(lines, subtitle_size_state, subtitle_font_size))
         {
             Logf(L"[subtitle] Load failed: unsupported Engine.HUD.ConsoleFontSize in %ls.", subtitle_ini_path.wstring().c_str());
             return false;
@@ -1743,11 +1747,10 @@ namespace helen
             return false;
         }
 
-        const int encoded_value = subtitle_size_state == 0 ? 5 : (subtitle_size_state == 1 ? 6 : 7);
         Logf(
             L"[subtitle] Loaded ui.subtitleSize=%d from Engine.HUD.ConsoleFontSize=%d in %ls.",
             subtitle_size_state,
-            encoded_value,
+            subtitle_font_size,
             subtitle_ini_path.wstring().c_str());
         return true;
     }
