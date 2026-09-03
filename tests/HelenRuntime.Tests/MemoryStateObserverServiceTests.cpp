@@ -77,6 +77,37 @@ namespace
     }
 
     /**
+     * @brief Waits until one observer debug view reports the requested number of broad discovery scans.
+     * @param service Observer service whose live debug views should be sampled while its worker runs.
+     * @param observer_index Zero-based observer index whose rescan count is being awaited.
+     * @param minimum_rescan_count Smallest rescan count that satisfies the wait.
+     * @param timeout Maximum duration to wait before reporting that the worker did not reach the target.
+     * @return True when the selected observer reaches the requested count before the deadline; otherwise false.
+     * @remarks The loop samples service-owned state until a monotonic deadline and yields between samples, avoiding a fixed sleep that could race the worker's 1 ms polling interval.
+     */
+    bool WaitForObserverRescanCount(
+        const helen::MemoryStateObserverService& service,
+        std::size_t observer_index,
+        std::uint64_t minimum_rescan_count,
+        std::chrono::milliseconds timeout)
+    {
+        const std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            const std::vector<helen::MemoryStateObserverDebugView> debug_views = service.GetDebugViews();
+            if (observer_index < debug_views.size() && debug_views[observer_index].RescanCount >= minimum_rescan_count)
+            {
+                return true;
+            }
+
+            std::this_thread::yield();
+        }
+
+        const std::vector<helen::MemoryStateObserverDebugView> debug_views = service.GetDebugViews();
+        return observer_index < debug_views.size() && debug_views[observer_index].RescanCount >= minimum_rescan_count;
+    }
+
+    /**
      * @brief Configures one candidate Batman-style subtitle state block around the supplied base address.
      * @param base_address Candidate observer base address that should satisfy the configured checks.
      * @param raw_value Raw subtitle-size state value written at the observer value offset.
@@ -1537,6 +1568,90 @@ namespace
     }
 
     /**
+     * @brief Verifies timed polling keeps one unresolved grouped graphics observer as the scan leader across repeated worker passes.
+     * @remarks Three observers share a one-page empty range and identical 1 ms intervals; the bounded rescan wait proves PollDueObservers executes at least two passes while only the first member scans.
+     */
+    void RunGroupedGraphicsCarrierTimedSingleScanPerPassTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for the timed grouped single-scan graphics carrier test.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+
+        helen::MemoryStateObserverDefinition vsync_definition = CreateGraphicsCarrierObserverDefinition(
+            "graphicsObserverVsync",
+            page_address,
+            page_address + page_size,
+            "vsync",
+            { 4210, 4211 });
+        vsync_definition.AddressGroup = "batmanFrontendControlType";
+        vsync_definition.PollIntervalMs = 1;
+
+        helen::MemoryStateObserverDefinition msaa_definition = CreateGraphicsCarrierObserverDefinition(
+            "graphicsObserverMsaa",
+            page_address,
+            page_address + page_size,
+            "msaa",
+            { 4990, 4991 },
+            "applyBatmanMsaa");
+        msaa_definition.AddressGroup = "batmanFrontendControlType";
+        msaa_definition.PollIntervalMs = 1;
+
+        helen::MemoryStateObserverDefinition apply_signal_definition = CreateGraphicsCarrierObserverDefinition(
+            "graphicsObserverApplySignal",
+            page_address,
+            page_address + page_size,
+            "applySignal",
+            { 4101, 4102 },
+            "applyBatmanGraphicsDraft");
+        apply_signal_definition.AddressGroup = "batmanFrontendControlType";
+        apply_signal_definition.PollIntervalMs = 1;
+
+        helen::MemoryStateObserverService service(
+            { vsync_definition, msaa_definition, apply_signal_definition },
+            [](const helen::MemoryStateObserverUpdate&)
+            {
+                return true;
+            });
+
+        try
+        {
+            Expect(service.Start(), "Timed grouped observer service could not start.");
+            Expect(
+                WaitForObserverRescanCount(service, 0, 2, std::chrono::seconds(2)),
+                "Timed grouped observer worker did not perform two leader scans.");
+
+            service.Stop();
+            const std::vector<helen::MemoryStateObserverDebugView> debug_views = service.GetDebugViews();
+            Expect(debug_views.size() == 3, "Timed grouped single-scan graphics carrier debug view count mismatch.");
+            Expect(debug_views[0].RescanCount >= 2, "Timed grouped observer leader performed fewer than two scans.");
+            Expect(debug_views[1].RescanCount == 0, "Timed grouped second observer performed an independent scan.");
+            Expect(debug_views[2].RescanCount == 0, "Timed grouped third observer performed an independent scan.");
+            Expect(debug_views[0].CachedAddress == 0 && debug_views[1].CachedAddress == 0 && debug_views[2].CachedAddress == 0,
+                "Timed unresolved grouped observers invented a carrier address.");
+
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release the timed grouped single-scan graphics carrier allocation.");
+        }
+        catch (...)
+        {
+            service.Stop();
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+    }
+
+    /**
      * @brief Verifies a stale grouped carrier clears shared state and lets the first observer rescan every group member onto a new carrier.
      * @remarks Carrier A is structurally invalidated before carrier B is activated, so the scan cannot retain stale group state.
      */
@@ -1791,6 +1906,7 @@ void RunMemoryStateObserverServiceTests()
     RunGraphicsCarrierObserverCoexistenceTest();
     RunGroupedGraphicsCarrierObserverReuseTest();
     RunGroupedGraphicsCarrierSingleScanPerPassTest();
+    RunGroupedGraphicsCarrierTimedSingleScanPerPassTest();
     RunGroupedGraphicsCarrierObserverStaleCacheTest();
     RunObserverPollPassSerializationTest();
 
