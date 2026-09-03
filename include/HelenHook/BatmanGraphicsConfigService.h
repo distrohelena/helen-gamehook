@@ -24,9 +24,9 @@ namespace helen
         explicit BatmanGraphicsConfigService(std::filesystem::path ini_path);
 
         /**
-         * @brief Reads the current Batman graphics settings from `BmEngine.ini` into registered config keys.
+         * @brief Reads the current Batman graphics settings from the authoritative launcher-owned sibling `UserEngine.ini` into registered config keys.
          * @param dispatcher Config dispatcher that receives the normalized graphics draft values.
-         * @return True when every required INI value is present and every config key updates successfully; otherwise false.
+         * @return True when the sibling launcher INI can be decoded, every required value is present, and every config key updates successfully; otherwise false.
          */
         bool LoadIntoDispatcher(CommandDispatcher& dispatcher) const;
 
@@ -72,7 +72,7 @@ namespace helen
         const std::filesystem::path& GetIniPath() const noexcept;
 
     private:
-        /** @brief Bound Batman user-engine INI path used as the anchor for graphics reads and subtitle sibling-file discovery. */
+        /** @brief Bound generated `BmEngine.ini` anchor path used to locate both generated and launcher-owned graphics INI files. */
         std::filesystem::path ini_path_;
     };
 }
