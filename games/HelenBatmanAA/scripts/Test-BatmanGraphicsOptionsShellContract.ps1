@@ -1785,6 +1785,7 @@ assert.strictEqual(environment.screen.TryBack(), true);
 assert.strictEqual(environment.screen.outTransitionStarted, true);
 assert.strictEqual(environment.screen.returnFromScreenCount, 1);
 assert.strictEqual(controller.ApplyInProgress, false);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), controller.Settings.map(setting => setting.InitialIndex));
 assert.deepStrictEqual(settingSignals(), []);
 assert.strictEqual(calls.some(call => call.name === 'FE_SetControlType' && [4990, 4991, 4970, 4971].includes(call.args[0])), false);
 
@@ -1919,7 +1920,7 @@ assert.strictEqual(controller.GetApplyStatusText(), 'Apply Failed');
 assert.strictEqual(environment.screen.bBlockInput, false);
 assert.strictEqual(environment.screen.bLockInput, false);
 assert.strictEqual(environment.screen.TryBack(), true);
-assert.strictEqual(controller.Settings[0].DraftIndex, 1);
+assert.strictEqual(controller.Settings[0].DraftIndex, 0);
 assert.strictEqual(controller.Settings[0].InitialIndex, 0);
 
 setNow(0);

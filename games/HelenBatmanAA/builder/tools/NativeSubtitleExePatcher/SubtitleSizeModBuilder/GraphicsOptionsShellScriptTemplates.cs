@@ -735,6 +735,12 @@ internal static class GraphicsOptionsShellScriptTemplates
            }
            function Destroy()
            {
+              var settingIndex = 0;
+              while(settingIndex < this.Settings.length)
+              {
+                 this.Settings[settingIndex].DraftIndex = this.Settings[settingIndex].InitialIndex;
+                 settingIndex = settingIndex + 1;
+              }
               this.ApplyQueue = new Array();
               this.ApplyQueueIndex = 0;
               this.CurrentPendingOperation = "";
