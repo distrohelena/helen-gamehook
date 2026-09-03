@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace SubtitleSizeModBuilder;
 
 /// <summary>
@@ -29,6 +31,7 @@ internal static class Program
                 "build-main-menu-audio" => RunBuildMainMenuAudio(tail),
                 "build-main-menu-graphics" => RunBuildMainMenuGraphics(tail),
                 "build-main-menu-graphics-shell" => RunBuildMainMenuGraphicsShell(tail),
+                "inspect-batman-graphics-ini" => RunInspectBatmanGraphicsIni(tail),
                 "build-main-menu-version-label" => RunBuildMainMenuVersionLabel(tail),
                 "build-pause-runtime-scale" => RunBuildPauseRuntimeScale(tail),
                 "build-hud-font-boost" => RunBuildHudFontBoost(tail),
@@ -168,6 +171,31 @@ internal static class Program
     }
 
     /// <summary>
+    /// Reads a Batman user INI through the production bootstrap loader and emits only the
+    /// normalized Group 1 values used by the graphics shell builder. This no-GUI inspection
+    /// command gives provenance tests the same parser and MSAA normalization path as a build.
+    /// </summary>
+    /// <param name="args">The command arguments containing the required <c>--ini</c> path.</param>
+    /// <returns>Zero after the normalized snapshot is written.</returns>
+    private static int RunInspectBatmanGraphicsIni(string[] args)
+    {
+        var options = new ArgumentReader(args);
+        string iniPath = Path.GetFullPath(options.RequireValue("--ini"));
+        options.ThrowIfAnyUnknown();
+
+        BatmanGraphicsIniBootstrapSnapshot snapshot = BatmanGraphicsIniBootstrapLoader.Load(iniPath);
+        var normalizedGroup1 = new
+        {
+            vsync = snapshot.Vsync,
+            msaa = snapshot.Msaa,
+            physx = snapshot.Physx,
+            stereo = snapshot.Stereo
+        };
+        Console.WriteLine(JsonSerializer.Serialize(normalizedGroup1));
+        return 0;
+    }
+
+    /// <summary>
     /// Builds the pause runtime-scale assets.
     /// </summary>
     /// <param name="args">The command arguments.</param>
@@ -278,6 +306,7 @@ internal static class Program
         Console.WriteLine("  build-main-menu-audio --root <batman-builder-root> [--output-dir <generated\\main-menu-audio>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>] [--build-version <label>]");
         Console.WriteLine("  build-main-menu-graphics --root <batman-builder-root> [--output-dir <generated\\main-menu-graphics>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>] [--ini <Batman user BmEngine.ini>]");
         Console.WriteLine("  build-main-menu-graphics-shell --root <batman-builder-root> [--output-dir <generated\\main-menu-graphics-shell>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>] [--ini <Batman user BmEngine.ini>]");
+        Console.WriteLine("  inspect-batman-graphics-ini --ini <Batman user BmEngine.ini>");
         Console.WriteLine("  build-main-menu-version-label --root <batman-builder-root> [--output-dir <generated\\main-menu-version-label>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>] [--build-version <label>]");
         Console.WriteLine("  build-pause-runtime-scale --root <batman-builder-root> [--output-dir <generated\\pause-runtime-scale>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>]");
         Console.WriteLine("  build-hud-font-boost --root <batman-builder-root> [--output-dir <generated\\hud-font-boost>] [--ffdec <extracted\\ffdec\\ffdec-cli.exe>]");

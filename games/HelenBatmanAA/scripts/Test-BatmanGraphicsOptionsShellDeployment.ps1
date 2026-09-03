@@ -13,6 +13,8 @@ if ([string]::IsNullOrWhiteSpace($BatmanRoot)) {
 $DeployScriptPath = Join-Path $BatmanRoot 'scripts\Deploy-BatmanGraphicsOptionsExperiment.ps1'
 $ConfigSourcePath = Join-Path $BatmanRoot 'helengamehook\config\packs.json'
 $PackSourcePath = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-graphics-options'
+$PackageVerifierPath = Join-Path $BatmanRoot 'scripts\Test-BatmanGraphicsOptionsPackage.ps1'
+$BuilderRootPath = Join-Path $BatmanRoot 'builder'
 
 function Assert-ContainsOrdinal {
     param(
@@ -51,7 +53,8 @@ function Reset-DeploymentFixture {
         [Parameter(Mandatory = $true)] [string]$StagedConfigPath,
         [Parameter(Mandatory = $true)] [string]$StagedHelenGameHookPath,
         [Parameter(Mandatory = $true)] [string]$StagedProxyPath,
-        [Parameter(Mandatory = $true)] [bool]$IncludeExistingGraphicsPack
+        [Parameter(Mandatory = $true)] [bool]$IncludeExistingGraphicsPack,
+        [bool]$IncludeStagedStateSentinel = $true
     )
 
     foreach ($path in @($LivePackRoot, $LiveConfigPath, $LiveHelenGameHookPath, $LiveProxyPath, $SubtitlePackRoot, $StagingRoot, $RecoveryRoot)) {
@@ -77,7 +80,9 @@ function Reset-DeploymentFixture {
     foreach ($sourceChild in @(Get-ChildItem -LiteralPath $PackSourcePath -Force)) {
         Copy-Item -LiteralPath $sourceChild.FullName -Destination $StagedPackRoot -Recurse -Force
     }
-    [IO.File]::WriteAllText((Join-Path $StagedPackRoot 'state.txt'), 'new-pack')
+    if ($IncludeStagedStateSentinel) {
+        [IO.File]::WriteAllText((Join-Path $StagedPackRoot 'state.txt'), 'new-pack')
+    }
     [IO.File]::WriteAllText($StagedConfigPath, (Get-Content -LiteralPath $ConfigSourcePath -Raw))
     [IO.File]::WriteAllBytes($StagedHelenGameHookPath, [Text.Encoding]::ASCII.GetBytes('new-helen-game-hook'))
     [IO.File]::WriteAllBytes($StagedProxyPath, [Text.Encoding]::ASCII.GetBytes('new-proxy'))
@@ -148,6 +153,7 @@ foreach ($RequiredToken in @(
     'batman-aa-subtitles',
     'batman-aa-graphics-options',
     'Invoke-AtomicGraphicsDeployment',
+    'VerifyStagedPublication',
     'Move-Item -LiteralPath',
     'Assert-SafeDeploymentPath',
     'Get-SafeDeploymentItems',
@@ -193,6 +199,7 @@ $LivePackRoot = Join-Path $GameBin 'helengamehook\packs\batman-aa-graphics-optio
 $LiveConfigPath = Join-Path $GameBin 'helengamehook\config\packs.json'
 $LiveHelenGameHookPath = Join-Path $GameBin 'HelenGameHook.dll'
 $LiveProxyPath = Join-Path $GameBin 'dinput8.dll'
+$LiveTargetPath = Join-Path $GameBin 'Frontend-graphics-options.umap'
 $SubtitlePackRoot = Join-Path $GameBin 'helengamehook\packs\batman-aa-subtitles'
 $StagingRoot = Join-Path $GameBin ('.helengamehook-staging-' + [Guid]::NewGuid().ToString('N'))
 $RecoveryRoot = Join-Path $GameBin ('.helengamehook-recovery-' + [Guid]::NewGuid().ToString('N'))
@@ -239,6 +246,7 @@ try {
         throw 'Deployment staging and recovery roots must share the GameBin volume.'
     }
     Reset-DeploymentFixture -LivePackRoot $LivePackRoot -LiveConfigPath $LiveConfigPath -LiveHelenGameHookPath $LiveHelenGameHookPath -LiveProxyPath $LiveProxyPath -SubtitlePackRoot $SubtitlePackRoot -StagingRoot $StagingRoot -RecoveryRoot $RecoveryRoot -StagedPackRoot $StagedPackRoot -StagedConfigPath $StagedConfigPath -StagedHelenGameHookPath $StagedHelenGameHookPath -StagedProxyPath $StagedProxyPath -IncludeExistingGraphicsPack $true
+    [IO.File]::WriteAllBytes($LiveTargetPath, [Text.Encoding]::ASCII.GetBytes('old-target'))
     Assert-BatmanGraphicsVsyncHooks -PackRoot $StagedPackRoot -Context 'Staged deployment fixture'
     $ExpectedHelenGameHookHash = (Get-FileHash -LiteralPath $StagedHelenGameHookPath -Algorithm SHA256).Hash
     $ExpectedProxyHash = (Get-FileHash -LiteralPath $StagedProxyPath -Algorithm SHA256).Hash
@@ -301,6 +309,44 @@ try {
         if ((Get-FileHash -LiteralPath $LiveHelenPath -Algorithm SHA256).Hash -cne $ExpectedHelenGameHookHash) { throw 'Verifier saw the wrong HelenGameHook.dll.' }
         if ((Get-FileHash -LiteralPath $LiveProxyPath -Algorithm SHA256).Hash -cne $ExpectedProxyHash) { throw 'Verifier saw the wrong dinput8.dll.' }
     }.GetNewClosure()
+
+    Reset-DeploymentFixture -LivePackRoot $LivePackRoot -LiveConfigPath $LiveConfigPath -LiveHelenGameHookPath $LiveHelenGameHookPath -LiveProxyPath $LiveProxyPath -SubtitlePackRoot $SubtitlePackRoot -StagingRoot $StagingRoot -RecoveryRoot $RecoveryRoot -StagedPackRoot $StagedPackRoot -StagedConfigPath $StagedConfigPath -StagedHelenGameHookPath $StagedHelenGameHookPath -StagedProxyPath $StagedProxyPath -IncludeExistingGraphicsPack $true -IncludeStagedStateSentinel $false
+    $preVerifierFailurePack = @(Get-DirectorySnapshot -Root $LivePackRoot)
+    $preVerifierFailureConfigHash = (Get-FileHash -LiteralPath $LiveConfigPath -Algorithm SHA256).Hash
+    $preVerifierFailureHelenHash = (Get-FileHash -LiteralPath $LiveHelenGameHookPath -Algorithm SHA256).Hash
+    $preVerifierFailureProxyHash = (Get-FileHash -LiteralPath $LiveProxyPath -Algorithm SHA256).Hash
+    $preVerifierFailureTargetHash = (Get-FileHash -LiteralPath $LiveTargetPath -Algorithm SHA256).Hash
+    $preVerifierFailureSubtitle = @(Get-DirectorySnapshot -Root $SubtitlePackRoot)
+    $stagedHooksPath = Join-Path $StagedPackRoot 'builds\steam-goty-1.0\hooks.json'
+    [IO.File]::WriteAllText($stagedHooksPath, '{"runtimeSlots":[],"stateObservers":[],"hooks":[]}', [Text.UTF8Encoding]::new($false))
+    $stagedVerifier = {
+        param($StagedPackPath, $StagedConfigPathForVerification, $StagedHelenPath, $StagedProxyPath)
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PackageVerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRootPath -Configuration Release -PackRootOverride $StagedPackPath -TargetPathOverride (Join-Path $BuilderRootPath 'generated\graphics-options-experiment\Frontend-graphics-options.umap') -StagedPackageValidation 2>&1)
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($exitCode -eq 0) { throw 'STAGED_VERIFIER_UNEXPECTED_PASS: corrupt hooks.json was accepted.' }
+        throw "STAGED_VERIFIER_REJECTED: exit=$exitCode output=$($output -join [Environment]::NewLine)"
+    }.GetNewClosure()
+    $stagedVerifierFailureObserved = $false
+    $stagedVerifierFailureMessage = ''
+    try {
+        Invoke-AtomicGraphicsDeployment -GameBin $GameBin -LivePackRoot $LivePackRoot -LiveConfigPath $LiveConfigPath -LiveHelenGameHookPath $LiveHelenGameHookPath -LiveProxyPath $LiveProxyPath -StagedPackRoot $StagedPackRoot -StagedConfigPath $StagedConfigPath -StagedHelenGameHookPath $StagedHelenGameHookPath -StagedProxyPath $StagedProxyPath -PackBackupRoot $PackBackupRoot -ConfigBackupPath $ConfigBackupPath -HelenGameHookBackupPath $HelenGameHookBackupPath -ProxyBackupPath $ProxyBackupPath -RecoveryRoot $RecoveryRoot -StagingRoot $StagingRoot -VerifyPublication $VerifyPublication -VerifyStagedPublication $stagedVerifier
+    } catch {
+        $stagedVerifierFailureObserved = $true
+        $stagedVerifierFailureMessage = $_.Exception.Message
+    }
+    if (-not $stagedVerifierFailureObserved -or $stagedVerifierFailureMessage -notmatch 'STAGED_VERIFIER_REJECTED') { throw "Corrupt staged package did not produce a true verifier rejection: $stagedVerifierFailureMessage" }
+    Assert-DirectorySnapshotEqual -Expected $preVerifierFailurePack -ActualRoot $LivePackRoot -Context 'Staged verifier rejection live pack'
+    if ((Get-FileHash -LiteralPath $LiveConfigPath -Algorithm SHA256).Hash -cne $preVerifierFailureConfigHash -or (Get-FileHash -LiteralPath $LiveHelenGameHookPath -Algorithm SHA256).Hash -cne $preVerifierFailureHelenHash -or (Get-FileHash -LiteralPath $LiveProxyPath -Algorithm SHA256).Hash -cne $preVerifierFailureProxyHash -or (Get-FileHash -LiteralPath $LiveTargetPath -Algorithm SHA256).Hash -cne $preVerifierFailureTargetHash) { throw 'Staged verifier rejection changed a live config, target, or runtime hash.' }
+    Assert-DirectorySnapshotEqual -Expected $preVerifierFailureSubtitle -ActualRoot $SubtitlePackRoot -Context 'Staged verifier rejection subtitle pack'
+    foreach ($backupPath in @($PackBackupRoot, $ConfigBackupPath, $HelenGameHookBackupPath, $ProxyBackupPath)) { if (Test-Path -LiteralPath $backupPath) { throw "Staged verifier rejection left backup state: $backupPath" } }
+    if ((Test-Path -LiteralPath $RecoveryRoot -PathType Container) -and @(Get-ChildItem -LiteralPath $RecoveryRoot -Force).Count -ne 0) { throw "Staged verifier rejection left recovery state: $RecoveryRoot" }
+    Remove-DeploymentStagingRoot -StagingRoot $StagingRoot -GameBin $GameBin
 
     $FailureStages = @(
         'AfterPackBackup', 'AfterConfigBackup', 'AfterHelenGameHookBackup', 'AfterProxyBackup',

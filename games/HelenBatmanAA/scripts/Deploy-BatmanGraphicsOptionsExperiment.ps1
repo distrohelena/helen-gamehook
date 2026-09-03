@@ -573,6 +573,7 @@ function Invoke-AtomicGraphicsDeployment {
         [Parameter(Mandatory = $true)] [string]$RecoveryRoot,
         [Parameter(Mandatory = $true)] [string]$StagingRoot,
         [Parameter(Mandatory = $true)] [scriptblock]$VerifyPublication,
+        [AllowNull()] [scriptblock]$VerifyStagedPublication = $null,
         [ValidateSet('', 'AfterPackBackup', 'AfterConfigBackup', 'AfterHelenGameHookBackup', 'AfterProxyBackup', 'AfterPackActivation', 'AfterConfigActivation', 'AfterHelenGameHookActivation', 'AfterProxyActivation', 'AfterVerification', 'AfterPackBackupDeletion', 'AfterConfigBackupDeletion', 'AfterHelenGameHookBackupDeletion', 'AfterProxyBackupDeletion')]
         [string]$FailureInjection = ''
     )
@@ -592,6 +593,11 @@ function Invoke-AtomicGraphicsDeployment {
     Assert-DeploymentArtifactKind -Path $StagedConfigPath -Kind File -Context 'Staged packs.json'
     Assert-DeploymentArtifactKind -Path $StagedHelenGameHookPath -Kind File -Context 'Staged HelenGameHook.dll'
     Assert-DeploymentArtifactKind -Path $StagedProxyPath -Kind File -Context 'Staged dinput8.dll'
+    if ($null -ne $VerifyStagedPublication) {
+        # This callback is deliberately before any backup or activation move so a real staged
+        # package verifier failure cannot leave a partial publication behind.
+        & $VerifyStagedPublication $StagedPackRoot $StagedConfigPath $StagedHelenGameHookPath $StagedProxyPath
+    }
 
     if ($null -ne (Get-ExistingDeploymentItem -Path $RecoveryRoot)) {
         Assert-SafeDeploymentTree -Root $RecoveryRoot -AllowedRoots @($gameBinPath) -RequireExisting | Out-Null

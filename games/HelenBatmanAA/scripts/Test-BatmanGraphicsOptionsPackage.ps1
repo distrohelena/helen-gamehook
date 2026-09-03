@@ -8,6 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$ExpectedGraphicsShellSha256 = '6CF058DA55867BE38F4A7861C877EB2D4CFD98E4510848D924B2322FCBDF65A5'
 
 . (Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1')
 . (Join-Path $PSScriptRoot 'BatmanPackVerificationHelpers.ps1')
@@ -186,6 +187,18 @@ function Assert-NotContainsOrdinal {
     }
 }
 
+function Assert-ExpectedSha256 {
+    <# Require both a complete digest and the independently reviewed graphics shell identity. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$Hash,
+        [Parameter(Mandatory = $true)] [string]$Expected,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    if ($Hash -notmatch '\A[0-9A-Fa-f]{64}\z') { throw "$Context must be a full 64-character SHA-256 digest, found '$Hash'." }
+    if ($Hash -cne $Expected) { throw "$Context drifted. Expected '$Expected', found '$Hash'." }
+}
+
 function Invoke-ExternalProcess {
     param(
         [Parameter(Mandatory = $true)] [string]$FilePath,
@@ -272,14 +285,16 @@ function Assert-RebuildAtomicSourceContract {
 }
 
 function Assert-CurrentGraphicsSourceProvenance {
-    <# Verify only the current shell generator and rebuild script are accepted as provenance. #>
+    <# Prove the exact production shell call graph and keep legacy builders outside that graph. #>
     param(
         [Parameter(Mandatory = $true)] [string]$RebuildPath,
         [Parameter(Mandatory = $true)] [string]$ShellTemplatePath,
-        [Parameter(Mandatory = $true)] [string]$ShellBuilderPath
+        [Parameter(Mandatory = $true)] [string]$ShellBuilderPath,
+        [Parameter(Mandatory = $true)] [string]$BuilderProgramPath,
+        [Parameter(Mandatory = $true)] [string]$XmlPatcherPath
     )
 
-    foreach ($path in @($RebuildPath, $ShellTemplatePath, $ShellBuilderPath)) {
+    foreach ($path in @($RebuildPath, $ShellTemplatePath, $ShellBuilderPath, $BuilderProgramPath, $XmlPatcherPath)) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "Current graphics shell provenance source was not found: $path"
         }
@@ -288,18 +303,81 @@ function Assert-CurrentGraphicsSourceProvenance {
     $rebuildText = Get-Content -LiteralPath $RebuildPath -Raw
     $shellTemplateText = Get-Content -LiteralPath $ShellTemplatePath -Raw
     $shellBuilderText = Get-Content -LiteralPath $ShellBuilderPath -Raw
-    $shellBuilderShellMatch = [regex]::Match($shellBuilderText, '(?s)private static void PatchFrontendShellScripts\(.*?private static void ValidateShellInputs')
+    $builderProgramText = Get-Content -LiteralPath $BuilderProgramPath -Raw
+    $xmlPatcherText = Get-Content -LiteralPath $XmlPatcherPath -Raw
+    $legacyTemplatePath = Join-Path (Split-Path -Parent $ShellTemplatePath) 'GraphicsOptionsScriptTemplates.cs'
+    if (-not (Test-Path -LiteralPath $legacyTemplatePath -PathType Leaf)) { throw "Legacy graphics template source was not found: $legacyTemplatePath" }
+    $legacyTemplateText = Get-Content -LiteralPath $legacyTemplatePath -Raw
+    $legacySourceText = $legacyTemplateText + $shellBuilderText + $xmlPatcherText
+    $shellBuilderShellMatch = [regex]::Match($shellBuilderText, '(?s)private static void PatchFrontendShellScripts\(.*?(?=\r?\n\s*/// <summary>)')
     if (-not $shellBuilderShellMatch.Success) { throw 'Current shell builder shell patch method could not be isolated for provenance validation.' }
     $shellBuilderShellText = $shellBuilderShellMatch.Value
-    foreach ($forbidden in @(
-        'F:\helenhook.7z', 'F:/helenhook.7z', 'batma/', 'batma\',
-        'Program Files',
-        'full-controller', 'GraphicsVsyncController', 'InitialVsync', 'DraftVsync',
-        'GraphicsExitPrompt', 'DefineSprite_601', 'Helen_',
-        'prompt export', 'prompt route', 'old package', 'historical'
+    $buildShellMatch = [regex]::Match($shellBuilderText, '(?s)public static void BuildShell\(.*?(?=\r?\n\s*/// <summary>)')
+    if (-not $buildShellMatch.Success) { throw 'Current shell builder BuildShell method could not be isolated for provenance validation.' }
+    $buildShellText = $buildShellMatch.Value
+    $programDispatchMatch = [regex]::Match($builderProgramText, '(?s)"build-main-menu-graphics-shell"\s*=>\s*RunBuildMainMenuGraphicsShell\(tail\)')
+    if (-not $programDispatchMatch.Success) { throw 'NativeSubtitleExePatcher does not dispatch the production shell command to RunBuildMainMenuGraphicsShell.' }
+    $programShellMatch = [regex]::Match($builderProgramText, '(?s)private static int RunBuildMainMenuGraphicsShell\(.*?(?=\r?\n\s*/// <summary>)')
+    if (-not $programShellMatch.Success) { throw 'NativeSubtitleExePatcher shell command method could not be isolated for provenance validation.' }
+    $programShellText = $programShellMatch.Value
+    $patchShellMatch = [regex]::Match($xmlPatcherText, '(?s)public static void PatchShell\(.*?(?=\r?\n\s*/// <summary>)')
+    if (-not $patchShellMatch.Success) { throw 'GraphicsOptionsXmlPatcher PatchShell method could not be isolated for provenance validation.' }
+    $patchShellText = $patchShellMatch.Value
+    $shellSpriteMatch = [regex]::Match($xmlPatcherText, '(?s)private static void AppendGraphicsShellSpriteAndExport\(.*?(?=\r?\n\s*/// <summary>)')
+    if (-not $shellSpriteMatch.Success) { throw 'GraphicsOptionsXmlPatcher shell sprite method could not be isolated for provenance validation.' }
+    $shellSpriteText = $shellSpriteMatch.Value
+
+    foreach ($required in @(
+        'build-main-menu-graphics-shell', '--output-dir', '--ffdec', '--ini',
+        'GraphicsOptionsAssetBuilder.BuildShell(paths)'
     )) {
-        foreach ($source in @([pscustomobject]@{ Name = 'rebuild'; Text = $rebuildText }, [pscustomobject]@{ Name = 'shell template'; Text = $shellTemplateText }, [pscustomobject]@{ Name = 'shell builder'; Text = $shellBuilderShellText })) {
-            Assert-NotContainsOrdinal -Text $source.Text -Token $forbidden -Context "$source.Name provenance source"
+        Assert-ContainsOrdinal -Text ($rebuildText + $programShellText) -Token $required -Context 'production graphics shell call graph'
+    }
+    foreach ($required in @(
+        'GraphicsOptionsShellBuildPaths paths = GraphicsOptionsShellBuildPaths.FromRoot',
+        'GraphicsOptionsAssetBuilder.BuildShell(paths)'
+    )) {
+        Assert-ContainsOrdinal -Text $programShellText -Token $required -Context 'NativeSubtitleExePatcher graphics shell route'
+    }
+    foreach ($required in @(
+        'ValidateShellInputs(paths)',
+        'BatmanGraphicsIniBootstrapLoader.Load(paths.BatmanUserIniPath)',
+        'PatchFrontendShellScripts(paths.FrontendWorkingScriptsPath, bootstrapSnapshot)',
+        'ValidateShellPatchedScriptSet(paths.FrontendWorkingScriptsPath)',
+        'GraphicsOptionsXmlPatcher.PatchShell(paths.FrontendXmlPath, paths.FrontendPatchedXmlPath)',
+        '"-importScript"', 'paths.FrontendOutputGfxPath', 'paths.FrontendWorkingScriptsPath'
+    )) {
+        Assert-ContainsOrdinal -Text $buildShellText -Token $required -Context 'GraphicsOptionsAssetBuilder BuildShell route'
+    }
+    Assert-ContainsOrdinal -Text $shellBuilderShellText -Token 'GraphicsOptionsShellScriptTemplates' -Context 'shell script template route'
+    Assert-ContainsOrdinal -Text $patchShellText -Token 'AppendGraphicsShellSpriteAndExport(tags, optionsGamePcSprite)' -Context 'selective sprite-600 patch route'
+    foreach ($required in @('ScreenOptionsGraphicsSpriteId', 'PatchGraphicsScreenSprite', 'CreateExportAssetsTag', 'CloneDoInitActionTagForSprite')) {
+        Assert-ContainsOrdinal -Text $shellSpriteText -Token $required -Context 'selective sprite-600 import route'
+    }
+    foreach ($legacyToken in @('Helen_', 'GraphicsExitPrompt', 'DefineSprite_601')) {
+        Assert-ContainsOrdinal -Text $legacySourceText -Token $legacyToken -Context "legacy full-controller source ($legacyToken)"
+    }
+    foreach ($legacyToken in @('public static void Patch(string inputXmlPath, string outputXmlPath)', 'AppendGraphicsSpritesAndExports', 'GraphicsExitPromptSpriteId')) {
+        Assert-ContainsOrdinal -Text $xmlPatcherText -Token $legacyToken -Context "legacy XML patch route ($legacyToken)"
+    }
+
+    foreach ($forbidden in @(
+        'F:\helenhook.7z', 'F:/helenhook.7z', 'batma/', 'batma\', 'Program Files',
+        'GraphicsVsyncController', 'InitialVsync', 'DraftVsync', 'GraphicsExitPrompt',
+        'DefineSprite_601', 'Helen_', 'prompt export', 'prompt route', 'old package', 'historical',
+        'PatchFrontendScripts(', 'GraphicsOptionsScriptTemplates', 'AppendGraphicsSpritesAndExports',
+        'GraphicsExitPromptSpriteId', 'YesNoPrompt', 'Patch(inputXmlPath, outputXmlPath)'
+    )) {
+        foreach ($source in @(
+            [pscustomobject]@{ Name = 'rebuild'; Text = $rebuildText },
+            [pscustomobject]@{ Name = 'current shell templates'; Text = $shellTemplateText },
+            [pscustomobject]@{ Name = 'shell builder BuildShell'; Text = $buildShellText },
+            [pscustomobject]@{ Name = 'shell builder shell method'; Text = $shellBuilderShellText },
+            [pscustomobject]@{ Name = 'NativeSubtitleExePatcher shell route'; Text = $programShellText },
+            [pscustomobject]@{ Name = 'XmlPatcher PatchShell'; Text = $patchShellText },
+            [pscustomobject]@{ Name = 'XmlPatcher selective sprite route'; Text = $shellSpriteText }
+        )) {
+            Assert-NotContainsOrdinal -Text $source.Text -Token $forbidden -Context "$($source.Name) provenance source"
         }
     }
 
@@ -378,7 +456,10 @@ function Assert-VsyncSliceRowContract {
 }
 
 function Assert-ScopedExportedShellContract {
-    param([Parameter(Mandatory = $true)] [string]$ExportRoot)
+    param(
+        [Parameter(Mandatory = $true)] [string]$ExportRoot,
+        [Parameter(Mandatory = $true)] [string]$XmlPath
+    )
 
     $scriptsRoot = Join-Path $ExportRoot 'scripts'
     $scriptFiles = @(Get-ChildItem -LiteralPath $scriptsRoot -Recurse -Filter *.as -File)
@@ -428,6 +509,10 @@ function Assert-ScopedExportedShellContract {
     }
     foreach ($forbidden in @('Helen_', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft', 'Unsaved graphics changes', 'Some changes require a restart')) {
         foreach ($scriptFile in $scriptFiles) { Assert-NotContainsOrdinal -Text (Get-Content -LiteralPath $scriptFile.FullName -Raw) -Token $forbidden -Context "exported script $($scriptFile.Name)" }
+    }
+    $xmlText = Get-Content -LiteralPath $XmlPath -Raw
+    foreach ($forbidden in @('Helen_', 'GraphicsExitPrompt', 'GraphicsVsyncController', 'InitialVsync', 'DraftVsync', 'DefineSprite_601')) {
+        Assert-NotContainsOrdinal -Text $xmlText -Token $forbidden -Context 'generated shell XML artifact'
     }
 }
 
@@ -660,7 +745,7 @@ foreach ($requiredPath in @($packJsonPath, $buildJsonPath, $bindingsJsonPath, $c
 }
 $rebuildSourcePath = Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1'
 Assert-RebuildAtomicSourceContract -ScriptPath $rebuildSourcePath
-Assert-CurrentGraphicsSourceProvenance -RebuildPath $rebuildSourcePath -ShellTemplatePath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsShellScriptTemplates.cs') -ShellBuilderPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsAssetBuilder.cs')
+Assert-CurrentGraphicsSourceProvenance -RebuildPath $rebuildSourcePath -ShellTemplatePath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsShellScriptTemplates.cs') -ShellBuilderPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsAssetBuilder.cs') -BuilderProgramPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\Program.cs') -XmlPatcherPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsXmlPatcher.cs')
 Assert-AtomicPublicationRegression
 Assert-ExactPackFileSet -Root $packRoot -BuildDirectoryName 'steam-goty-1.0'
 if (-not $StagedPackageValidation) { Assert-ExactGeneratedTargetFileSet -Root $stableGeneratedRoot -TargetPath $targetPath }
@@ -875,6 +960,8 @@ New-Item -ItemType Directory -Force -Path $verificationRoot | Out-Null
 try {
     $extract = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--project', $patcherProjectPath, '-c', $Configuration, '--', 'extract-gfx', '--package', $targetPath, '--owner', 'MainMenu', '--name', 'MainV2', '--output', $extractedGfxPath)
     if ($extract.ExitCode -ne 0) { throw "Failed to extract current-run MainV2: $($extract.Output -join [Environment]::NewLine)" }
+    $extractedGfxHash = (Get-FileHash -LiteralPath $extractedGfxPath -Algorithm SHA256).Hash
+    Assert-ExpectedSha256 -Hash $extractedGfxHash -Expected $ExpectedGraphicsShellSha256 -Context 'generated MainV2 shell GFX hash'
     $xml = Invoke-ExternalProcess -FilePath $ffdecPath -Arguments @('-swf2xml', $extractedGfxPath, $xmlPath)
     if ($xml.ExitCode -ne 0) { throw 'FFDec failed to reopen the generated MainV2 shell.' }
     $export = Invoke-ExternalProcess -FilePath $ffdecPath -Arguments @('-export', 'script', $exportRoot, $extractedGfxPath)
@@ -887,7 +974,7 @@ try {
     $exports = @(@($document.SelectNodes("/swf/tags/item[@type='ExportAssetsTag']")) | Where-Object { @($_.names.item | Where-Object { $_ -eq 'ScreenOptionsGraphics' }).Count -gt 0 })
     if ($exports.Count -ne 1 -or @($exports[0].tags.item | Where-Object { $_ -eq '600' }).Count -ne 1) { throw 'Shell target must export exactly sprite 600 as ScreenOptionsGraphics.' }
 
-    Assert-ScopedExportedShellContract -ExportRoot $exportRoot
+    Assert-ScopedExportedShellContract -ExportRoot $exportRoot -XmlPath $xmlPath
 
     $reconstructed = Reconstruct-HgdeltaTarget -BasePath $basePath -DeltaPath $deltaPath
     $targetBytes = [IO.File]::ReadAllBytes($targetPath)

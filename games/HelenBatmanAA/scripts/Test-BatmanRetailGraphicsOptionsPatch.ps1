@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $env:MSBUILDDISABLENODEREUSE = '1'
+$ExpectedGraphicsShellSha256 = '6CF058DA55867BE38F4A7861C877EB2D4CFD98E4510848D924B2322FCBDF65A5'
 . (Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1')
 
 function Assert-ContainsOrdinal {
@@ -18,6 +19,24 @@ function Assert-ContainsOrdinal {
 function Assert-NotContainsOrdinal {
     param([string]$Text, [string]$Token, [string]$Context)
     if ($Text.IndexOf($Token, [StringComparison]::Ordinal) -ge 0) { throw "$Context contains forbidden '$Token'." }
+}
+
+function Assert-FullSha256 {
+    <# Reject abbreviated or non-hex evidence so provenance logs always carry the complete digest. #>
+    param([Parameter(Mandatory = $true)] [string]$Hash, [Parameter(Mandatory = $true)] [string]$Context)
+    if ($Hash -notmatch '\A[0-9A-Fa-f]{64}\z') { throw "$Context must be a full 64-character SHA-256 digest, found '$Hash'." }
+}
+
+function Assert-ExpectedSha256 {
+    <# Require both a complete digest and the independently reviewed artifact identity. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$Hash,
+        [Parameter(Mandatory = $true)] [string]$Expected,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    Assert-FullSha256 -Hash $Hash -Context $Context
+    if ($Hash -cne $Expected) { throw "$Context drifted. Expected '$Expected', found '$Hash'." }
 }
 
 function Get-ActionFunctionBody {
@@ -159,6 +178,30 @@ function Invoke-ShellBuild {
     if ($result.ExitCode -ne 0) { throw "Shell build failed for INI '$IniPath': $($result.Output -join [Environment]::NewLine)" }
 }
 
+function Assert-ProductionGraphicsIniSnapshot {
+    <# Read one fixture through the builder's production parser and compare its normalized Group 1 tuple. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$BuilderProject,
+        [Parameter(Mandatory = $true)] [string]$Configuration,
+        [Parameter(Mandatory = $true)] [string]$IniPath,
+        [Parameter(Mandatory = $true)] [int[]]$ExpectedValues,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    if ($ExpectedValues.Count -ne 4) { throw "$Context expected exactly four normalized Group 1 values." }
+    $result = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--no-build', '--project', $BuilderProject, '-c', $Configuration, '--', 'inspect-batman-graphics-ini', '--ini', $IniPath)
+    if ($result.ExitCode -ne 0) { throw "$Context production INI inspection failed: $($result.Output -join [Environment]::NewLine)" }
+    $jsonLine = @($result.Output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1)
+    if ($jsonLine.Count -ne 1) { throw "$Context production INI inspection did not emit exactly one normalized JSON object." }
+    try { $snapshot = $jsonLine[0] | ConvertFrom-Json } catch { throw "$Context production INI inspection emitted invalid JSON: $jsonLine" }
+    $actualProperties = @($snapshot.PSObject.Properties.Name)
+    if (($actualProperties -join '|') -cne 'vsync|msaa|physx|stereo') { throw "$Context normalized snapshot properties drifted: $($actualProperties -join ', ')." }
+    $actualValues = @([int]$snapshot.vsync, [int]$snapshot.msaa, [int]$snapshot.physx, [int]$snapshot.stereo)
+    for ($index = 0; $index -lt $ExpectedValues.Count; $index++) {
+        if ($actualValues[$index] -ne $ExpectedValues[$index]) { throw "$Context normalized Group 1 value $($index + 1) drifted. Expected $($ExpectedValues[$index]), found $($actualValues[$index])." }
+    }
+}
+
 function Invoke-RetailGraphicsPatch {
     <# Patch the verified retail frontend into an isolated output package. #>
     param(
@@ -189,6 +232,160 @@ function Invoke-GraphicsHgdeltaBuild {
     }
 }
 
+function Reconstruct-RetailHgdeltaTarget {
+    <# Independently reconstruct an HGDL target from the verified retail base for the retail round-trip proof. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$BasePath,
+        [Parameter(Mandatory = $true)] [string]$DeltaPath
+    )
+
+    $base = [IO.File]::ReadAllBytes($BasePath)
+    $delta = [IO.File]::ReadAllBytes($DeltaPath)
+    if ($delta.Length -lt 116 -or [Text.Encoding]::ASCII.GetString($delta, 0, 4) -cne 'HGDL') { throw "Invalid HGDL retail delta: $DeltaPath" }
+    $major = [BitConverter]::ToUInt32($delta, 4)
+    $minor = [BitConverter]::ToUInt32($delta, 8)
+    $chunkSize = [BitConverter]::ToUInt32($delta, 12)
+    $baseSize = [BitConverter]::ToUInt64($delta, 16)
+    $targetSize64 = [BitConverter]::ToUInt64($delta, 24)
+    if ($major -ne 1 -or $minor -ne 0 -or $chunkSize -ne 65536) { throw "Retail HGDL header drifted: version=$major.$minor chunkSize=$chunkSize." }
+    if ($baseSize -ne [uint64]$base.Length -or $targetSize64 -gt [uint64][int]::MaxValue) { throw 'Retail HGDL size header does not match the verified base or verifier limits.' }
+    $baseHash = ([BitConverter]::ToString($delta[32..63]) -replace '-', '').ToLowerInvariant()
+    $targetHash = ([BitConverter]::ToString($delta[64..95]) -replace '-', '').ToLowerInvariant()
+    $actualBaseHash = (Get-FileHash -LiteralPath $BasePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($baseHash -cne $actualBaseHash) { throw "Retail HGDL base hash mismatch: header=$baseHash actual=$actualBaseHash." }
+    $chunkCount = [BitConverter]::ToUInt32($delta, 96)
+    $chunkTableOffset = [BitConverter]::ToUInt64($delta, 100)
+    $payloadOffset = [BitConverter]::ToUInt64($delta, 108)
+    $tableEnd = $chunkTableOffset + ([uint64]$chunkCount * 20)
+    if ($chunkTableOffset -lt 116 -or $tableEnd -gt [uint64]$delta.Length -or $payloadOffset -lt $tableEnd -or $payloadOffset -gt [uint64]$delta.Length) { throw 'Retail HGDL table or payload bounds are invalid.' }
+
+    $targetSize = [int]$targetSize64
+    $result = [IO.MemoryStream]::new($targetSize)
+    [uint64]$written = 0
+    try {
+        for ($index = 0; $index -lt $chunkCount; $index++) {
+            $entry = [int]($chunkTableOffset + ([uint64]$index * 20))
+            $kind = [BitConverter]::ToUInt32($delta, $entry)
+            $chunkLength64 = [BitConverter]::ToUInt32($delta, $entry + 4)
+            $payloadRelativeOffset = [BitConverter]::ToUInt64($delta, $entry + 8)
+            $payloadLength = [BitConverter]::ToUInt32($delta, $entry + 16)
+            if ($chunkLength64 -eq 0 -or $chunkLength64 -gt [uint64]$chunkSize -or $written + $chunkLength64 -gt $targetSize64) { throw "Retail HGDL chunk $index has an invalid reconstructed size." }
+            $chunkLength = [int]$chunkLength64
+            if ($kind -eq 0) {
+                if ($payloadRelativeOffset -ne 0 -or $payloadLength -ne 0) { throw "Retail HGDL base chunk $index contains payload metadata." }
+                $baseOffset = [uint64]$index * [uint64]$chunkSize
+                if ($baseOffset + $chunkLength64 -gt [uint64]$base.Length) { throw "Retail HGDL base chunk $index exceeds base bounds." }
+                $result.Write($base, [int]$baseOffset, $chunkLength)
+            } elseif ($kind -eq 1) {
+                if ($payloadLength -ne $chunkLength64 -or $payloadOffset + $payloadRelativeOffset + $chunkLength64 -gt [uint64]$delta.Length) { throw "Retail HGDL replacement chunk $index exceeds payload bounds." }
+                $result.Write($delta, [int]($payloadOffset + $payloadRelativeOffset), $chunkLength)
+            } else {
+                throw "Retail HGDL contains unsupported chunk kind $kind at index $index."
+            }
+            $written += $chunkLength64
+        }
+        if ($written -ne $targetSize64 -or $result.Length -ne $targetSize) { throw "Retail HGDL reconstruction size mismatch: expected $targetSize64, wrote $written." }
+        [byte[]]$reconstructed = $result.ToArray()
+        $actualTargetHash = (Get-FileHash -InputStream ([IO.MemoryStream]::new($reconstructed)) -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($targetHash -cne $actualTargetHash) { throw "Retail HGDL target hash mismatch: header=$targetHash actual=$actualTargetHash." }
+        return ,$reconstructed
+    } finally {
+        $result.Dispose()
+    }
+}
+
+function Get-RetailExportFileSnapshot {
+    <# Capture deterministic hashes for exported retail scripts and binary assets. #>
+    param([Parameter(Mandatory = $true)] [string]$Root)
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { throw "Retail export root was not created: $Root" }
+    $prefix = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    return @(
+        Get-ChildItem -LiteralPath $Root -Recurse -File | ForEach-Object {
+            [pscustomobject]@{
+                RelativePath = $_.FullName.Substring($prefix.Length).Replace('/', '\')
+                Length = [int64]$_.Length
+                Sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+            }
+        } | Sort-Object RelativePath
+    )
+}
+
+function Get-RetailXmlProtectedFingerprint {
+    <# Hash every unchanged SWF tag while excluding only the intentional menu/sprite-600 route. #>
+    param([Parameter(Mandatory = $true)] [string]$XmlPath)
+    [xml]$document = Get-Content -LiteralPath $XmlPath -Raw
+    return @(
+        foreach ($item in @($document.SelectNodes('/swf/tags/item'))) {
+            $type = $item.GetAttribute('type')
+            $spriteId = $item.GetAttribute('spriteId')
+            $itemText = $item.OuterXml
+            if ($type -eq 'DefineSpriteTag' -and $spriteId -in @('333', '600')) { continue }
+            if ($type -eq 'ExportAssetsTag' -and ($itemText.Contains('ScreenOptionsGraphics') -or $itemText.Contains('>600<'))) { continue }
+            if ($type -eq 'DoInitActionTag' -and $itemText.Contains('600')) { continue }
+            [pscustomobject]@{
+                Type = $type
+                Sha256 = (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($itemText))) -Algorithm SHA256).Hash
+            }
+        }
+    ) | Sort-Object Type, Sha256
+}
+
+function Assert-RetailExportPreservation {
+    <# Require verified-retail XML/scripts/assets to remain byte-identical outside the explicit shell allowlist. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$RetailXmlPath,
+        [Parameter(Mandatory = $true)] [string]$ReconstructedXmlPath,
+        [Parameter(Mandatory = $true)] [string]$RetailExportRoot,
+        [Parameter(Mandatory = $true)] [string]$ReconstructedExportRoot
+    )
+
+    $intentionalScripts = @(
+        'scripts\ScreenOptionsGraphics.as',
+        'scripts\ScreenOptionsAudio_2.as',
+        'scripts\DefineSprite_333_ScreenOptionsMenu\frame_1\DoAction_2.as',
+        'scripts\DefineSprite_333_ScreenOptionsMenu\frame_1\PlaceObject2_117_GenericButton_37\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_333_ScreenOptionsMenu\frame_1\PlaceObject2_117_GenericButton_43\CLIPACTIONRECORD on(construct).as',
+        'scripts\DefineSprite_333_ScreenOptionsMenu\frame_1\PlaceObject2_117_GenericButton_43\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\DoAction.as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_15\DoAction.as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_141\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_133\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_125\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_117\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_109\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_101\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_93\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_85\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_77\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_69\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_61\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_53\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_45\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_37\CLIPACTIONRECORD onClipEvent(load).as',
+        'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_29\CLIPACTIONRECORD onClipEvent(load).as'
+    )
+    $retailFiles = @(Get-RetailExportFileSnapshot -Root $RetailExportRoot)
+    $reconstructedFiles = @(Get-RetailExportFileSnapshot -Root $ReconstructedExportRoot)
+    $allPaths = @($retailFiles.RelativePath + $reconstructedFiles.RelativePath | Sort-Object -Unique)
+    foreach ($relativePath in $allPaths) {
+        $retail = $retailFiles | Where-Object RelativePath -ceq $relativePath | Select-Object -First 1
+        $reconstructed = $reconstructedFiles | Where-Object RelativePath -ceq $relativePath | Select-Object -First 1
+        $intentional = $intentionalScripts -contains $relativePath -or $relativePath -match '^scripts\\DefineSprite_600_ScreenOptionsGraphics\\' -or $relativePath -match '^sprites\\(?:333|600)(?:\\|\.|$)'
+        if ($intentional) { continue }
+        if ($null -eq $retail -or $null -eq $reconstructed -or $retail.Length -ne $reconstructed.Length -or $retail.Sha256 -cne $reconstructed.Sha256) {
+            throw "Verified retail asset/script changed outside the explicit shell allowlist: $relativePath"
+        }
+    }
+    $retailXmlFingerprint = @(Get-RetailXmlProtectedFingerprint -XmlPath $RetailXmlPath)
+    $reconstructedXmlFingerprint = @(Get-RetailXmlProtectedFingerprint -XmlPath $ReconstructedXmlPath)
+    if ($retailXmlFingerprint.Count -ne $reconstructedXmlFingerprint.Count) { throw 'Verified retail XML protected tag count changed outside the explicit sprite 333/600 allowlist.' }
+    for ($index = 0; $index -lt $retailXmlFingerprint.Count; $index++) {
+        if ($retailXmlFingerprint[$index].Type -cne $reconstructedXmlFingerprint[$index].Type -or $retailXmlFingerprint[$index].Sha256 -cne $reconstructedXmlFingerprint[$index].Sha256) {
+            throw "Verified retail XML protected tag changed at fingerprint index $index outside the explicit shell allowlist."
+        }
+    }
+}
+
 function Assert-ShellLiveHandshakeExport {
     param([string]$GfxPath, [string]$ExportRoot, [string]$FfdecPath, [string]$Context)
     $export = Invoke-ExternalProcess -FilePath $FfdecPath -Arguments @('-export', 'script', $ExportRoot, $GfxPath)
@@ -215,27 +412,72 @@ function Assert-BuilderRejectsIni {
 }
 
 function Assert-CurrentGraphicsSourceProvenance {
-    <# Inspect only current shell sources so historical exports cannot satisfy retail proof. #>
+    <# Prove the exact production shell call graph and keep legacy builders outside that graph. #>
     param(
         [Parameter(Mandatory = $true)] [string]$RebuildPath,
         [Parameter(Mandatory = $true)] [string]$ShellTemplatePath,
-        [Parameter(Mandatory = $true)] [string]$ShellBuilderPath
+        [Parameter(Mandatory = $true)] [string]$ShellBuilderPath,
+        [Parameter(Mandatory = $true)] [string]$BuilderProgramPath,
+        [Parameter(Mandatory = $true)] [string]$XmlPatcherPath
     )
 
-    foreach ($path in @($RebuildPath, $ShellTemplatePath, $ShellBuilderPath)) {
+    foreach ($path in @($RebuildPath, $ShellTemplatePath, $ShellBuilderPath, $BuilderProgramPath, $XmlPatcherPath)) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Current graphics source was not found: $path" }
     }
     $rebuildText = Get-Content -LiteralPath $RebuildPath -Raw
     $shellTemplateText = Get-Content -LiteralPath $ShellTemplatePath -Raw
     $shellBuilderText = Get-Content -LiteralPath $ShellBuilderPath -Raw
-    $shellBuilderMatch = [regex]::Match($shellBuilderText, '(?s)private static void PatchFrontendShellScripts\(.*?private static void ValidateShellInputs')
-    if (-not $shellBuilderMatch.Success) { throw 'Current shell builder source method could not be isolated.' }
-    foreach ($source in @(
-        [pscustomobject]@{ Name = 'rebuild'; Text = $rebuildText },
-        [pscustomobject]@{ Name = 'shell template'; Text = $shellTemplateText },
-        [pscustomobject]@{ Name = 'shell builder'; Text = $shellBuilderMatch.Value }
-    )) {
-        foreach ($forbidden in @('F:\helenhook.7z', 'F:/helenhook.7z', 'batma/', 'batma\', 'Program Files', 'full-controller', 'GraphicsVsyncController', 'InitialVsync', 'DraftVsync', 'GraphicsExitPrompt', 'DefineSprite_601', 'Helen_', 'prompt export', 'prompt route', 'old package', 'historical')) {
+    $builderProgramText = Get-Content -LiteralPath $BuilderProgramPath -Raw
+    $xmlPatcherText = Get-Content -LiteralPath $XmlPatcherPath -Raw
+    $legacyTemplatePath = Join-Path (Split-Path -Parent $ShellTemplatePath) 'GraphicsOptionsScriptTemplates.cs'
+    if (-not (Test-Path -LiteralPath $legacyTemplatePath -PathType Leaf)) { throw "Legacy graphics template source was not found: $legacyTemplatePath" }
+    $legacyTemplateText = Get-Content -LiteralPath $legacyTemplatePath -Raw
+    $legacySourceText = $legacyTemplateText + $shellBuilderText + $xmlPatcherText
+    $shellBuilderShellMatch = [regex]::Match($shellBuilderText, '(?s)private static void PatchFrontendShellScripts\(.*?(?=\r?\n\s*/// <summary>)')
+    $buildShellMatch = [regex]::Match($shellBuilderText, '(?s)public static void BuildShell\(.*?(?=\r?\n\s*/// <summary>)')
+    $programDispatchMatch = [regex]::Match($builderProgramText, '(?s)"build-main-menu-graphics-shell"\s*=>\s*RunBuildMainMenuGraphicsShell\(tail\)')
+    $programShellMatch = [regex]::Match($builderProgramText, '(?s)private static int RunBuildMainMenuGraphicsShell\(.*?(?=\r?\n\s*/// <summary>)')
+    $patchShellMatch = [regex]::Match($xmlPatcherText, '(?s)public static void PatchShell\(.*?(?=\r?\n\s*/// <summary>)')
+    $shellSpriteMatch = [regex]::Match($xmlPatcherText, '(?s)private static void AppendGraphicsShellSpriteAndExport\(.*?(?=\r?\n\s*/// <summary>)')
+    foreach ($match in @($shellBuilderShellMatch, $buildShellMatch, $programShellMatch, $patchShellMatch, $shellSpriteMatch)) {
+        if (-not $match.Success) { throw 'Current graphics shell call-graph method could not be isolated.' }
+    }
+    if (-not $programDispatchMatch.Success) { throw 'NativeSubtitleExePatcher does not dispatch the production shell command to RunBuildMainMenuGraphicsShell.' }
+    $shellBuilderShellText = $shellBuilderShellMatch.Value
+    $buildShellText = $buildShellMatch.Value
+    $programShellText = $programShellMatch.Value
+    $patchShellText = $patchShellMatch.Value
+    $shellSpriteText = $shellSpriteMatch.Value
+    foreach ($required in @('build-main-menu-graphics-shell', '--output-dir', '--ffdec', '--ini', 'GraphicsOptionsAssetBuilder.BuildShell(paths)')) {
+        Assert-ContainsOrdinal -Text ($rebuildText + $programShellText) -Token $required -Context 'production graphics shell call graph'
+    }
+    foreach ($required in @('GraphicsOptionsShellBuildPaths paths = GraphicsOptionsShellBuildPaths.FromRoot', 'GraphicsOptionsAssetBuilder.BuildShell(paths)')) {
+        Assert-ContainsOrdinal -Text $programShellText -Token $required -Context 'NativeSubtitleExePatcher graphics shell route'
+    }
+    foreach ($required in @('ValidateShellInputs(paths)', 'BatmanGraphicsIniBootstrapLoader.Load(paths.BatmanUserIniPath)', 'PatchFrontendShellScripts(paths.FrontendWorkingScriptsPath, bootstrapSnapshot)', 'ValidateShellPatchedScriptSet(paths.FrontendWorkingScriptsPath)', 'GraphicsOptionsXmlPatcher.PatchShell(paths.FrontendXmlPath, paths.FrontendPatchedXmlPath)', '"-importScript"', 'paths.FrontendOutputGfxPath', 'paths.FrontendWorkingScriptsPath')) {
+        Assert-ContainsOrdinal -Text $buildShellText -Token $required -Context 'GraphicsOptionsAssetBuilder BuildShell route'
+    }
+    Assert-ContainsOrdinal -Text $shellBuilderShellText -Token 'GraphicsOptionsShellScriptTemplates' -Context 'shell script template route'
+    Assert-ContainsOrdinal -Text $patchShellText -Token 'AppendGraphicsShellSpriteAndExport(tags, optionsGamePcSprite)' -Context 'selective sprite-600 patch route'
+    foreach ($required in @('ScreenOptionsGraphicsSpriteId', 'PatchGraphicsScreenSprite', 'CreateExportAssetsTag', 'CloneDoInitActionTagForSprite')) {
+        Assert-ContainsOrdinal -Text $shellSpriteText -Token $required -Context 'selective sprite-600 import route'
+    }
+    foreach ($legacyToken in @('Helen_', 'GraphicsExitPrompt', 'DefineSprite_601')) {
+        Assert-ContainsOrdinal -Text $legacySourceText -Token $legacyToken -Context "legacy full-controller source ($legacyToken)"
+    }
+    foreach ($legacyToken in @('public static void Patch(string inputXmlPath, string outputXmlPath)', 'AppendGraphicsSpritesAndExports', 'GraphicsExitPromptSpriteId')) {
+        Assert-ContainsOrdinal -Text $xmlPatcherText -Token $legacyToken -Context "legacy XML patch route ($legacyToken)"
+    }
+    foreach ($forbidden in @('F:\helenhook.7z', 'F:/helenhook.7z', 'batma/', 'batma\', 'Program Files', 'GraphicsVsyncController', 'InitialVsync', 'DraftVsync', 'GraphicsExitPrompt', 'DefineSprite_601', 'Helen_', 'prompt export', 'prompt route', 'old package', 'historical', 'PatchFrontendScripts(', 'GraphicsOptionsScriptTemplates', 'AppendGraphicsSpritesAndExports', 'GraphicsExitPromptSpriteId', 'YesNoPrompt', 'Patch(inputXmlPath, outputXmlPath)')) {
+        foreach ($source in @(
+            [pscustomobject]@{ Name = 'rebuild'; Text = $rebuildText },
+            [pscustomobject]@{ Name = 'current shell templates'; Text = $shellTemplateText },
+            [pscustomobject]@{ Name = 'shell builder BuildShell'; Text = $buildShellText },
+            [pscustomobject]@{ Name = 'shell builder shell method'; Text = $shellBuilderShellText },
+            [pscustomobject]@{ Name = 'NativeSubtitleExePatcher shell route'; Text = $programShellText },
+            [pscustomobject]@{ Name = 'XmlPatcher PatchShell'; Text = $patchShellText },
+            [pscustomobject]@{ Name = 'XmlPatcher selective sprite route'; Text = $shellSpriteText }
+        )) {
             Assert-NotContainsOrdinal -Text $source.Text -Token $forbidden -Context "$($source.Name) graphics provenance"
         }
     }
@@ -288,6 +530,7 @@ $invalidMalformedOutputRoot = Join-Path $tempRoot 'invalid-malformed-output'
 $bootstrapATarget = Join-Path $tempRoot 'Frontend-a.umap'
 $bootstrapBTarget = Join-Path $tempRoot 'Frontend-b.umap'
 $normalTarget = Join-Path $tempRoot 'Frontend-normal.umap'
+$reconstructedTarget = Join-Path $tempRoot 'Frontend-reconstructed.umap'
 $bootstrapADelta = Join-Path $tempRoot 'Frontend-a.hgdelta'
 $bootstrapBDelta = Join-Path $tempRoot 'Frontend-b.hgdelta'
 $normalDelta = Join-Path $tempRoot 'Frontend-normal.hgdelta'
@@ -297,8 +540,16 @@ $normalGfx = Join-Path $normalRoot 'MainV2-graphics-options.gfx'
 $manifestPath = Join-Path $tempRoot 'patch.manifest.json'
 $patchedPackage = $bootstrapBTarget
 $extractedGfx = Join-Path $tempRoot 'MainV2.gfx'
+$retailBaseGfx = Join-Path $tempRoot 'MainV2-retail.gfx'
+$reconstructedGfx = Join-Path $tempRoot 'MainV2-reconstructed.gfx'
 $xmlPath = Join-Path $tempRoot 'MainV2.xml'
+$retailBaseXmlPath = Join-Path $tempRoot 'MainV2-retail.xml'
+$reconstructedXmlPath = Join-Path $tempRoot 'MainV2-reconstructed.xml'
 $exportRoot = Join-Path $tempRoot 'export'
+$retailBaseExportRoot = Join-Path $tempRoot 'export-retail'
+$reconstructedExportRoot = Join-Path $tempRoot 'export-reconstructed'
+$retailBaseAssetExportRoot = Join-Path $tempRoot 'assets-retail'
+$reconstructedAssetExportRoot = Join-Path $tempRoot 'assets-reconstructed'
 $normalTargetPath = Join-Path $BuilderRoot 'generated\graphics-options-experiment\Frontend-graphics-options.umap'
 $normalDeltaPath = Join-Path $BatmanRoot 'helengamehook\packs\batman-aa-graphics-options\builds\steam-goty-1.0\assets\deltas\Frontend-graphics-options.hgdelta'
 $rebuildSourcePath = Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1'
@@ -306,10 +557,12 @@ $buildHgdeltaPath = Join-Path $PSScriptRoot 'Build-Hgdelta.ps1'
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
     . $rebuildSourcePath -FunctionsOnly -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot -BatmanUserIniPath $BatmanUserIniPath
-    Assert-CurrentGraphicsSourceProvenance -RebuildPath $rebuildSourcePath -ShellTemplatePath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsShellScriptTemplates.cs') -ShellBuilderPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsAssetBuilder.cs')
+    Assert-CurrentGraphicsSourceProvenance -RebuildPath $rebuildSourcePath -ShellTemplatePath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsShellScriptTemplates.cs') -ShellBuilderPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsAssetBuilder.cs') -BuilderProgramPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\Program.cs') -XmlPatcherPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsXmlPatcher.cs')
     New-GraphicsOptionsIniFixture -SourcePath $BatmanUserIniPath -DestinationPath $bootstrapAIniPath -Vsync $false -MsaaSamples 1 -PhysxLevel 0 -Stereo $false
     New-GraphicsOptionsIniFixture -SourcePath $BatmanUserIniPath -DestinationPath $bootstrapBIniPath -Vsync $true -MsaaSamples 16 -PhysxLevel 2 -Stereo $true
     New-MalformedIniFixture -SourcePath $BatmanUserIniPath -DestinationPath $malformedIniPath
+    Assert-ProductionGraphicsIniSnapshot -BuilderProject $builderProject -Configuration $Configuration -IniPath $bootstrapAIniPath -ExpectedValues @(0, 0, 0, 0) -Context 'Group 1 A production parser'
+    Assert-ProductionGraphicsIniSnapshot -BuilderProject $builderProject -Configuration $Configuration -IniPath $bootstrapBIniPath -ExpectedValues @(1, 5, 2, 1) -Context 'Group 1 B production parser'
     Assert-BuilderRejectsIni -BuilderProject $builderProject -Configuration $Configuration -BuilderRoot $BuilderRoot -OutputDirectory $invalidMissingOutputRoot -FfdecPath $ffdec -IniPath $missingIniPath -ExpectedDiagnostic "Required path not found: $missingIniPath" -Context 'Missing INI validation'
     Assert-BuilderRejectsIni -BuilderProject $builderProject -Configuration $Configuration -BuilderRoot $BuilderRoot -OutputDirectory $invalidMalformedOutputRoot -FfdecPath $ffdec -IniPath $malformedIniPath -ExpectedDiagnostic "INI value 'SystemSettings.UseVsync' must be a boolean-like value but was 'Malformed'." -Context 'Malformed INI validation'
     Invoke-ShellBuild -BuilderProject $builderProject -Configuration $Configuration -BuilderRoot $BuilderRoot -OutputDirectory $bootstrapARoot -FfdecPath $ffdec -IniPath $bootstrapAIniPath
@@ -320,6 +573,9 @@ try {
     $aShellHash = (Get-FileHash -LiteralPath (Join-Path $bootstrapARoot 'MainV2-graphics-options.gfx') -Algorithm SHA256).Hash
     $bShellHash = (Get-FileHash -LiteralPath (Join-Path $bootstrapBRoot 'MainV2-graphics-options.gfx') -Algorithm SHA256).Hash
     $normalShellHash = (Get-FileHash -LiteralPath $normalGfx -Algorithm SHA256).Hash
+    Assert-ExpectedSha256 -Hash $aShellHash -Expected $ExpectedGraphicsShellSha256 -Context 'Group 1 A shell GFX hash'
+    Assert-ExpectedSha256 -Hash $bShellHash -Expected $ExpectedGraphicsShellSha256 -Context 'Group 1 B shell GFX hash'
+    Assert-ExpectedSha256 -Hash $normalShellHash -Expected $ExpectedGraphicsShellSha256 -Context 'normal shell GFX hash'
     if ($aShellHash -cne $bShellHash -or $aShellHash -cne $normalShellHash) { throw "Graphics shell bytes vary with build-time Group 1 values. A=$aShellHash B=$bShellHash normal=$normalShellHash" }
     if (-not (Test-Path -LiteralPath $prototypeGfx)) { throw "Shell prototype was not generated: $prototypeGfx" }
 
@@ -341,17 +597,46 @@ try {
         [pscustomobject]@{ Name = 'Frontend delta'; A = (Get-FileHash -LiteralPath $bootstrapADelta -Algorithm SHA256).Hash; B = (Get-FileHash -LiteralPath $bootstrapBDelta -Algorithm SHA256).Hash; Normal = (Get-FileHash -LiteralPath $normalDelta -Algorithm SHA256).Hash }
     )
     foreach ($hash in $hashes) {
+        Assert-FullSha256 -Hash $hash.A -Context "$($hash.Name) A hash"
+        Assert-FullSha256 -Hash $hash.B -Context "$($hash.Name) B hash"
+        Assert-FullSha256 -Hash $hash.Normal -Context "$($hash.Name) normal hash"
         if ($hash.A -cne $hash.B -or $hash.A -cne $hash.Normal) { throw "$($hash.Name) provenance mismatch. A=$($hash.A) B=$($hash.B) normal=$($hash.Normal)" }
     }
     if (-not (Test-Path -LiteralPath $normalTargetPath -PathType Leaf) -or -not (Test-Path -LiteralPath $normalDeltaPath -PathType Leaf)) { throw 'Production graphics target/delta was not regenerated before retail provenance validation.' }
     $productionTargetHash = (Get-FileHash -LiteralPath $normalTargetPath -Algorithm SHA256).Hash
     $productionDeltaHash = (Get-FileHash -LiteralPath $normalDeltaPath -Algorithm SHA256).Hash
+    Assert-FullSha256 -Hash $productionTargetHash -Context 'production target hash'
+    Assert-FullSha256 -Hash $productionDeltaHash -Context 'production delta hash'
     if ($hashes[1].A -cne $productionTargetHash -or $hashes[2].A -cne $productionDeltaHash) { throw "Isolated outputs do not match the regenerated production artifact. isolatedTarget=$($hashes[1].A) productionTarget=$productionTargetHash isolatedDelta=$($hashes[2].A) productionDelta=$productionDeltaHash" }
+    [byte[]]$reconstructedBytes = Reconstruct-RetailHgdeltaTarget -BasePath $RetailFrontendPackagePath -DeltaPath $normalDelta
+    [IO.File]::WriteAllBytes($reconstructedTarget, $reconstructedBytes)
+    [byte[]]$normalTargetBytes = [IO.File]::ReadAllBytes($normalTarget)
+    [byte[]]$productionTargetBytes = [IO.File]::ReadAllBytes($normalTargetPath)
+    if (-not [Linq.Enumerable]::SequenceEqual($reconstructedBytes, $normalTargetBytes)) { throw 'Retail delta reconstruction does not byte-match the isolated current-run target.' }
+    if (-not [Linq.Enumerable]::SequenceEqual($reconstructedBytes, $productionTargetBytes)) { throw 'Retail delta reconstruction does not byte-match the regenerated production target.' }
+    $reconstructedTargetHash = (Get-FileHash -LiteralPath $reconstructedTarget -Algorithm SHA256).Hash
+    Assert-FullSha256 -Hash $reconstructedTargetHash -Context 'reconstructed target hash'
+    Write-Output "Retail round-trip reconstruction: Target=$reconstructedTargetHash (verified retail base + current delta)"
     Write-Output "Reproducibility hashes: GFX=$aShellHash Target=$($hashes[1].A) Delta=$($hashes[2].A)"
 
     . (Join-Path $PSScriptRoot 'BatmanPackVerificationHelpers.ps1')
+    $patchedPackage = $reconstructedTarget
     $patchedStorage = Get-UnrealPackageStorageInfo -Path $patchedPackage
     if ($patchedStorage.CompressionChunkCount -le 0) { throw 'Retail patch output must remain chunk-compressed.' }
+    $baseExtract = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--no-build', '--project', $patcherProject, '-c', $Configuration, '--', 'extract-gfx', '--package', $RetailFrontendPackagePath, '--owner', 'MainMenu', '--name', 'MainV2', '--output', $retailBaseGfx)
+    if ($baseExtract.ExitCode -ne 0) { throw 'Failed to extract verified retail MainV2 for preservation comparison.' }
+    $baseXml = Invoke-ExternalProcess -FilePath $ffdec -Arguments @('-swf2xml', $retailBaseGfx, $retailBaseXmlPath)
+    if ($baseXml.ExitCode -ne 0) { throw 'FFDec failed to export verified retail MainV2 XML.' }
+    $baseScriptsAssets = Invoke-ExternalProcess -FilePath $ffdec -Arguments @('-export', 'script,image,shape,sprite', $retailBaseAssetExportRoot, $retailBaseGfx)
+    if ($baseScriptsAssets.ExitCode -ne 0) { throw 'FFDec failed to export verified retail MainV2 scripts/assets.' }
+    $reconstructedExtract = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--no-build', '--project', $patcherProject, '-c', $Configuration, '--', 'extract-gfx', '--package', $patchedPackage, '--owner', 'MainMenu', '--name', 'MainV2', '--output', $reconstructedGfx)
+    if ($reconstructedExtract.ExitCode -ne 0) { throw 'Failed to extract independently reconstructed MainV2.' }
+    $reconstructedXml = Invoke-ExternalProcess -FilePath $ffdec -Arguments @('-swf2xml', $reconstructedGfx, $reconstructedXmlPath)
+    if ($reconstructedXml.ExitCode -ne 0) { throw 'FFDec failed to export independently reconstructed MainV2 XML.' }
+    $reconstructedScriptsAssets = Invoke-ExternalProcess -FilePath $ffdec -Arguments @('-export', 'script,image,shape,sprite', $reconstructedAssetExportRoot, $reconstructedGfx)
+    if ($reconstructedScriptsAssets.ExitCode -ne 0) { throw 'FFDec failed to export independently reconstructed MainV2 scripts/assets.' }
+    Assert-RetailExportPreservation -RetailXmlPath $retailBaseXmlPath -ReconstructedXmlPath $reconstructedXmlPath -RetailExportRoot $retailBaseAssetExportRoot -ReconstructedExportRoot $reconstructedAssetExportRoot
+    Write-Output 'Retail preservation: verified retail XML, scripts, images, shapes, and sprites match outside explicit sprite 333/600 and 21-script allowlists.'
     $extract = Invoke-ExternalProcess -FilePath 'dotnet' -Arguments @('run', '--no-build', '--project', $patcherProject, '-c', $Configuration, '--', 'extract-gfx', '--package', $patchedPackage, '--owner', 'MainMenu', '--name', 'MainV2', '--output', $extractedGfx)
     if ($extract.ExitCode -ne 0) { throw 'Failed to extract patched retail MainV2.' }
     $xmlResult = Invoke-ExternalProcess -FilePath $ffdec -Arguments @('-swf2xml', $extractedGfx, $xmlPath)
