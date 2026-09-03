@@ -821,7 +821,7 @@ foreach ($RequiredScreenToken in @(
     'function GetDetailLevelDraftIndex()',
     'function GetDetailLevelInitialIndex()',
     'function CanEditDetailLevel()',
-    'function SetDetailPreset(index)',
+    'function SetDetailPreset(index,forward)',
     'function ToggleDetailPreset()',
     'function IncrementDetailPreset()',
     'function DecrementDetailPreset()',
@@ -933,6 +933,26 @@ if ($SetDraftIndexBody.IndexOf('FE_SetControlType', [System.StringComparison]::O
     $SetDraftIndexBody.IndexOf('FE_GetControlType', [System.StringComparison]::Ordinal) -ge 0) {
     throw 'Graphics setting edits must remain local drafts and must not use the frontend carrier.'
 }
+$PresetMethodNames = @('GetDetailLevelDraftIndex', 'GetDetailLevelInitialIndex', 'CanEditDetailLevel', 'SetDetailPreset', 'ToggleDetailPreset', 'IncrementDetailPreset', 'DecrementDetailPreset')
+$ForbiddenLocalPresetTokens = @('FE_SetControlType', 'FE_GetControlType', 'Helen_', 'ReadRequest', 'ReadResponseBase', 'WriteRequestBase', 'WriteAcknowledgementBase', 'FailureResponse', 'ApplyQueue', 'CurrentPendingCode')
+foreach ($PresetMethodName in $PresetMethodNames) {
+    $PresetMethodBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName $PresetMethodName -Context "Graphics local method $PresetMethodName"
+    foreach ($ForbiddenLocalPresetToken in $ForbiddenLocalPresetTokens) {
+        if ($PresetMethodBody.IndexOf($ForbiddenLocalPresetToken, [System.StringComparison]::Ordinal) -ge 0) {
+            throw "Graphics local method $PresetMethodName contains forbidden transport/write token: $ForbiddenLocalPresetToken"
+        }
+    }
+}
+$SetDetailPresetBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'SetDetailPreset' -Context 'Graphics detail preset direction controller'
+Assert-ContainsOrdinal -Text $SetDetailPresetBody -Token 'if(forward)' -Context 'Graphics detail preset forward/back direction'
+Assert-ContainsOrdinal -Text $SetDetailPresetBody -Token 'UI_FrontEndSFX.UI_Forward' -Context 'Graphics detail preset forward sound'
+Assert-ContainsOrdinal -Text $SetDetailPresetBody -Token 'UI_FrontEndSFX.UI_Back' -Context 'Graphics detail preset backward sound'
+$ToggleDetailPresetBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'ToggleDetailPreset' -Context 'Graphics detail preset activation controller'
+Assert-ContainsOrdinal -Text $ToggleDetailPresetBody -Token 'this.SetDetailPreset(targetIndex,true);' -Context 'Graphics detail preset activation direction'
+$IncrementDetailPresetBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'IncrementDetailPreset' -Context 'Graphics detail preset right controller'
+Assert-ContainsOrdinal -Text $IncrementDetailPresetBody -Token 'this.SetDetailPreset(currentIndex + 1,true);' -Context 'Graphics detail preset right direction'
+$DecrementDetailPresetBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'DecrementDetailPreset' -Context 'Graphics detail preset left controller'
+Assert-ContainsOrdinal -Text $DecrementDetailPresetBody -Token 'this.SetDetailPreset(targetIndex,false);' -Context 'Graphics detail preset left direction'
 $ToggleSettingBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'ToggleSetting' -Context 'Graphics normal row action'
 Assert-ContainsOrdinal -Text $ToggleSettingBody -Token 'if(nextIndex >= setting.Values.length)' -Context 'Graphics normal row action boundary'
 Assert-ContainsOrdinal -Text $ToggleSettingBody -Token 'nextIndex = 0;' -Context 'Graphics normal row action wrap'
@@ -1515,6 +1535,10 @@ function settingSignals() {
     return calls.filter(call => call.name === 'FE_SetControlType').map(call => call.args[0]);
 }
 
+function soundSignals() {
+    return calls.filter(call => call.name === 'FE_PlaySoundFromString').map(call => call.args[0]);
+}
+
 function makeScreen() {
     const screen = {
         blockStates: [],
@@ -1677,22 +1701,22 @@ controller.IncrementSetting(4);
 assert.strictEqual(controller.Settings[1].DraftIndex, 2);
 assert.strictEqual(controller.CanApply(), true);
 
-controller.SetDetailPreset(0);
+controller.SetDetailPreset(0, true);
 assert.strictEqual(controller.GetDetailLevelDraftIndex(), 0);
-controller.SetDetailPreset(1);
+controller.SetDetailPreset(1, true);
 assert.deepStrictEqual(controller.Settings.slice(2, 9).map(setting => setting.DraftIndex), [1, 1, 0, 0, 0, 0, 0]);
 assert.strictEqual(controller.GetDetailLevelDraftIndex(), 1);
-controller.SetDetailPreset(2);
+controller.SetDetailPreset(2, true);
 assert.deepStrictEqual(controller.Settings.slice(2, 9).map(setting => setting.DraftIndex), [1, 1, 1, 1, 1, 1, 0]);
 assert.strictEqual(controller.GetDetailLevelDraftIndex(), 2);
-controller.SetDetailPreset(3);
+controller.SetDetailPreset(3, true);
 assert.deepStrictEqual(controller.Settings.slice(2, 9).map(setting => setting.DraftIndex), [1, 1, 1, 1, 1, 1, 1]);
 assert.strictEqual(controller.GetDetailLevelDraftIndex(), 3);
 controller.IncrementDetailPreset();
 assert.strictEqual(controller.GetDetailLevelDraftIndex(), 3);
 controller.DecrementDetailPreset();
 assert.strictEqual(controller.GetDetailLevelDraftIndex(), 2);
-controller.SetDetailPreset(3);
+controller.SetDetailPreset(3, true);
 controller.DecrementSetting(9);
 assert.strictEqual(controller.GetDetailLevelDraftIndex(), 4);
 controller.IncrementDetailPreset();
@@ -1704,11 +1728,72 @@ assert.strictEqual(controller.GetDetailLevelDraftIndex(), 0);
 assert.strictEqual(settingSignals().length, 11);
 
 setNow(0);
+environment = makeEnvironment();
+controller = environment.controller;
+initialize(controller, Array(11).fill(0));
+const detailRow = loadRow(rowScripts[4], environment.screen);
+function assertDetailRowState(expectedText, expectedLeft, expectedRight) {
+    detailRow.Update();
+    assert.strictEqual(detailRow.ItemText.text, expectedText);
+    assert.strictEqual(detailRow.LeftClicker._visible, expectedLeft);
+    assert.strictEqual(detailRow.RightClicker._visible, expectedRight);
+}
+assertDetailRowState('Low', false, true);
+clearCalls();
+detailRow.Increment();
+assert.deepStrictEqual(soundSignals(), ['UI_FrontEndSFX.UI_Forward']);
+assertDetailRowState('Medium', true, true);
+clearCalls();
+detailRow.RunAction();
+assert.deepStrictEqual(soundSignals(), ['UI_FrontEndSFX.UI_Forward']);
+assertDetailRowState('High', true, true);
+clearCalls();
+detailRow.Increment();
+assert.deepStrictEqual(soundSignals(), ['UI_FrontEndSFX.UI_Forward']);
+assertDetailRowState('Very High', true, false);
+clearCalls();
+detailRow.Increment();
+assert.deepStrictEqual(soundSignals(), []);
+assertDetailRowState('Very High', true, false);
+controller.DecrementSetting(9);
+assertDetailRowState('Custom', true, false);
+clearCalls();
+detailRow.Increment();
+assert.deepStrictEqual(soundSignals(), []);
+assertDetailRowState('Custom', true, false);
+clearCalls();
+detailRow.Decrement();
+assert.deepStrictEqual(soundSignals(), ['UI_FrontEndSFX.UI_Back']);
+assertDetailRowState('Very High', true, false);
+clearCalls();
+detailRow.RunAction();
+assert.deepStrictEqual(soundSignals(), ['UI_FrontEndSFX.UI_Forward']);
+assertDetailRowState('Low', false, true);
+clearCalls();
+detailRow.Decrement();
+assert.deepStrictEqual(soundSignals(), []);
+assertDetailRowState('Low', false, true);
+
+setNow(0);
+environment = makeEnvironment();
+controller = environment.controller;
+initialize(controller, Array(11).fill(0));
+clearCalls();
+controller.IncrementSetting(6);
+assert.strictEqual(controller.Settings[2].DraftIndex, 1);
+assert.strictEqual(environment.screen.TryBack(), true);
+assert.strictEqual(environment.screen.outTransitionStarted, true);
+assert.strictEqual(environment.screen.returnFromScreenCount, 1);
+assert.strictEqual(controller.ApplyInProgress, false);
+assert.deepStrictEqual(settingSignals(), []);
+assert.strictEqual(calls.some(call => call.name === 'FE_SetControlType' && [4990, 4991, 4970, 4971].includes(call.args[0])), false);
+
+setNow(0);
 clearCalls();
 environment = makeEnvironment();
 controller = environment.controller;
 initialize(controller, Array(11).fill(0));
-controller.SetDetailPreset(2);
+controller.SetDetailPreset(2, true);
 controller.ApplyChanges();
 assert.strictEqual(environment.screen.bBlockInput, true);
 assert.strictEqual(environment.screen.bLockInput, true);

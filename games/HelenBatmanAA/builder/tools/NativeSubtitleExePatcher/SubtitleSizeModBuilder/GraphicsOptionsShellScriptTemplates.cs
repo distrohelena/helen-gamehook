@@ -283,13 +283,20 @@ internal static class GraphicsOptionsShellScriptTemplates
               }
               return true;
            }
-           function SetDetailPreset(index)
+           function SetDetailPreset(index,forward)
            {
               if((index != 0 && index != 1 && index != 2 && index != 3) || !this.CanEditDetailLevel())
               {
                  return undefined;
               }
-              flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Forward");
+              if(forward)
+              {
+                 flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Forward");
+              }
+              else
+              {
+                 flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Back");
+              }
               var leafIndex = 0;
               while(leafIndex < this.DetailLeafRows.length)
               {
@@ -315,7 +322,7 @@ internal static class GraphicsOptionsShellScriptTemplates
               {
                  targetIndex = currentIndex + 1;
               }
-              this.SetDetailPreset(targetIndex);
+              this.SetDetailPreset(targetIndex,true);
            }
            function IncrementDetailPreset()
            {
@@ -328,7 +335,7 @@ internal static class GraphicsOptionsShellScriptTemplates
               {
                  return undefined;
               }
-              this.SetDetailPreset(currentIndex + 1);
+              this.SetDetailPreset(currentIndex + 1,true);
            }
            function DecrementDetailPreset()
            {
@@ -346,7 +353,7 @@ internal static class GraphicsOptionsShellScriptTemplates
               {
                  return undefined;
               }
-              this.SetDetailPreset(targetIndex);
+              this.SetDetailPreset(targetIndex,false);
            }
            function IsUnavailable(rowIndex)
            {
