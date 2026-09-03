@@ -41,6 +41,8 @@ namespace
         std::vector<std::string> Lines;
         /** @brief Original file encoding that must be retained when the document is persisted. */
         IniTextEncoding Encoding{ IniTextEncoding::SingleByte };
+        /** @brief Exact original bytes retained so a failed dual-file publication can restore generated output. */
+        std::string RawBytes;
     };
 
     /**
@@ -261,36 +263,83 @@ namespace
     }
 
     /**
+     * @brief Reads exact bytes from one file while permitting concurrent readers but not requiring write or delete sharing.
+     * @param path File path whose bytes should be loaded.
+     * @return Exact file bytes when the file can be read completely; otherwise no value.
+     */
+    std::optional<std::string> TryReadFileBytes(const std::filesystem::path& path)
+    {
+        const HANDLE handle = CreateFileW(
+            path.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+        {
+            return std::nullopt;
+        }
+
+        LARGE_INTEGER file_size{};
+        if (GetFileSizeEx(handle, &file_size) == FALSE ||
+            file_size.QuadPart < 0 ||
+            static_cast<unsigned long long>(file_size.QuadPart) > std::numeric_limits<std::size_t>::max())
+        {
+            CloseHandle(handle);
+            return std::nullopt;
+        }
+
+        std::string bytes(static_cast<std::size_t>(file_size.QuadPart), '\0');
+        std::size_t offset = 0;
+        bool read_succeeded = true;
+        while (offset < bytes.size())
+        {
+            const std::size_t bytes_remaining = bytes.size() - offset;
+            const DWORD request_size = bytes_remaining > static_cast<std::size_t>(MAXDWORD)
+                ? MAXDWORD
+                : static_cast<DWORD>(bytes_remaining);
+            DWORD bytes_read = 0;
+            if (ReadFile(handle, bytes.data() + offset, request_size, &bytes_read, nullptr) == FALSE || bytes_read == 0)
+            {
+                read_succeeded = false;
+                break;
+            }
+
+            offset += static_cast<std::size_t>(bytes_read);
+        }
+
+        const BOOL close_succeeded = CloseHandle(handle);
+        if (!read_succeeded || close_succeeded == FALSE)
+        {
+            return std::nullopt;
+        }
+
+        return bytes;
+    }
+
+    /**
+     * @brief Splits decoded UTF-8 INI text into normalized lines before line-oriented helpers consume it.
+     * @param text Decoded text whose CRLF or LF delimiters should be consumed.
+     * @return Lines without trailing carriage-return characters.
+     */
+    std::vector<std::string> SplitIniTextIntoLines(const std::string& text);
+
+    /**
      * @brief Reads every line from one text file while normalizing trailing carriage returns away.
      * @param path Text file path that should be loaded.
      * @return File lines without trailing carriage returns when the file opens successfully; otherwise no value.
      */
     std::optional<std::vector<std::string>> TryReadAllLines(const std::filesystem::path& path)
     {
-        std::ifstream stream(path, std::ios::binary);
-        if (!stream)
+        const std::optional<std::string> file_bytes = TryReadFileBytes(path);
+        if (!file_bytes.has_value())
         {
             return std::nullopt;
         }
 
-        std::vector<std::string> lines;
-        std::string line;
-        while (std::getline(stream, line))
-        {
-            if (!line.empty() && line.back() == '\r')
-            {
-                line.pop_back();
-            }
-
-            lines.push_back(line);
-        }
-
-        if (stream.bad())
-        {
-            return std::nullopt;
-        }
-
-        return lines;
+        return SplitIniTextIntoLines(*file_bytes);
     }
 
     /**
@@ -445,34 +494,27 @@ namespace
      */
     std::optional<IniTextDocument> TryReadIniDocument(const std::filesystem::path& path)
     {
-        std::ifstream stream(path, std::ios::binary);
-        if (!stream)
-        {
-            return std::nullopt;
-        }
-
-        const std::string file_bytes{
-            std::istreambuf_iterator<char>(stream),
-            std::istreambuf_iterator<char>() };
-        if (stream.bad())
+        const std::optional<std::string> file_bytes = TryReadFileBytes(path);
+        if (!file_bytes.has_value())
         {
             return std::nullopt;
         }
 
         IniTextDocument document;
+        document.RawBytes = *file_bytes;
         std::string decoded_text;
-        if (file_bytes.size() >= 2 &&
-            static_cast<unsigned char>(file_bytes[0]) == 0xFF &&
-            static_cast<unsigned char>(file_bytes[1]) == 0xFE)
+        if (file_bytes->size() >= 2 &&
+            static_cast<unsigned char>((*file_bytes)[0]) == 0xFF &&
+            static_cast<unsigned char>((*file_bytes)[1]) == 0xFE)
         {
-            const std::size_t encoded_length = file_bytes.size() - 2;
+            const std::size_t encoded_length = file_bytes->size() - 2;
             if ((encoded_length % sizeof(wchar_t)) != 0)
             {
                 return std::nullopt;
             }
 
             std::wstring wide_text(encoded_length / sizeof(wchar_t), L'\0');
-            std::memcpy(wide_text.data(), file_bytes.data() + 2, encoded_length);
+            std::memcpy(wide_text.data(), file_bytes->data() + 2, encoded_length);
             const std::optional<std::string> converted = TryConvertUtf16ToUtf8(wide_text);
             if (!converted.has_value())
             {
@@ -484,7 +526,7 @@ namespace
         }
         else
         {
-            decoded_text = file_bytes;
+            decoded_text = *file_bytes;
             document.Encoding = IniTextEncoding::SingleByte;
         }
 
@@ -493,12 +535,11 @@ namespace
     }
 
     /**
-     * @brief Writes one decoded INI document using its original text encoding and CRLF line endings.
-     * @param path File path that should receive the document.
+     * @brief Encodes one decoded INI document using its original text encoding and CRLF line endings.
      * @param document Decoded lines and required on-disk encoding.
-     * @return True when encoding and file output both succeed; otherwise false.
+     * @return Complete encoded bytes ready for closed-file publication, or no value when UTF-8 conversion fails.
      */
-    bool WriteIniDocument(const std::filesystem::path& path, const IniTextDocument& document)
+    std::optional<std::string> TryEncodeIniDocument(const IniTextDocument& document)
     {
         std::string text;
         for (std::size_t index = 0; index < document.Lines.size(); ++index)
@@ -512,34 +553,237 @@ namespace
 
         if (document.Encoding == IniTextEncoding::SingleByte)
         {
-            std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-            if (!stream)
-            {
-                return false;
-            }
-
-            stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-            return static_cast<bool>(stream);
+            return text;
         }
 
         const std::optional<std::wstring> wide_text = TryConvertUtf8ToUtf16(text);
         if (!wide_text.has_value())
         {
-            return false;
+            return std::nullopt;
         }
 
-        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-        if (!stream)
+        const unsigned char byte_order_mark[] = { 0xFF, 0xFE };
+        std::string encoded_bytes(reinterpret_cast<const char*>(byte_order_mark), sizeof(byte_order_mark));
+        encoded_bytes.append(
+            reinterpret_cast<const char*>(wide_text->data()),
+            wide_text->size() * sizeof(wchar_t));
+        return encoded_bytes;
+    }
+
+    /**
+     * @brief Writes exact bytes to a newly-created sibling transaction file and closes it before publication starts.
+     * @param path New transaction file path that must not already exist.
+     * @param bytes Exact encoded content that should be staged.
+     * @return True when the file is completely written, flushed, and closed; otherwise false.
+     */
+    bool TryWriteFileBytes(const std::filesystem::path& path, std::string_view bytes)
+    {
+        const HANDLE handle = CreateFileW(
+            path.c_str(),
+            GENERIC_WRITE,
+            0,
+            nullptr,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
         {
             return false;
         }
 
-        const unsigned char byte_order_mark[] = { 0xFF, 0xFE };
-        stream.write(reinterpret_cast<const char*>(byte_order_mark), sizeof(byte_order_mark));
-        stream.write(
-            reinterpret_cast<const char*>(wide_text->data()),
-            static_cast<std::streamsize>(wide_text->size() * sizeof(wchar_t)));
-        return static_cast<bool>(stream);
+        std::size_t offset = 0;
+        bool write_succeeded = true;
+        while (offset < bytes.size())
+        {
+            const std::size_t bytes_remaining = bytes.size() - offset;
+            const DWORD request_size = bytes_remaining > static_cast<std::size_t>(MAXDWORD)
+                ? MAXDWORD
+                : static_cast<DWORD>(bytes_remaining);
+            DWORD bytes_written = 0;
+            if (WriteFile(handle, bytes.data() + offset, request_size, &bytes_written, nullptr) == FALSE || bytes_written == 0)
+            {
+                write_succeeded = false;
+                break;
+            }
+
+            offset += static_cast<std::size_t>(bytes_written);
+        }
+
+        if (write_succeeded && FlushFileBuffers(handle) == FALSE)
+        {
+            write_succeeded = false;
+        }
+
+        const BOOL close_succeeded = CloseHandle(handle);
+        if (!write_succeeded || close_succeeded == FALSE)
+        {
+            DeleteFileW(path.c_str());
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @brief Creates a unique transaction filename beside one target using the process and tick-count identity.
+     * @param target_path Existing target whose parent directory must contain the transaction file.
+     * @param role_suffix Distinct suffix identifying generated, launcher, or recovery ownership.
+     * @return Sibling path reserved by the caller through `TryWriteFileBytes`.
+     */
+    std::filesystem::path CreateSiblingTransactionPath(
+        const std::filesystem::path& target_path,
+        std::wstring_view role_suffix)
+    {
+        std::wstring transaction_path = target_path.wstring();
+        transaction_path += L".helenhook-";
+        transaction_path += std::to_wstring(GetCurrentProcessId());
+        transaction_path += L"-";
+        transaction_path += std::to_wstring(GetTickCount64());
+        transaction_path += role_suffix;
+        return std::filesystem::path(transaction_path);
+    }
+
+    /**
+     * @brief Replaces an existing target with a closed same-volume sibling file using Win32 replacement semantics.
+     * @param target_path Existing file that should be replaced.
+     * @param replacement_path Closed sibling file containing the new bytes.
+     * @return True when `ReplaceFileW` commits the replacement; otherwise false with the target left untouched.
+     */
+    bool TryReplaceSiblingFile(
+        const std::filesystem::path& target_path,
+        const std::filesystem::path& replacement_path)
+    {
+        return ReplaceFileW(
+            target_path.c_str(),
+            replacement_path.c_str(),
+            nullptr,
+            REPLACEFILE_WRITE_THROUGH,
+            nullptr,
+            nullptr) != FALSE;
+    }
+
+    /**
+     * @brief Removes one owned transaction file while treating an already-removed path as successful cleanup.
+     * @param path Owned stage or recovery path that should be deleted.
+     * @return True when the path is absent after this call; otherwise false.
+     */
+    bool TryDeleteTransactionFile(const std::filesystem::path& path)
+    {
+        if (DeleteFileW(path.c_str()) != FALSE)
+        {
+            return true;
+        }
+
+        return GetLastError() == ERROR_FILE_NOT_FOUND;
+    }
+
+    /**
+     * @brief Cleans every stage and recovery path owned by one dual-INI publication attempt.
+     * @param generated_stage_path Generated `BmEngine.ini` staging path.
+     * @param user_stage_path Launcher `UserEngine.ini` staging path.
+     * @param generated_recovery_path Exact pre-apply generated-byte recovery path.
+     * @return True when all owned paths are absent after cleanup; otherwise false.
+     */
+    bool CleanupBatmanGraphicsTransactionFiles(
+        const std::filesystem::path& generated_stage_path,
+        const std::filesystem::path& user_stage_path,
+        const std::filesystem::path& generated_recovery_path)
+    {
+        const bool generated_stage_clean = TryDeleteTransactionFile(generated_stage_path);
+        const bool user_stage_clean = TryDeleteTransactionFile(user_stage_path);
+        const bool generated_recovery_clean = TryDeleteTransactionFile(generated_recovery_path);
+        return generated_stage_clean && user_stage_clean && generated_recovery_clean;
+    }
+
+    /**
+     * @brief Publishes generated and launcher INI bytes as one compensating dual-file transaction.
+     * @param generated_path Target generated `BmEngine.ini` path.
+     * @param user_path Target launcher-owned `UserEngine.ini` path.
+     * @param generated_bytes Newly encoded generated INI bytes.
+     * @param user_bytes Newly encoded launcher INI bytes.
+     * @param original_generated_bytes Exact generated bytes captured before preparation for compensation.
+     * @return True only when both target replacements and transaction cleanup succeed; otherwise false.
+     */
+    bool PublishBatmanGraphicsIniPair(
+        const std::filesystem::path& generated_path,
+        const std::filesystem::path& user_path,
+        std::string_view generated_bytes,
+        std::string_view user_bytes,
+        std::string_view original_generated_bytes)
+    {
+        const std::filesystem::path generated_stage_path = CreateSiblingTransactionPath(generated_path, L"-generated-stage");
+        const std::filesystem::path user_stage_path = CreateSiblingTransactionPath(user_path, L"-user-stage");
+        const std::filesystem::path generated_recovery_path = CreateSiblingTransactionPath(generated_path, L"-generated-recovery");
+
+        if (!TryWriteFileBytes(generated_stage_path, generated_bytes))
+        {
+            CleanupBatmanGraphicsTransactionFiles(generated_stage_path, user_stage_path, generated_recovery_path);
+            helen::Logf(L"[graphics] Apply failed: unable to stage generated INI path=%ls.", generated_path.wstring().c_str());
+            return false;
+        }
+
+        if (!TryWriteFileBytes(user_stage_path, user_bytes))
+        {
+            CleanupBatmanGraphicsTransactionFiles(generated_stage_path, user_stage_path, generated_recovery_path);
+            helen::Logf(L"[graphics] Apply failed: unable to stage launcher INI path=%ls.", user_path.wstring().c_str());
+            return false;
+        }
+
+        if (!TryWriteFileBytes(generated_recovery_path, original_generated_bytes))
+        {
+            CleanupBatmanGraphicsTransactionFiles(generated_stage_path, user_stage_path, generated_recovery_path);
+            helen::Logf(L"[graphics] Apply failed: unable to stage generated INI recovery bytes path=%ls.", generated_path.wstring().c_str());
+            return false;
+        }
+
+        if (!TryReplaceSiblingFile(generated_path, generated_stage_path))
+        {
+            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(
+                generated_stage_path,
+                user_stage_path,
+                generated_recovery_path);
+            if (!cleanup_succeeded)
+            {
+                helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after generated publication failed.");
+            }
+
+            helen::Logf(L"[graphics] Apply failed: unable to publish generated INI path=%ls.", generated_path.wstring().c_str());
+            return false;
+        }
+
+        if (!TryReplaceSiblingFile(user_path, user_stage_path))
+        {
+            const bool generated_restored = TryReplaceSiblingFile(generated_path, generated_recovery_path);
+            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(
+                generated_stage_path,
+                user_stage_path,
+                generated_recovery_path);
+            if (!generated_restored)
+            {
+                helen::Logf(L"[graphics] Apply failed: hard compensation failure restoring exact generated INI bytes path=%ls.", generated_path.wstring().c_str());
+            }
+            else if (!cleanup_succeeded)
+            {
+                helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after launcher publication failed.");
+            }
+            else
+            {
+                helen::Logf(L"[graphics] Apply failed: launcher INI publication failed; generated INI was restored path=%ls.", generated_path.wstring().c_str());
+            }
+
+            return false;
+        }
+
+        if (!CleanupBatmanGraphicsTransactionFiles(
+                generated_stage_path,
+                user_stage_path,
+                generated_recovery_path))
+        {
+            helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after both INI publications succeeded.");
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -1555,9 +1799,9 @@ namespace helen
         }
 
         const std::filesystem::path user_ini_path = ini_path_.parent_path() / "UserEngine.ini";
-        const std::optional<std::vector<std::string>> existing_engine_lines = TryReadAllLines(ini_path_);
+        const std::optional<std::string> original_engine_bytes = TryReadFileBytes(ini_path_);
         const std::optional<IniTextDocument> existing_user_document = TryReadIniDocument(user_ini_path);
-        if (!existing_engine_lines.has_value())
+        if (!original_engine_bytes.has_value())
         {
             Logf(L"[graphics] Apply failed: unable to read generated INI path=%ls.", ini_path_.wstring().c_str());
             return false;
@@ -1569,7 +1813,7 @@ namespace helen
             return false;
         }
 
-        std::vector<std::string> engine_lines = *existing_engine_lines;
+        std::vector<std::string> engine_lines = SplitIniTextIntoLines(*original_engine_bytes);
         IniTextDocument user_document = *existing_user_document;
         std::wstring failed_setting;
         if (!TryApplyDraftStateToIniLines(state, engine_lines, failed_setting))
@@ -1584,15 +1828,29 @@ namespace helen
             return false;
         }
 
-        if (!WriteIniDocument(user_ini_path, user_document))
+        IniTextDocument generated_document;
+        generated_document.Lines = std::move(engine_lines);
+        const std::optional<std::string> generated_bytes = TryEncodeIniDocument(generated_document);
+        if (!generated_bytes.has_value())
         {
-            Logf(L"[graphics] Apply failed: unable to write launcher INI path=%ls.", user_ini_path.wstring().c_str());
+            Logf(L"[graphics] Apply failed: unable to encode generated INI path=%ls.", ini_path_.wstring().c_str());
             return false;
         }
 
-        if (!WriteAllLines(ini_path_, engine_lines))
+        const std::optional<std::string> user_bytes = TryEncodeIniDocument(user_document);
+        if (!user_bytes.has_value())
         {
-            Logf(L"[graphics] Apply failed: launcher INI was written, but generated INI write failed path=%ls.", ini_path_.wstring().c_str());
+            Logf(L"[graphics] Apply failed: unable to encode launcher INI path=%ls.", user_ini_path.wstring().c_str());
+            return false;
+        }
+
+        if (!PublishBatmanGraphicsIniPair(
+                ini_path_,
+                user_ini_path,
+                *generated_bytes,
+                *user_bytes,
+                *original_engine_bytes))
+        {
             return false;
         }
 

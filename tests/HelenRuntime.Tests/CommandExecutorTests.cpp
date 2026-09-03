@@ -247,6 +247,58 @@ namespace
     }
 
     /**
+     * @brief Reads every byte from one test fixture without applying text decoding or newline normalization.
+     * @param path File path whose exact on-disk bytes should be captured.
+     * @return Exact byte sequence currently stored at `path`.
+     */
+    std::string ReadAllBytes(const std::filesystem::path& path)
+    {
+        return ReadAllText(path);
+    }
+
+    /**
+     * @brief Opens one fixture for shared reads while denying subsequent write and delete sharing.
+     * @param path Existing fixture path that should be publication-blocked.
+     * @return Open Win32 handle that remains valid until the caller closes it.
+     * @throws std::runtime_error Thrown when the fixture cannot be opened with the requested sharing policy.
+     */
+    HANDLE OpenBatmanIniDenyingWriteDeleteSharing(const std::filesystem::path& path)
+    {
+        const HANDLE handle = CreateFileW(
+            path.wstring().c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+        {
+            throw std::runtime_error("Failed to open the Batman graphics INI fixture with write/delete sharing denied.");
+        }
+
+        return handle;
+    }
+
+    /**
+     * @brief Verifies that a graphics fixture directory contains no transaction stage or recovery artifacts.
+     * @param fixture_directory Directory containing one isolated Batman graphics fixture.
+     */
+    void ExpectNoBatmanGraphicsTransactionArtifacts(const std::filesystem::path& fixture_directory)
+    {
+        std::error_code iteration_error;
+        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(fixture_directory, iteration_error))
+        {
+            const std::string file_name = entry.path().filename().string();
+            Expect(
+                file_name.find(".helenhook-") == std::string::npos,
+                "Batman graphics apply left a transaction stage or recovery artifact in the fixture directory.");
+        }
+
+        Expect(!iteration_error, "Failed to inspect the Batman graphics fixture directory for transaction artifacts.");
+    }
+
+    /**
      * @brief Reads one ASCII-only UTF-16LE fixture while validating that its native encoding was preserved.
      * @param path UTF-16LE test file that should be decoded.
      * @return Decoded ASCII text without its byte-order mark.
@@ -688,5 +740,51 @@ void RunCommandExecutorTests()
         helen::CommandExecutor batman_executor(batman_dispatcher, batman_runtime_values, batman_graphics_config_service);
         Expect(batman_executor.RegisterCommand(CreateLoadBatmanGraphicsDraftCommand()), "Failed to register the incomplete-launcher-INI load command.");
         Expect(!batman_executor.RunCommand("loadBatmanGraphicsDraftIntoConfig"), "Batman graphics load unexpectedly fell back to BmEngine.ini when UserEngine.ini was incomplete.");
+    }
+
+    {
+        const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath("generated-publication-blocked");
+        const std::filesystem::path user_ini_path = GetSiblingBatmanUserEngineIniPath(engine_ini_path);
+        WriteAllText(engine_ini_path, CreateBatmanGraphicsIniText());
+        WriteAsciiAsUtf16LittleEndianText(user_ini_path, CreateBatmanLauncherOwnedGraphicsIniText(true));
+
+        const std::string original_engine_bytes = ReadAllBytes(engine_ini_path);
+        const std::string original_user_bytes = ReadAllBytes(user_ini_path);
+
+        helen::CommandDispatcher batman_dispatcher;
+        RegisterBatmanGraphicsConfigKeys(batman_dispatcher);
+        helen::BatmanGraphicsConfigService batman_graphics_config_service(engine_ini_path);
+        const HANDLE blocked_engine_handle = OpenBatmanIniDenyingWriteDeleteSharing(engine_ini_path);
+        const bool apply_result = batman_graphics_config_service.ApplyFromDispatcher(batman_dispatcher);
+        const BOOL close_result = CloseHandle(blocked_engine_handle);
+
+        Expect(close_result != FALSE, "Failed to close the generated Batman graphics INI publication-blocking handle.");
+        Expect(!apply_result, "Batman graphics apply unexpectedly succeeded with generated INI publication blocked.");
+        Expect(ReadAllBytes(engine_ini_path) == original_engine_bytes, "Generated INI bytes changed after blocked publication.");
+        Expect(ReadAllBytes(user_ini_path) == original_user_bytes, "UserEngine.ini bytes changed after generated publication was blocked.");
+        ExpectNoBatmanGraphicsTransactionArtifacts(engine_ini_path.parent_path());
+    }
+
+    {
+        const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath("launcher-publication-blocked");
+        const std::filesystem::path user_ini_path = GetSiblingBatmanUserEngineIniPath(engine_ini_path);
+        WriteAllText(engine_ini_path, CreateBatmanGraphicsIniText());
+        WriteAsciiAsUtf16LittleEndianText(user_ini_path, CreateBatmanLauncherOwnedGraphicsIniText(true));
+
+        const std::string original_engine_bytes = ReadAllBytes(engine_ini_path);
+        const std::string original_user_bytes = ReadAllBytes(user_ini_path);
+
+        helen::CommandDispatcher batman_dispatcher;
+        RegisterBatmanGraphicsConfigKeys(batman_dispatcher);
+        helen::BatmanGraphicsConfigService batman_graphics_config_service(engine_ini_path);
+        const HANDLE blocked_user_handle = OpenBatmanIniDenyingWriteDeleteSharing(user_ini_path);
+        const bool apply_result = batman_graphics_config_service.ApplyFromDispatcher(batman_dispatcher);
+        const BOOL close_result = CloseHandle(blocked_user_handle);
+
+        Expect(close_result != FALSE, "Failed to close the launcher Batman graphics INI publication-blocking handle.");
+        Expect(!apply_result, "Batman graphics apply unexpectedly succeeded with UserEngine.ini publication blocked.");
+        Expect(ReadAllBytes(engine_ini_path) == original_engine_bytes, "Generated INI bytes were not restored after launcher publication failed.");
+        Expect(ReadAllBytes(user_ini_path) == original_user_bytes, "UserEngine.ini bytes changed after blocked publication.");
+        ExpectNoBatmanGraphicsTransactionArtifacts(engine_ini_path.parent_path());
     }
 }
