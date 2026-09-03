@@ -65,6 +65,16 @@ function Assert-StrictJsonString {
     return [string]$Value
 }
 
+function Assert-StrictJsonArray {
+    <# Require an actual JSON array so scalar objects cannot masquerade as one-item arrays. #>
+    param(
+        [Parameter(Mandatory = $true)] [AllowNull()] [object]$Value,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    if ($null -eq $Value -or $Value -isnot [Array]) { throw "$Context must be a JSON array." }
+}
+
 function Assert-StrictJsonIntegerEquals {
     param(
         [Parameter(Mandatory = $true)] [AllowNull()] [object]$Value,
@@ -94,7 +104,7 @@ function Assert-StrictJsonIntegerArrayEquals {
         [Parameter(Mandatory = $true)] [string]$Context
     )
 
-    if ($null -eq $Values) { throw "$Context must be a non-null JSON array." }
+    Assert-StrictJsonArray -Value $Values -Context $Context
     $actualValues = @($Values)
     if ($actualValues.Count -ne $Expected.Count) { throw "$Context count drifted. Expected $($Expected.Count) but found $($actualValues.Count)." }
     for ($index = 0; $index -lt $Expected.Count; $index++) {
@@ -128,7 +138,8 @@ function Assert-GraphicsFilesJsonShape {
 
     if ($null -eq $Files) { throw 'files.json must contain an object.' }
     Assert-ExactOrderedProperties -Object $Files -Names @('virtualFiles') -Context 'files.json'
-    if ($null -eq $Files.virtualFiles -or @($Files.virtualFiles).Count -ne 1) { throw 'files.json must contain exactly one virtual file.' }
+    Assert-StrictJsonArray -Value $Files.virtualFiles -Context 'files.json virtualFiles'
+    if (@($Files.virtualFiles).Count -ne 1) { throw 'files.json must contain exactly one virtual file.' }
     $virtualFile = @($Files.virtualFiles)[0]
     Assert-ExactOrderedProperties -Object $virtualFile -Names @('id', 'path', 'mode', 'source') -Context 'files.json virtualFiles[0]'
     Assert-StrictJsonStringEquals -Value $virtualFile.id -Expected 'frontendGraphicsOptionsPackage' -Context 'files.json virtualFiles[0].id'
@@ -611,12 +622,15 @@ Assert-ExactOrderedProperties -Object $pack -Names @('schemaVersion', 'id', 'nam
 Assert-StrictJsonIntegerEquals -Value $pack.schemaVersion -Expected 1 -Context 'pack.json schemaVersion'
 Assert-StrictJsonStringEquals -Value $pack.id -Expected 'batman-aa-graphics-options' -Context 'pack.json id'
 Assert-StrictJsonStringEquals -Value $pack.name -Expected 'Batman Graphics Options' -Context 'pack.json name'
-if ($null -eq $pack.targets -or @($pack.targets).Count -ne 1) { throw 'pack.json must contain exactly one target.' }
+Assert-StrictJsonArray -Value $pack.targets -Context 'pack.json targets'
+if (@($pack.targets).Count -ne 1) { throw 'pack.json must contain exactly one target.' }
 Assert-ExactOrderedProperties -Object $pack.targets[0] -Names @('gameId', 'executables') -Context 'pack.json target'
 Assert-StrictJsonStringEquals -Value $pack.targets[0].gameId -Expected 'batman-arkham-asylum' -Context 'pack.json target gameId'
-if ($null -eq $pack.targets[0].executables -or @($pack.targets[0].executables).Count -ne 1) { throw 'pack.json target must contain exactly one executable.' }
+Assert-StrictJsonArray -Value $pack.targets[0].executables -Context 'pack.json target executables'
+if (@($pack.targets[0].executables).Count -ne 1) { throw 'pack.json target must contain exactly one executable.' }
 Assert-StrictJsonStringEquals -Value $pack.targets[0].executables[0] -Expected 'ShippingPC-BmGame.exe' -Context 'pack.json target executable'
 $expectedConfigKeys = @('fullscreen', 'resolutionWidth', 'resolutionHeight', 'vsync', 'msaa', 'detailLevel', 'bloom', 'dynamicShadows', 'motionBlur', 'distortion', 'fogVolumes', 'sphericalHarmonicLighting', 'ambientOcclusion', 'physx', 'stereo', 'applySignal', 'rollbackSignal')
+Assert-StrictJsonArray -Value $pack.config -Context 'pack.json config'
 if (@($pack.config).Count -ne $expectedConfigKeys.Count) { throw "pack.json config must contain exactly $($expectedConfigKeys.Count) entries." }
 for ($index = 0; $index -lt $expectedConfigKeys.Count; $index++) {
     $configEntry = $pack.config[$index]
@@ -625,7 +639,8 @@ for ($index = 0; $index -lt $expectedConfigKeys.Count; $index++) {
     Assert-StrictJsonStringEquals -Value $configEntry.type -Expected 'int' -Context "pack.json config entry $($index + 1) type"
     Assert-StrictJsonIntegerEquals -Value $configEntry.defaultValue -Expected 0 -Context "pack.json config entry $($index + 1) defaultValue"
 }
-if ($null -eq $pack.builds -or @($pack.builds).Count -ne 1) { throw 'pack.json build list must contain exactly one build.' }
+Assert-StrictJsonArray -Value $pack.builds -Context 'pack.json builds'
+if (@($pack.builds).Count -ne 1) { throw 'pack.json build list must contain exactly one build.' }
 Assert-StrictJsonStringEquals -Value $pack.builds[0] -Expected 'steam-goty-1.0' -Context 'pack.json build list entry'
 
 $build = Get-Content -LiteralPath $buildJsonPath -Raw | ConvertFrom-Json
@@ -636,14 +651,17 @@ Assert-StrictJsonStringEquals -Value $build.executable -Expected $expectedMatch.
 Assert-StrictJsonIntegerEquals -Value $build.match.fileSize -Expected $expectedMatch.FileSize -Context 'build.json match fileSize'
 Assert-StrictJsonStringEquals -Value $build.match.sha256 -Expected $expectedMatch.Sha256 -Context 'build.json match sha256'
 Assert-ExactProperties -Object $build.match -Names @('fileSize', 'sha256') -Context 'build.json match'
-if ($null -eq $build.startupCommands -or @($build.startupCommands).Count -ne 1) { throw 'build.json startup command list must contain exactly one command.' }
+Assert-StrictJsonArray -Value $build.startupCommands -Context 'build.json startupCommands'
+if (@($build.startupCommands).Count -ne 1) { throw 'build.json startup command list must contain exactly one command.' }
 Assert-StrictJsonStringEquals -Value $build.startupCommands[0] -Expected 'loadBatmanGraphicsDraftIntoConfig' -Context 'build.json startup command'
 
 $bindings = Get-Content -LiteralPath $bindingsJsonPath -Raw | ConvertFrom-Json
 Assert-ExactProperties -Object $bindings -Names @('bindings') -Context 'bindings.json'
-if ($null -eq $bindings.bindings -or @($bindings.bindings).Count -ne 0) { throw 'bindings.json must contain zero bindings.' }
+Assert-StrictJsonArray -Value $bindings.bindings -Context 'bindings.json bindings'
+if (@($bindings.bindings).Count -ne 0) { throw 'bindings.json must contain zero bindings.' }
 $commands = Get-Content -LiteralPath $commandsJsonPath -Raw | ConvertFrom-Json
 Assert-ExactProperties -Object $commands -Names @('commands') -Context 'commands.json'
+Assert-StrictJsonArray -Value $commands.commands -Context 'commands.json commands'
 if (@($commands.commands).Count -ne 2) { throw 'commands.json must contain exactly two commands.' }
 $loadCommand = $commands.commands[0]
 $applyCommand = $commands.commands[1]
@@ -651,10 +669,12 @@ Assert-ExactOrderedProperties -Object $loadCommand -Names @('id', 'name', 'steps
 Assert-ExactOrderedProperties -Object $applyCommand -Names @('id', 'name', 'steps') -Context 'commands.json apply command'
 Assert-StrictJsonStringEquals -Value $loadCommand.id -Expected 'loadBatmanGraphicsDraftIntoConfig' -Context 'commands.json load command id'
 Assert-StrictJsonStringEquals -Value $loadCommand.name -Expected 'Load Batman Graphics Draft Into Config' -Context 'commands.json load command name'
-if ($null -eq $loadCommand.steps -or @($loadCommand.steps).Count -ne 1) { throw 'commands.json load command must contain exactly one step.' }
+Assert-StrictJsonArray -Value $loadCommand.steps -Context 'commands.json load steps'
+if (@($loadCommand.steps).Count -ne 1) { throw 'commands.json load command must contain exactly one step.' }
 Assert-StrictJsonStringEquals -Value $applyCommand.id -Expected 'applyBatmanGraphicsDraft' -Context 'commands.json apply command id'
 Assert-StrictJsonStringEquals -Value $applyCommand.name -Expected 'Apply Batman Graphics Draft' -Context 'commands.json apply command name'
-if ($null -eq $applyCommand.steps -or @($applyCommand.steps).Count -ne 2) { throw 'commands.json apply command must contain exactly two steps.' }
+Assert-StrictJsonArray -Value $applyCommand.steps -Context 'commands.json apply steps'
+if (@($applyCommand.steps).Count -ne 2) { throw 'commands.json apply command must contain exactly two steps.' }
 Assert-ExactOrderedProperties -Object $loadCommand.steps[0] -Names @('kind') -Context 'commands.json load step'
 Assert-ExactOrderedProperties -Object $applyCommand.steps[0] -Names @('kind') -Context 'commands.json apply config step'
 Assert-ExactOrderedProperties -Object $applyCommand.steps[1] -Names @('kind') -Context 'commands.json apply load step'
@@ -664,11 +684,15 @@ Assert-StrictJsonStringEquals -Value $applyCommand.steps[1].kind -Expected 'load
 
 $hooks = Get-Content -LiteralPath $hooksJsonPath -Raw | ConvertFrom-Json
 Assert-ExactOrderedProperties -Object $hooks -Names @('runtimeSlots', 'stateObservers', 'hooks') -Context 'hooks.json'
+Assert-StrictJsonArray -Value $hooks.runtimeSlots -Context 'hooks.json runtimeSlots'
+Assert-StrictJsonArray -Value $hooks.stateObservers -Context 'hooks.json stateObservers'
+Assert-StrictJsonArray -Value $hooks.hooks -Context 'hooks.json hooks'
 if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($hooks.stateObservers).Count -ne 6) { throw 'hooks.json runtime slots, observers, or hooks count drifted.' }
 
 function Assert-GraphicsCarrierChecks {
     param([Parameter(Mandatory = $true)] [psobject]$Observer, [Parameter(Mandatory = $true)] [string]$Context)
-    if ($null -eq $Observer.checks -or @($Observer.checks).Count -ne 11) { throw "$Context must contain exactly eleven checks." }
+    Assert-StrictJsonArray -Value $Observer.checks -Context "$Context checks"
+    if (@($Observer.checks).Count -ne 11) { throw "$Context must contain exactly eleven checks." }
     $expectedConstantChecks = @(
         @{ offset = -16; expectedValue = 50 },
         @{ offset = -12; expectedValue = 100 },
@@ -719,7 +743,7 @@ for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observe
     Assert-GraphicsCarrierChecks -Observer $observer -Context "hooks.json $($observer.id)"
     $mappingNames = if ($observerIndex -lt 4) { @('mappings', 'responseMappings', 'acknowledgementMappings') } else { @('mappings', 'acknowledgementMappings') }
     foreach ($mappingName in $mappingNames) {
-        if ($null -eq $observer.$mappingName) { throw "hooks.json $($observer.id) $mappingName must be an array." }
+        Assert-StrictJsonArray -Value $observer.$mappingName -Context "hooks.json $($observer.id) $mappingName"
         foreach ($entry in @($observer.$mappingName)) {
             if ($null -eq $entry) { throw "hooks.json $($observer.id) $mappingName contains a null mapping." }
             Assert-ExactOrderedProperties -Object $entry -Names @('match', 'value') -Context "hooks.json $($observer.id) $mappingName"
