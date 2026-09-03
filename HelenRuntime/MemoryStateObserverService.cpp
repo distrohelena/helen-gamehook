@@ -697,6 +697,7 @@ namespace helen
         std::optional<std::uintptr_t> resolved_address;
         std::optional<int> raw_value;
         std::optional<int> mapped_value;
+        bool scan_performed = false;
 
         if (cached_address != 0)
         {
@@ -738,6 +739,7 @@ namespace helen
 
             if (may_rescan)
             {
+                scan_performed = true;
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
                     ++debug_views_[observer_index].RescanCount;
@@ -978,7 +980,7 @@ namespace helen
                 definition.Id.c_str(),
                 static_cast<unsigned long long>(cached_address));
         }
-        else if (previous_rescan_count == 0)
+        else if (previous_rescan_count == 0 && scan_performed)
         {
             Logf(
                 L"[observer] initial scan found no match for id=%hs range=0x%08llX..0x%08llX stride=%d valueOffset=%d",
