@@ -287,15 +287,18 @@ namespace
     void ExpectNoBatmanGraphicsTransactionArtifacts(const std::filesystem::path& fixture_directory)
     {
         std::error_code iteration_error;
+        bool found_recovery_artifact = false;
         for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(fixture_directory, iteration_error))
         {
             const std::string file_name = entry.path().filename().string();
+            found_recovery_artifact = found_recovery_artifact || file_name.find("-recovery") != std::string::npos;
             Expect(
                 file_name.find(".helenhook-") == std::string::npos,
                 "Batman graphics apply left a transaction stage or recovery artifact in the fixture directory.");
         }
 
         Expect(!iteration_error, "Failed to inspect the Batman graphics fixture directory for transaction artifacts.");
+        Expect(!found_recovery_artifact, "Batman graphics apply left an owned recovery artifact in the fixture directory.");
     }
 
     /**
