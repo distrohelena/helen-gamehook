@@ -273,26 +273,29 @@ function Assert-BatmanGraphicsVsyncChecks {
     }
 }
 
-function Assert-BatmanGraphicsVsyncMappings {
-    <# Validate the two ordered raw control-code mappings owned by one graphics observer. #>
+function Assert-BatmanGraphicsMappings {
+    <# Validate one ordered raw control-code mapping list against the current protocol table. #>
     param(
         [Parameter(Mandatory = $true)] [psobject]$Observer,
-        [Parameter(Mandatory = $true)] [int]$FirstMatch,
+        [Parameter(Mandatory = $true)] [int[]]$ExpectedMatches,
+        [Parameter(Mandatory = $true)] [int[]]$ExpectedValues,
         [Parameter(Mandatory = $true)] [string]$Context
     )
 
-    if (@($Observer.mappings).Count -ne 2) { throw "$Context must contain exactly two mappings." }
-    for ($index = 0; $index -lt 2; $index++) {
+    if ($ExpectedMatches.Count -ne $ExpectedValues.Count -or @($Observer.mappings).Count -ne $ExpectedMatches.Count) {
+        throw "$Context mapping count drifted."
+    }
+    for ($index = 0; $index -lt $ExpectedMatches.Count; $index++) {
         $mapping = $Observer.mappings[$index]
         Assert-BatmanGraphicsVsyncExactProperties -Object $mapping -Names @('match', 'value') -Context "$Context mapping $($index + 1)"
-        if ($mapping.match -ne ($FirstMatch + $index) -or $mapping.value -ne $index) {
+        if ($mapping.match -ne $ExpectedMatches[$index] -or $mapping.value -ne $ExpectedValues[$index]) {
             throw "$Context mapping $($index + 1) drifted."
         }
     }
 }
 
 function Assert-BatmanGraphicsVsyncHooks {
-    <# Validate the minimal two-observer graphics carrier used by deployment without allowing executable hooks or runtime slots. #>
+    <# Validate the current four-setting plus apply/rollback graphics carrier used by deployment. #>
     param(
         [Parameter(Mandatory = $true)] [string]$PackRoot,
         [Parameter(Mandatory = $true)] [string]$Context
@@ -302,32 +305,57 @@ function Assert-BatmanGraphicsVsyncHooks {
     if (-not (Test-Path -LiteralPath $hooksPath -PathType Leaf)) { throw "$Context hooks.json was not found: $hooksPath" }
     $hooks = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
     Assert-BatmanGraphicsVsyncExactProperties -Object $hooks -Names @('runtimeSlots', 'stateObservers', 'hooks') -Context "$Context hooks.json"
-    if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($hooks.stateObservers).Count -ne 2) {
-        throw "$Context hooks.json must contain empty runtimeSlots/hooks and exactly two observers."
+    if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($hooks.stateObservers).Count -ne 6) {
+        throw "$Context hooks.json must contain empty runtimeSlots/hooks and exactly six observers."
     }
 
-    $vsyncObserver = $hooks.stateObservers[0]
-    $applyObserver = $hooks.stateObservers[1]
-    Assert-BatmanGraphicsVsyncExactProperties -Object $vsyncObserver -Names @('id', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'responseRequestValue', 'responseMappings') -Context "$Context graphicsObserverVsync"
-    Assert-BatmanGraphicsVsyncExactProperties -Object $applyObserver -Names @('id', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'command') -Context "$Context graphicsObserverApplySignal"
-    if ($vsyncObserver.id -cne 'graphicsObserverVsync' -or $vsyncObserver.targetConfigKey -cne 'vsync') { throw "$Context VSync observer identity drifted." }
-    if ($applyObserver.id -cne 'graphicsObserverApplySignal' -or $applyObserver.targetConfigKey -cne 'applySignal' -or $applyObserver.command -cne 'applyBatmanGraphicsDraft') { throw "$Context apply observer identity drifted." }
-
-    foreach ($observer in @($vsyncObserver, $applyObserver)) {
+    $expectedAddressMatchValues = @(4200, 4210, 4211, 4220, 4221, 4230, 4231, 4299, 4300, 4310, 4311, 4312, 4313, 4314, 4320, 4321, 4322, 4323, 4324, 4330, 4331, 4332, 4333, 4334, 4399, 4400, 4410, 4411, 4412, 4420, 4421, 4422, 4430, 4431, 4432, 4499, 4500, 4510, 4511, 4520, 4521, 4530, 4531, 4599, 4960, 4961, 4969, 4970, 4971, 4980, 4981, 4989, 4990, 4991)
+    $expectedObservers = @(
+        [pscustomobject]@{ Id = 'graphicsObserverVsync'; Target = 'vsync'; Matches = @(4220, 4221); ConfigValues = @(0, 1); Responses = @(4210, 4211); Acks = @(4230, 4231); Read = 4200; Failure = 4299 },
+        [pscustomobject]@{ Id = 'graphicsObserverMsaa'; Target = 'msaa'; Matches = @(4320, 4321, 4322, 4323, 4324); ConfigValues = @(0, 1, 2, 3, 5); Responses = @(4310, 4311, 4312, 4313, 4314); Acks = @(4330, 4331, 4332, 4333, 4334); Read = 4300; Failure = 4399 },
+        [pscustomobject]@{ Id = 'graphicsObserverPhysx'; Target = 'physx'; Matches = @(4420, 4421, 4422); ConfigValues = @(0, 1, 2); Responses = @(4410, 4411, 4412); Acks = @(4430, 4431, 4432); Read = 4400; Failure = 4499 },
+        [pscustomobject]@{ Id = 'graphicsObserverStereo'; Target = 'stereo'; Matches = @(4520, 4521); ConfigValues = @(0, 1); Responses = @(4510, 4511); Acks = @(4530, 4531); Read = 4500; Failure = 4599 },
+        [pscustomobject]@{ Id = 'graphicsObserverApplySignal'; Target = 'applySignal'; Matches = @(4990, 4991); ConfigValues = @(0, 1); Responses = @(); Acks = @(4980, 4981); Read = $null; Failure = 4989; Command = 'applyBatmanGraphicsDraft' },
+        [pscustomobject]@{ Id = 'graphicsObserverRollbackSignal'; Target = 'rollbackSignal'; Matches = @(4970, 4971); ConfigValues = @(0, 1); Responses = @(); Acks = @(4960, 4961); Read = $null; Failure = 4969; Command = 'loadBatmanGraphicsDraftIntoConfig' }
+    )
+    $settingObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'responseRequestValue', 'responseMappings', 'acknowledgementMappings', 'failureResponseValue')
+    $commandObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'acknowledgementMappings', 'failureResponseValue', 'command')
+    for ($observerIndex = 0; $observerIndex -lt $expectedObservers.Count; $observerIndex++) {
+        $expected = $expectedObservers[$observerIndex]
+        $observer = $hooks.stateObservers[$observerIndex]
+        $properties = if ($observerIndex -lt 4) { $settingObserverProperties } else { $commandObserverProperties }
+        Assert-BatmanGraphicsVsyncExactProperties -Object $observer -Names $properties -Context "$Context $($expected.Id)"
+        if ($observer.id -cne $expected.Id -or $observer.targetConfigKey -cne $expected.Target) { throw "$Context $($expected.Id) identity drifted." }
         if ($observer.scanStartAddress -cne '0x10000000' -or $observer.scanEndAddress -cne '0x30000000' -or $observer.scanStride -ne 4 -or $observer.valueOffset -ne 12 -or $observer.pollIntervalMs -ne 50) {
             throw "$Context $($observer.id) scan geometry drifted."
         }
-        $expectedAddressMatchValues = @(4101, 4102, 4103, 4104, 4105, 4106, 4200, 4210, 4211, 4990, 4991)
         if (@($observer.addressMatchValues).Count -ne $expectedAddressMatchValues.Count -or (@($observer.addressMatchValues) -join ',') -cne ($expectedAddressMatchValues -join ',')) {
             throw "$Context $($observer.id) addressMatchValues drifted."
         }
         Assert-BatmanGraphicsVsyncChecks -Observer $observer -Context "$Context $($observer.id)"
+        Assert-BatmanGraphicsMappings -Observer $observer -ExpectedMatches $expected.Matches -ExpectedValues $expected.ConfigValues -Context "$Context $($observer.id)"
+        Assert-BatmanGraphicsMappings -Observer ([pscustomobject]@{ mappings = $observer.acknowledgementMappings }) -ExpectedMatches $expected.Matches -ExpectedValues $expected.Acks -Context "$Context $($observer.id) acknowledgement"
+        if ($observerIndex -lt 4) {
+            if ($observer.responseRequestValue -ne $expected.Read -or @($observer.responseMappings).Count -ne $expected.Responses.Count) { throw "$Context $($observer.id) response mapping drifted." }
+            Assert-BatmanGraphicsMappings -Observer ([pscustomobject]@{ mappings = $observer.responseMappings }) -ExpectedMatches $expected.ConfigValues -ExpectedValues $expected.Responses -Context "$Context $($observer.id) response"
+        } elseif ($observer.command -cne $expected.Command) {
+            throw "$Context $($observer.id) command drifted."
+        }
+        if ($observer.failureResponseValue -ne $expected.Failure) { throw "$Context $($observer.id) failure response drifted." }
     }
-    Assert-BatmanGraphicsVsyncMappings -Observer $vsyncObserver -FirstMatch 4210 -Context "$Context graphicsObserverVsync"
-    Assert-BatmanGraphicsVsyncMappings -Observer $applyObserver -FirstMatch 4990 -Context "$Context graphicsObserverApplySignal"
-    if ($vsyncObserver.responseRequestValue -ne 4200 -or @($vsyncObserver.responseMappings).Count -ne 2 -or $vsyncObserver.responseMappings[0].match -ne 0 -or $vsyncObserver.responseMappings[0].value -ne 4210 -or $vsyncObserver.responseMappings[1].match -ne 1 -or $vsyncObserver.responseMappings[1].value -ne 4211) {
-        throw "$Context graphicsObserverVsync response mapping drifted."
-    }
+}
+
+function Assert-BatmanGraphicsPackFileSet {
+    <# Require exactly the seven checked-in package files and no generated or historical extras. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$PackRoot,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    $rootPrefix = (Get-SafeFullPath $PackRoot).TrimEnd('\') + '\'
+    $expected = @('pack.json', 'builds\steam-goty-1.0\build.json', 'builds\steam-goty-1.0\bindings.json', 'builds\steam-goty-1.0\commands.json', 'builds\steam-goty-1.0\hooks.json', 'builds\steam-goty-1.0\files.json', 'builds\steam-goty-1.0\assets\deltas\Frontend-graphics-options.hgdelta') | Sort-Object
+    $actual = @(Get-ChildItem -LiteralPath $PackRoot -Recurse -Force -File | ForEach-Object { $_.FullName.Substring($rootPrefix.Length).Replace('/', '\') } | Sort-Object)
+    if (($actual -join '|') -cne ($expected -join '|')) { throw "$Context graphics pack file set drifted. Expected '$($expected -join ', ')' but found '$($actual -join ', ')'." }
 }
 
 function Test-ExpectedGraphicsVirtualFile {
@@ -694,6 +722,7 @@ if ($LASTEXITCODE -ne 0) { throw "Batman graphics shell rebuild failed with exit
 
 Assert-BatmanGraphicsPackConfig -Path $ConfigSourcePath -Context 'Repository'
 Assert-SafeDeploymentTree -Root $PackSource -AllowedRoots @($BatmanRoot) -RequireExisting | Out-Null
+Assert-BatmanGraphicsPackFileSet -PackRoot $PackSource -Context 'Repository'
 
 try {
     & $VerifierPath -BatmanRoot $BatmanRoot -BuilderRoot $BuilderRoot -Configuration $Configuration
@@ -739,6 +768,7 @@ try {
     Copy-Item -LiteralPath $ProxyPath -Destination $ProxyStagingPath -Force
 
     Test-ExpectedGraphicsVirtualFile -PackRoot $PackStagingDestination -Context 'Staged deployment'
+    Assert-BatmanGraphicsPackFileSet -PackRoot $PackStagingDestination -Context 'Staged deployment'
     Assert-BatmanGraphicsVsyncHooks -PackRoot $PackStagingDestination -Context 'Staged deployment'
     Assert-BatmanGraphicsPackConfig -Path $ConfigStagingPath -Context 'Staged'
     foreach ($stagedPath in @($ConfigStagingPath, $HelenGameHookStagingPath, $ProxyStagingPath)) {
@@ -749,6 +779,7 @@ try {
     $verifyPublication = {
         param($LivePackRootForVerification, $LiveConfigPathForVerification, $LiveHelenGameHookPathForVerification, $LiveProxyPathForVerification)
         Test-ExpectedGraphicsVirtualFile -PackRoot $LivePackRootForVerification -Context 'Activated deployment'
+        Assert-BatmanGraphicsPackFileSet -PackRoot $LivePackRootForVerification -Context 'Activated deployment'
         Assert-BatmanGraphicsVsyncHooks -PackRoot $LivePackRootForVerification -Context 'Activated deployment'
         Assert-BatmanGraphicsPackConfig -Path $LiveConfigPathForVerification -Context 'Activated'
         Assert-SafeDeploymentPath -Path $LiveHelenGameHookPathForVerification -AllowedRoots @($GameBin) -RequireExisting | Out-Null

@@ -271,6 +271,46 @@ function Assert-RebuildAtomicSourceContract {
     }
 }
 
+function Assert-CurrentGraphicsSourceProvenance {
+    <# Verify only the current shell generator and rebuild script are accepted as provenance. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$RebuildPath,
+        [Parameter(Mandatory = $true)] [string]$ShellTemplatePath,
+        [Parameter(Mandatory = $true)] [string]$ShellBuilderPath
+    )
+
+    foreach ($path in @($RebuildPath, $ShellTemplatePath, $ShellBuilderPath)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Current graphics shell provenance source was not found: $path"
+        }
+    }
+
+    $rebuildText = Get-Content -LiteralPath $RebuildPath -Raw
+    $shellTemplateText = Get-Content -LiteralPath $ShellTemplatePath -Raw
+    $shellBuilderText = Get-Content -LiteralPath $ShellBuilderPath -Raw
+    $shellBuilderShellMatch = [regex]::Match($shellBuilderText, '(?s)private static void PatchFrontendShellScripts\(.*?private static void ValidateShellInputs')
+    if (-not $shellBuilderShellMatch.Success) { throw 'Current shell builder shell patch method could not be isolated for provenance validation.' }
+    $shellBuilderShellText = $shellBuilderShellMatch.Value
+    foreach ($forbidden in @(
+        'F:\helenhook.7z', 'F:/helenhook.7z', 'batma/', 'batma\',
+        'Program Files',
+        'full-controller', 'GraphicsVsyncController', 'InitialVsync', 'DraftVsync',
+        'GraphicsExitPrompt', 'DefineSprite_601', 'Helen_',
+        'prompt export', 'prompt route', 'old package', 'historical'
+    )) {
+        foreach ($source in @([pscustomobject]@{ Name = 'rebuild'; Text = $rebuildText }, [pscustomobject]@{ Name = 'shell template'; Text = $shellTemplateText }, [pscustomobject]@{ Name = 'shell builder'; Text = $shellBuilderShellText })) {
+            Assert-NotContainsOrdinal -Text $source.Text -Token $forbidden -Context "$source.Name provenance source"
+        }
+    }
+
+    if ($shellBuilderText -notmatch '(?s)ShellPatchedScriptRelativePaths\s*=\s*\[.*?\];') {
+        throw 'Current shell builder must declare its exact patched source file allow-list.'
+    }
+    $sourceAllowList = [regex]::Match($shellBuilderText, '(?s)ShellPatchedScriptRelativePaths\s*=\s*\[(?<items>.*?)\];').Groups['items'].Value
+    $allowListCount = ([regex]::Matches($sourceAllowList, '"')).Count / 2
+    if ($allowListCount -ne 21) { throw "Current shell builder source allow-list must contain exactly 21 files, found $allowListCount." }
+}
+
 function Get-HgdeltaFunctionBody {
     param(
         [Parameter(Mandatory = $true)] [string]$Text,
@@ -298,12 +338,20 @@ function Assert-VsyncSliceRowContract {
     param([string]$Text, [int]$Index, [string]$Context)
 
     $labels = @('Fullscreen', 'Resolution', 'VSync', 'MSAA', 'Detail Level', 'Bloom', 'Dynamic Shadows', 'Motion Blur', 'Distortion', 'Fog Volumes', 'Spherical Harmonic Lighting', 'Ambient Occlusion', 'PhysX', 'Stereo 3D', 'Apply Changes')
-    if ($Index -eq 2) {
-        Assert-ContainsOrdinal -Text $Text -Token 'this.Names = new Array("Off","On");' -Context "$Context names"
-        Assert-ContainsOrdinal -Text $Text -Token 'this.State = _parent.GraphicsVsyncController.DraftVsync;' -Context "$Context initial state"
-        Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsVsyncController.ToggleVsync();' -Context "$Context RunAction"
-        Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsVsyncController.IncrementVsync();' -Context "$Context Increment"
-        Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsVsyncController.DecrementVsync();' -Context "$Context Decrement"
+    if ($Index -in @(2, 3, 12, 13)) {
+        $activeRows = @{
+            2 = [pscustomobject]@{ RowIndex = 3; Values = 'this.Names = new Array("Off","On");' }
+            3 = [pscustomobject]@{ RowIndex = 4; Values = 'this.Names = new Array("Off","2x","4x","8x","16x");' }
+            12 = [pscustomobject]@{ RowIndex = 13; Values = 'this.Names = new Array("Off","Normal","High");' }
+            13 = [pscustomobject]@{ RowIndex = 14; Values = 'this.Names = new Array("Off","On");' }
+        }
+        $activeRow = $activeRows[$Index]
+        Assert-ContainsOrdinal -Text $Text -Token $activeRow.Values -Context "$Context names"
+        Assert-ContainsOrdinal -Text $Text -Token "this.RowIndex = $($activeRow.RowIndex);" -Context "$Context row index"
+        Assert-ContainsOrdinal -Text $Text -Token 'this.State = _parent.GraphicsOptionsController.GetDraftIndex(this.RowIndex);' -Context "$Context initial state"
+        Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsOptionsController.ToggleSetting(this.RowIndex);' -Context "$Context RunAction"
+        Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsOptionsController.IncrementSetting(this.RowIndex);' -Context "$Context Increment"
+        Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsOptionsController.DecrementSetting(this.RowIndex);' -Context "$Context Decrement"
         Assert-ContainsOrdinal -Text $Text -Token $labels[$Index] -Context "$Context label"
         Assert-ContainsOrdinal -Text $Text -Token 'this._visible = true;' -Context "$Context visibility"
         return
@@ -314,7 +362,7 @@ function Assert-VsyncSliceRowContract {
         Assert-ContainsOrdinal -Text $Text -Token 'Apply Changes' -Context "$Context label"
         Assert-ContainsOrdinal -Text $Text -Token 'this.ItemText.text = "";' -Context "$Context value"
         Assert-ContainsOrdinal -Text $Text -Token 'this._visible = true;' -Context "$Context visibility"
-        Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsVsyncController.ApplyChanges();' -Context "$Context RunAction"
+        Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsOptionsController.ApplyChanges();' -Context "$Context RunAction"
         foreach ($action in @('Increment', 'Decrement')) {
             if ((Get-VsyncSliceRowActionBody -Text $Text -Assignment "this.$action") -ne '') { throw "$Context action $action must be a no-op." }
         }
@@ -351,16 +399,16 @@ function Assert-ScopedExportedShellContract {
     foreach ($token in @('Graphics Options', 'CancelScreen', 'ReturnFromScreen', 'FE_SetActiveScreenName","Graphics Options')) {
         Assert-ContainsOrdinal -Text $screenText -Token $token -Context 'Options Graphics screen script'
     }
-    foreach ($token in @('rs.ui.BatmanGraphicsVsyncController', 'InitialVsync', 'DraftVsync', 'InitialStateResolved', 'InitialStateFailed', 'return this.InitialStateResolved && !this.ApplyInProgress && this.IsDirty();', 'this.InitialVsync = this.DraftVsync;', 'FE_SetControlType",4200', 'FE_GetControlType')) {
+    foreach ($token in @('rs.ui.BatmanGraphicsOptionsController', 'InitializationComplete', 'InitializationFailed', 'BeginInitialization', 'PollInitialization', 'GetDraftIndex', 'GetInitialIndex', 'ApplyChanges', 'BeginRollback', 'CompleteRollback', 'FailRollback', 'ReadRequest:4200', 'ReadRequest:4300', 'ReadRequest:4400', 'ReadRequest:4500', 'FE_GetControlType')) {
         Assert-ContainsOrdinal -Text $screenText -Token $token -Context 'Options Graphics screen script'
     }
-    if ($screenText -notmatch 'IncrementVsync\s*=\s*function\s*\(\)\s*\{\s*this\.SetVsync\(this\.DraftVsync\s*==\s*0\s*\?\s*1\s*:\s*0,true\);\s*\}') { throw 'IncrementVsync must wrap DraftVsync through the guarded setter.' }
-    if ($screenText -notmatch 'DecrementVsync\s*=\s*function\s*\(\)\s*\{\s*this\.SetVsync\(this\.DraftVsync\s*==\s*0\s*\?\s*1\s*:\s*0,false\);\s*\}') { throw 'DecrementVsync must wrap DraftVsync through the guarded setter.' }
-    Assert-ContainsOrdinal -Text $screenText -Token 'setInterval(this,"CompleteApply",1000)' -Context 'Options Graphics screen timer'
     Assert-ContainsOrdinal -Text $screenText -Token 'this.Screen.BlockInput(true);' -Context 'Options Graphics apply input block'
     Assert-ContainsOrdinal -Text $screenText -Token 'this.Screen.BlockInput(false);' -Context 'Options Graphics apply input unblock'
-    if ($screenText -notmatch 'FE_SetControlType",4210\s*\+\s*this\.DraftVsync\s*,\s*""\s*\)') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4210 plus DraftVsync with an empty second argument.' }
+    if ($screenText -notmatch 'this\.CurrentPendingSetting\.WriteRequestBase\s*\+\s*this\.CurrentPendingSetting\.DraftIndex') { throw 'Options Graphics screen script must dispatch the current setting write request through its draft index.' }
     if ($screenText -notmatch 'FE_SetControlType",4990\s*\+\s*this\.ApplySignalToggle\s*,\s*""\s*\)') { throw 'Options Graphics screen script must dispatch FE_SetControlType 4990 plus ApplySignalToggle with an empty second argument.' }
+    foreach ($staleToken in @('GraphicsVsyncController', 'InitialVsync', 'DraftVsync', 'InitialStateResolved', 'InitialStateFailed', 'CompleteApply', 'SetVsync', 'IncrementVsync', 'DecrementVsync')) {
+        Assert-NotContainsOrdinal -Text $screenText -Token $staleToken -Context 'Options Graphics screen script'
+    }
 
     $rowDepths = @('141', '133', '125', '117', '109', '101', '93', '85', '77', '69', '61', '53', '45', '37', '29')
     for ($index = 0; $index -lt $rowDepths.Count; $index++) {
@@ -610,7 +658,9 @@ $patcherProjectPath = Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\BmG
 foreach ($requiredPath in @($packJsonPath, $buildJsonPath, $bindingsJsonPath, $commandsJsonPath, $hooksJsonPath, $filesJsonPath, $deltaPath, $basePath, $targetPath, $ffdecPath, $patcherProjectPath)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Batman graphics-options package input not found: $requiredPath" }
 }
-Assert-RebuildAtomicSourceContract -ScriptPath (Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1')
+$rebuildSourcePath = Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1'
+Assert-RebuildAtomicSourceContract -ScriptPath $rebuildSourcePath
+Assert-CurrentGraphicsSourceProvenance -RebuildPath $rebuildSourcePath -ShellTemplatePath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsShellScriptTemplates.cs') -ShellBuilderPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsAssetBuilder.cs')
 Assert-AtomicPublicationRegression
 Assert-ExactPackFileSet -Root $packRoot -BuildDirectoryName 'steam-goty-1.0'
 if (-not $StagedPackageValidation) { Assert-ExactGeneratedTargetFileSet -Root $stableGeneratedRoot -TargetPath $targetPath }

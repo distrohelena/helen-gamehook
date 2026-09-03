@@ -157,6 +157,7 @@ foreach ($RequiredToken in @(
     'AfterRecoveryRootCreation',
     'Get-DirectorySnapshot',
     'Assert-BatmanGraphicsVsyncHooks',
+    'Assert-BatmanGraphicsPackFileSet',
     'Remove-DeploymentStagingRoot',
     'GetPathRoot',
     'Split-Path -Parent $PackDestination',
@@ -168,6 +169,9 @@ foreach ($RequiredToken in @(
 Assert-NotContainsOrdinal -Text $DeployScriptText -Token '$ConflictingPackDestination' -Context 'Batman graphics shell deploy source'
 Assert-NotContainsOrdinal -Text $DeployScriptText -Token 'GetTempPath' -Context 'Batman graphics shell deploy source'
 Assert-NotContainsOrdinal -Text $DeployScriptText -Token '}.GetNewClosure()' -Context 'Batman graphics shell deploy source verifier'
+foreach ($forbiddenToken in @('F:\helenhook.7z', 'F:/helenhook.7z', 'batma/', 'batma\', 'Program Files', 'GraphicsVsyncController', 'InitialVsync', 'DraftVsync', 'GraphicsExitPrompt', 'DefineSprite_601', 'Helen_', 'full-controller', 'prompt export', 'prompt route', 'old package')) {
+    Assert-NotContainsOrdinal -Text $DeployScriptText -Token $forbiddenToken -Context 'Batman graphics shell deploy source provenance'
+}
 if ($DeployScriptText -match '(?im)Remove-Item[^`r`n]*batman-aa-subtitles') {
     throw 'Batman graphics shell deploy source must not remove the subtitle pack.'
 }
@@ -204,6 +208,7 @@ $ProxyBackupPath = Join-Path $RecoveryRoot 'dinput8.dll'
 try {
     New-Item -ItemType Directory -Force -Path $GameBin | Out-Null
     . $DeployScriptPath -GameBin $GameBin -BuilderRoot (Join-Path $BatmanRoot 'builder') -FunctionsOnly
+    Assert-BatmanGraphicsPackFileSet -PackRoot $PackSourcePath -Context 'Repository source'
 
     $ResolverRepoRoot = Join-Path $TestRoot 'resolver-repo'
     $ResolverBatmanRoot = Join-Path $ResolverRepoRoot 'games\HelenBatmanAA'
