@@ -524,11 +524,15 @@ internal static class GraphicsOptionsShellScriptTemplates
            }
            function Destroy()
            {
+              this.ApplyQueue = new Array();
+              this.ApplyQueueIndex = 0;
               this.CurrentPendingOperation = "";
               this.CurrentPendingSetting = undefined;
               this.CurrentPendingCode = undefined;
               this.CurrentPendingDeadline = undefined;
-              this.Screen.Tick = undefined;
+              this.ApplyInProgress = false;
+              this.InteractionBlocked = false;
+              this.Screen.BlockInput(false);
            }
         }
         function CancelScreen()
@@ -644,6 +648,18 @@ internal static class GraphicsOptionsShellScriptTemplates
            this.Default = -1;
            this.Update = function()
            {
+              if(this.Label != undefined && this.Label.Label != undefined && this.Label.Label.Text != undefined)
+              {
+                 this.Label.Label.Text.text = "{{escapedLabel}}";
+              }
+              else if(this.Label != undefined && this.Label.Text != undefined)
+              {
+                 this.Label.Text.text = "{{escapedLabel}}";
+              }
+              else if(this.Label != undefined)
+              {
+                 this.Label.text = "{{escapedLabel}}";
+              }
               if(_parent.GraphicsOptionsController == undefined)
               {
                  if(this.ItemText != undefined)
@@ -660,28 +676,28 @@ internal static class GraphicsOptionsShellScriptTemplates
                  }
                  return undefined;
               }
-              if(this.Label != undefined && this.Label.Label != undefined && this.Label.Label.Text != undefined)
-              {
-                 this.Label.Label.Text.text = "{{escapedLabel}}";
-              }
-              else if(this.Label != undefined && this.Label.Text != undefined)
-              {
-                 this.Label.Text.text = "{{escapedLabel}}";
-              }
-              else if(this.Label != undefined)
-              {
-                 this.Label.text = "{{escapedLabel}}";
-              }
               this.State = _parent.GraphicsOptionsController.GetDraftIndex(this.RowIndex);
               this.Initial = _parent.GraphicsOptionsController.GetInitialIndex(this.RowIndex);
               if(!_parent.GraphicsOptionsController.InitializationComplete)
               {
-                 this.ItemText.text = _parent.GraphicsOptionsController.IsUnavailable(this.RowIndex) ? "Unavailable" : "Loading...";
-                 this.LeftClicker._visible = false;
-                 this.RightClicker._visible = false;
+                 if(this.ItemText != undefined)
+                 {
+                    this.ItemText.text = _parent.GraphicsOptionsController.IsUnavailable(this.RowIndex) ? "Unavailable" : "Loading...";
+                 }
+                 if(this.LeftClicker != undefined)
+                 {
+                    this.LeftClicker._visible = false;
+                 }
+                 if(this.RightClicker != undefined)
+                 {
+                    this.RightClicker._visible = false;
+                 }
                  return undefined;
               }
-              this.ItemText.text = this.Names[this.State];
+              if(this.ItemText != undefined)
+              {
+                 this.ItemText.text = this.Names[this.State];
+              }
               if(this.LeftClicker != undefined)
               {
                  this.LeftClicker._visible = this.State > 0 && _parent.GraphicsOptionsController.CanEdit(this.RowIndex);
@@ -747,6 +763,18 @@ internal static class GraphicsOptionsShellScriptTemplates
            this.Default = 0;
            this.Update = function()
            {
+              if(this.Label != undefined && this.Label.Label != undefined && this.Label.Label.Text != undefined)
+              {
+                 this.Label.Label.Text.text = "Apply Changes";
+              }
+              else if(this.Label != undefined && this.Label.Text != undefined)
+              {
+                 this.Label.Text.text = "Apply Changes";
+              }
+              else if(this.Label != undefined)
+              {
+                 this.Label.text = "Apply Changes";
+              }
               if(_parent.GraphicsOptionsController == undefined)
               {
                  if(this.ItemText != undefined)
@@ -769,21 +797,15 @@ internal static class GraphicsOptionsShellScriptTemplates
                  this._visible = true;
                  return undefined;
               }
-              if(this.Label != undefined && this.Label.Label != undefined && this.Label.Label.Text != undefined)
+              if(this.ItemText != undefined)
               {
-                 this.Label.Label.Text.text = "Apply Changes";
+                 this.ItemText.text = _parent.GraphicsOptionsController.GetApplyStatusText();
+                 this.ItemText._alpha = _parent.GraphicsOptionsController.CanApply() ? 100 : 40;
               }
-              else if(this.Label != undefined && this.Label.Text != undefined)
+              if(this.Label != undefined)
               {
-                 this.Label.Text.text = "Apply Changes";
+                 this.Label._alpha = _parent.GraphicsOptionsController.CanApply() ? 100 : 40;
               }
-              else if(this.Label != undefined)
-              {
-                 this.Label.text = "Apply Changes";
-              }
-              this.ItemText.text = _parent.GraphicsOptionsController.GetApplyStatusText();
-              this.ItemText._alpha = _parent.GraphicsOptionsController.CanApply() ? 100 : 40;
-              this.Label._alpha = _parent.GraphicsOptionsController.CanApply() ? 100 : 40;
               if(this.LeftClicker != undefined)
               {
                  this.LeftClicker._visible = false;

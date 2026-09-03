@@ -25,6 +25,7 @@ if (-not (Test-Path -LiteralPath $TemplatePath -PathType Leaf)) {
 }
 
 $TemplateText = Get-Content -LiteralPath $TemplatePath -Raw
+$ContractScriptText = Get-Content -LiteralPath $PSCommandPath -Raw
 
 $BuilderSourceRoot = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder'
 $BuildPathsPath = Join-Path $BuilderSourceRoot 'GraphicsOptionsShellBuildPaths.cs'
@@ -402,16 +403,73 @@ function Invoke-RequiredProcess {
         [string]$Context
     )
 
+    $resolvedFilePath = $null
+    try {
+        $isPath = [IO.Path]::IsPathRooted($FilePath) -or $FilePath.IndexOf('\', [System.StringComparison]::Ordinal) -ge 0 -or $FilePath.IndexOf('/', [System.StringComparison]::Ordinal) -ge 0
+        if ($isPath) {
+            if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
+                throw "Executable path was not found: $FilePath"
+            }
+            $resolvedFilePath = (Resolve-Path -LiteralPath $FilePath -ErrorAction Stop).Path
+        } else {
+            $command = Get-Command -Name $FilePath -ErrorAction Stop
+            if ($command.CommandType -ne 'Application' -and $command.CommandType -ne 'ExternalScript') {
+                throw "Resolved command is not an executable: $FilePath"
+            }
+            $resolvedFilePath = $command.Path
+            if ([string]::IsNullOrWhiteSpace($resolvedFilePath)) {
+                $resolvedFilePath = $command.Source
+            }
+        }
+    } catch {
+        throw "$Context could not resolve executable '$FilePath': $($_.Exception.Message)"
+    }
+
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
+    $output = @()
+    $exitCode = $null
     try {
-        $output = @(& $FilePath @Arguments 2>&1)
+        $global:LASTEXITCODE = $null
+        $output = @(& $resolvedFilePath @Arguments 2>&1)
+        $exitCode = $global:LASTEXITCODE
+    } catch {
+        throw "$Context failed to start '$resolvedFilePath': $($_.Exception.Message)`n$($output -join [Environment]::NewLine)"
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
     }
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Context failed (exit code $LASTEXITCODE): $($output -join [Environment]::NewLine)"
+    if ($null -eq $exitCode) {
+        throw "$Context failed to start '$resolvedFilePath': no process exit code was reported. $($output -join [Environment]::NewLine)"
     }
+    if ($exitCode -ne 0) {
+        throw "$Context failed (exit code $exitCode): $($output -join [Environment]::NewLine)"
+    }
+}
+
+foreach ($RequiredProcessToken in @('Get-Command -Name $FilePath', 'Test-Path -LiteralPath $FilePath -PathType Leaf', 'Resolve-Path -LiteralPath $FilePath', 'failed to start')) {
+    if ($ContractScriptText.IndexOf($RequiredProcessToken, [System.StringComparison]::Ordinal) -lt 0) {
+        throw "Invoke-RequiredProcess is missing required process-resolution behavior: $RequiredProcessToken"
+    }
+}
+
+$MissingProcessPath = Join-Path ([System.IO.Path]::GetTempPath()) ('BatmanGraphicsShellMissingProcess-' + [guid]::NewGuid().ToString('N') + '.exe')
+$MissingProcessThrew = $false
+try {
+    Invoke-RequiredProcess -FilePath $MissingProcessPath -Arguments @() -Context 'Missing process contract'
+} catch {
+    $MissingProcessThrew = $true
+}
+if (-not $MissingProcessThrew) {
+    throw 'Invoke-RequiredProcess must throw when the executable path cannot be resolved.'
+}
+$MissingProcessCommandThrew = $false
+try {
+    Invoke-RequiredProcess -FilePath ('BatmanGraphicsShellMissingCommand-' + [guid]::NewGuid().ToString('N')) -Arguments @() -Context 'Missing command contract'
+} catch {
+    $MissingProcessCommandThrew = $true
+}
+if (-not $MissingProcessCommandThrew) {
+    throw 'Invoke-RequiredProcess must throw when a command name cannot be resolved.'
 }
 
 function Assert-RetailStartupSpritesPreserved {
@@ -747,7 +805,7 @@ foreach ($RequiredScreenToken in @(
     'this.RollbackSignalToggle = 0;',
     'this.UiStatus = "";',
     'this.RollbackLocked = false;',
-    'this.Screen.Tick = undefined;',
+    'this.Tick = function()',
     'function BeginInitialization()',
     'function IsDeadlineReached(deadline)',
     'this.InitializationDeadline = getTimer() + 10000;',
@@ -808,6 +866,15 @@ if (([regex]::Matches($ScreenFrame, 'this.InitializationDeadline = getTimer\(\) 
 if ($ScreenFrame.IndexOf('this.onEnterFrame = function()', [System.StringComparison]::Ordinal) -ge 0) {
     throw 'Graphics shell must preserve the inherited onEnterFrame lifecycle.'
 }
+if ($ScreenFrame.IndexOf('this.Screen.Tick = undefined;', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Graphics controller destruction must leave the inherited Tick hook installed during exit.'
+}
+$CancelScreenBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'CancelScreen' -Context 'Graphics screen cancellation'
+$CancelDestroyPosition = $CancelScreenBody.IndexOf('this.GraphicsOptionsController.Destroy();', [System.StringComparison]::Ordinal)
+$CancelReturnPosition = $CancelScreenBody.IndexOf('ReturnFromScreen();', [System.StringComparison]::Ordinal)
+if ($CancelDestroyPosition -lt 0 -or $CancelReturnPosition -lt 0 -or $CancelDestroyPosition -ge $CancelReturnPosition) {
+    throw 'CancelScreen must destroy the graphics controller before starting the return transition.'
+}
 if ($ScreenFrame.IndexOf('getTimer() >=', [System.StringComparison]::Ordinal) -ge 0) {
     throw 'Graphics deadlines must use the rollover-safe IsDeadlineReached method.'
 }
@@ -863,6 +930,12 @@ $BeginRollbackBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame 
 Assert-ContainsOrdinal -Text $BeginRollbackBody -Token 'this.CurrentPendingDeadline = getTimer() + 2000;' -Context 'Graphics rollback deadline'
 Assert-ContainsOrdinal -Text $BeginRollbackBody -Token 'FE_SetControlType",4970+this.RollbackSignalToggle,""' -Context 'Graphics rollback request'
 Assert-ContainsOrdinal -Text $PollTransactionBody -Token 'rawValue == 4960+this.RollbackSignalToggle' -Context 'Graphics rollback acknowledgement'
+$DestroyControllerBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'Destroy' -Context 'Graphics controller destruction'
+Assert-ContainsOrdinal -Text $DestroyControllerBody -Token 'this.CurrentPendingOperation = "";' -Context 'Graphics controller destruction pending operation'
+Assert-ContainsOrdinal -Text $DestroyControllerBody -Token 'this.Screen.BlockInput(false);' -Context 'Graphics controller destruction input recovery'
+if ($DestroyControllerBody.IndexOf('this.Screen.Tick', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Graphics controller destruction must not replace the inherited screen Tick hook.'
+}
 $CompleteRollbackBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'CompleteRollback' -Context 'Graphics rollback success'
 Assert-ContainsOrdinal -Text $CompleteRollbackBody -Token 'this.UiStatus = "Apply Failed";' -Context 'Graphics rollback success status'
 if ($CompleteRollbackBody.IndexOf('DraftIndex =', [System.StringComparison]::Ordinal) -ge 0 -or
@@ -1242,6 +1315,15 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
         Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsOptionsController.IncrementSetting(this.RowIndex);' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsOptionsController.DecrementSetting(this.RowIndex);' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token '"Unavailable" : "Loading..."' -Context "$RowContext unresolved state"
+        $ActiveUpdateBody = Get-ActionScriptFunctionBody -ScriptText $RowScript -FunctionName 'Update' -Context "$RowContext Update"
+        $ActiveLabelPosition = $ActiveUpdateBody.IndexOf('this.Label.Label.Text.text =', [System.StringComparison]::Ordinal)
+        $ActiveControllerGuardPosition = $ActiveUpdateBody.IndexOf('if(_parent.GraphicsOptionsController == undefined)', [System.StringComparison]::Ordinal)
+        if ($ActiveLabelPosition -lt 0 -or $ActiveControllerGuardPosition -lt 0 -or $ActiveLabelPosition -ge $ActiveControllerGuardPosition) {
+            throw "$RowContext must assign its stable label before checking for an absent controller."
+        }
+        Assert-ContainsOrdinal -Text $ActiveUpdateBody -Token 'if(this.ItemText != undefined)' -Context "$RowContext ItemText guard"
+        Assert-ContainsOrdinal -Text $ActiveUpdateBody -Token 'if(this.LeftClicker != undefined)' -Context "$RowContext left clicker guard"
+        Assert-ContainsOrdinal -Text $ActiveUpdateBody -Token 'if(this.RightClicker != undefined)' -Context "$RowContext right clicker guard"
         foreach ($ActiveFunctionName in @('RunAction', 'Increment', 'Decrement')) {
             $ActiveFunctionBody = Get-ActionScriptFunctionBody -ScriptText $RowScript -FunctionName $ActiveFunctionName -Context "$RowContext $ActiveFunctionName"
             Assert-ContainsOrdinal -Text $ActiveFunctionBody -Token 'if(_parent.GraphicsOptionsController != undefined)' -Context "$RowContext $ActiveFunctionName controller guard"
@@ -1287,6 +1369,11 @@ Assert-ContainsOrdinal -Text $ApplyRowScript -Token '_parent.GraphicsOptionsCont
 Assert-ContainsOrdinal -Text $ApplyRowScript -Token '_parent.GraphicsOptionsController.CanApply() ? 100 : 40' -Context 'Graphics row action 15 enabled state'
 Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'if(_parent.GraphicsOptionsController == undefined)' -Context 'Graphics row action 15 controller-load guard'
 Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this.ItemText.text = "";' -Context 'Graphics row action 15 controller-load guard'
+$ApplyUpdateBody = Get-ActionScriptFunctionBody -ScriptText $ApplyRowScript -FunctionName 'Update' -Context 'Graphics row action 15 Update'
+Assert-ContainsOrdinal -Text $ApplyUpdateBody -Token 'if(this.ItemText != undefined)' -Context 'Graphics row action 15 ItemText guard'
+Assert-ContainsOrdinal -Text $ApplyUpdateBody -Token 'if(this.Label != undefined)' -Context 'Graphics row action 15 alpha Label guard'
+Assert-ContainsOrdinal -Text $ApplyUpdateBody -Token 'if(this.LeftClicker != undefined)' -Context 'Graphics row action 15 left clicker guard'
+Assert-ContainsOrdinal -Text $ApplyUpdateBody -Token 'if(this.RightClicker != undefined)' -Context 'Graphics row action 15 right clicker guard'
 $ApplyRunActionBody = Get-ActionScriptFunctionBody -ScriptText $ApplyRowScript -FunctionName 'RunAction' -Context 'Graphics row action 15 RunAction'
 Assert-ContainsOrdinal -Text $ApplyRunActionBody -Token 'if(_parent.GraphicsOptionsController != undefined)' -Context 'Graphics row action 15 RunAction controller guard'
 Assert-NoOpActionScriptFunction -ScriptText $ApplyRowScript -FunctionName 'Increment' -Context 'Graphics row action 15'
@@ -1337,6 +1424,7 @@ const tickBody = __TICK_BODY__;
 let now = 0;
 let carrierResponses = [];
 let calls = [];
+let currentScreen = null;
 
 global.getTimer = () => now;
 global.int = value => Number(value) || 0;
@@ -1347,6 +1435,12 @@ global.flash = { external: { ExternalInterface: { call: (name, ...args) => {
     }
     return 0;
 } } } };
+global.ReturnFromScreen = () => {
+    if (currentScreen !== null) {
+        currentScreen.outTransitionStarted = true;
+        currentScreen.returnFromScreenCount += 1;
+    }
+};
 
 function setNow(value) {
     now = value;
@@ -1367,10 +1461,17 @@ function settingSignals() {
 function makeScreen() {
     const screen = {
         blockStates: [],
+        inputBlocked: false,
         rowUpdates: 0,
         reUpdates: 0,
-        BlockInput(value) { this.blockStates.push(value); },
-        ReUpdate() { this.reUpdates += 1; }
+        BackScreen: 'OptionsMenu',
+        BackScreenIndex: 1,
+        BackAvailable: true,
+        outTransitionStarted: false,
+        returnFromScreenCount: 0,
+        BlockInput(value) { this.blockStates.push(value); this.inputBlocked = value; },
+        ReUpdate() { this.reUpdates += 1; },
+        onEnterFrame() { this.Tick(); }
     };
     for (let rowIndex = 1; rowIndex <= 15; rowIndex += 1) {
         screen['GraphicsRow' + rowIndex] = { Update() { screen.rowUpdates += 1; } };
@@ -1379,9 +1480,13 @@ function makeScreen() {
 }
 
 function makeEnvironment() {
+    clearCalls();
+    carrierResponses = [];
     const screen = makeScreen();
     const controller = new BatmanGraphicsOptionsController(screen);
     screen.GraphicsOptionsController = controller;
+    screen.Tick = new Function(tickBody);
+    currentScreen = screen;
     return { screen, controller };
 }
 
@@ -1453,6 +1558,8 @@ assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex),
 assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), [-1, -1, -1, -1]);
 assert.strictEqual(controller.CanApply(), false);
 assert.strictEqual(controller.CanEdit(3), false);
+assert.strictEqual(environment.screen.inputBlocked, false);
+assert.strictEqual(environment.screen.BackAvailable, true);
 
 setNow(5000);
 assert.strictEqual(controller.IsDeadlineReached(10000), false);
@@ -1502,6 +1609,8 @@ controller.IncrementSetting(4);
 controller.IncrementSetting(4);
 controller.ToggleSetting(3);
 controller.ApplyChanges();
+assert.strictEqual(environment.screen.inputBlocked, true);
+assert.strictEqual(environment.screen.BackAvailable, true);
 assert.deepStrictEqual(settingSignals().slice(4), [4221]);
 queueResponses(4230);
 controller.Tick();
@@ -1522,13 +1631,28 @@ assert.deepStrictEqual(settingSignals().slice(4), [4221, 4322, 4521]);
 queueResponses(4531);
 controller.Tick();
 const commitSignal = settingSignals()[settingSignals().length - 1];
-assert.ok(commitSignal === 4990 || commitSignal === 4991);
+assert.strictEqual(commitSignal, 4991);
 assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [0, 0, 0, 0]);
-queueResponses(commitSignal === 4990 ? 4980 : 4981);
+queueResponses(4981);
 controller.Tick();
 assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [1, 2, 0, 1]);
 assert.strictEqual(controller.GetApplyStatusText(), '');
 assert.strictEqual(controller.CanApply(), false);
+assert.strictEqual(environment.screen.inputBlocked, false);
+assert.strictEqual(environment.screen.BackAvailable, true);
+
+controller.ToggleSetting(3);
+controller.ApplyChanges();
+assert.deepStrictEqual(settingSignals().slice(-1), [4220]);
+queueResponses(4230);
+controller.Tick();
+const secondCommitSignal = settingSignals()[settingSignals().length - 1];
+assert.strictEqual(secondCommitSignal, 4990);
+queueResponses(4980);
+controller.Tick();
+assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [0, 2, 0, 1]);
+assert.strictEqual(environment.screen.inputBlocked, false);
+assert.strictEqual(environment.screen.BackAvailable, true);
 
 function applyAndReachSettingFailure(failureResponse) {
     setNow(0);
@@ -1542,7 +1666,7 @@ function applyAndReachSettingFailure(failureResponse) {
     failedController.Tick();
     const rollbackSignal = settingSignals()[settingSignals().length - 1];
     assert.ok(rollbackSignal === 4970 || rollbackSignal === 4971);
-    return { controller: failedController, rollbackSignal };
+    return { controller: failedController, screen: failedEnvironment.screen, rollbackSignal };
 }
 
 let failureEnvironment = applyAndReachSettingFailure(4299);
@@ -1552,6 +1676,35 @@ assert.strictEqual(failureEnvironment.controller.GetApplyStatusText(), 'Apply Fa
 assert.strictEqual(failureEnvironment.controller.Settings[0].DraftIndex, 1);
 assert.strictEqual(failureEnvironment.controller.Settings[0].InitialIndex, 0);
 assert.strictEqual(failureEnvironment.controller.CanApply(), true);
+assert.strictEqual(failureEnvironment.screen.inputBlocked, false);
+assert.strictEqual(failureEnvironment.screen.BackAvailable, true);
+
+setNow(0);
+clearCalls();
+environment = makeEnvironment();
+controller = environment.controller;
+initialize(controller, [0, 0, 0, 0]);
+controller.ToggleSetting(3);
+controller.ApplyChanges();
+queueResponses(4299);
+controller.Tick();
+assert.strictEqual(settingSignals()[settingSignals().length - 1], 4971);
+queueResponses(4961);
+controller.Tick();
+assert.strictEqual(controller.GetApplyStatusText(), 'Apply Failed');
+controller.ToggleSetting(4);
+controller.ApplyChanges();
+assert.strictEqual(settingSignals()[settingSignals().length - 1], 4221);
+queueResponses(4231);
+controller.Tick();
+queueResponses(4399);
+controller.Tick();
+assert.strictEqual(settingSignals()[settingSignals().length - 1], 4970);
+queueResponses(4960);
+controller.Tick();
+assert.strictEqual(controller.GetApplyStatusText(), 'Apply Failed');
+assert.strictEqual(environment.screen.inputBlocked, false);
+assert.strictEqual(environment.screen.BackAvailable, true);
 
 failureEnvironment = applyAndReachSettingFailure(4299);
 setNow(failureEnvironment.controller.CurrentPendingDeadline);
@@ -1575,6 +1728,8 @@ assert.ok(commitRollbackSignal === 4970 || commitRollbackSignal === 4971);
 queueResponses(commitRollbackSignal === 4970 ? 4960 : 4961);
 controller.Tick();
 assert.strictEqual(controller.GetApplyStatusText(), 'Apply Failed');
+assert.strictEqual(environment.screen.inputBlocked, false);
+assert.strictEqual(environment.screen.BackAvailable, true);
 assert.strictEqual(controller.Settings[0].DraftIndex, 1);
 assert.strictEqual(controller.Settings[0].InitialIndex, 0);
 
@@ -1594,6 +1749,8 @@ assert.ok(timeoutRollbackSignal === 4970 || timeoutRollbackSignal === 4971);
 queueResponses(timeoutRollbackSignal === 4970 ? 4960 : 4961);
 controller.Tick();
 assert.strictEqual(controller.GetApplyStatusText(), 'Apply Failed');
+assert.strictEqual(environment.screen.inputBlocked, false);
+assert.strictEqual(environment.screen.BackAvailable, true);
 
 failureEnvironment = applyAndReachSettingFailure(4299);
 queueResponses(4969);
@@ -1602,20 +1759,25 @@ assert.strictEqual(failureEnvironment.controller.GetApplyStatusText(), 'Rollback
 assert.strictEqual(failureEnvironment.controller.RollbackLocked, true);
 assert.strictEqual(failureEnvironment.controller.CanApply(), false);
 assert.strictEqual(failureEnvironment.controller.CanEdit(3), false);
+assert.strictEqual(failureEnvironment.screen.inputBlocked, false);
+assert.strictEqual(failureEnvironment.screen.BackAvailable, true);
 
 failureEnvironment = applyAndReachSettingFailure(4299);
 setNow(failureEnvironment.controller.CurrentPendingDeadline);
 failureEnvironment.controller.Tick();
 assert.strictEqual(failureEnvironment.controller.GetApplyStatusText(), 'Rollback Failed');
 assert.strictEqual(failureEnvironment.controller.RollbackLocked, true);
+assert.strictEqual(failureEnvironment.screen.inputBlocked, false);
+assert.strictEqual(failureEnvironment.screen.BackAvailable, true);
 
-const lifecycleParent = { GraphicsOptionsController: undefined };
+const lifecycleParent = { GraphicsOptionsController: undefined, BackAvailable: true, outTransitionStarted: false, returnFromScreenCount: 0 };
 const guardedActiveRow = loadRow(rowScripts[2], lifecycleParent);
 expectNoThrow(() => guardedActiveRow.Update(), 'active row update before controller assignment');
 expectNoThrow(() => guardedActiveRow.RunAction(), 'active row action before controller assignment');
 expectNoThrow(() => guardedActiveRow.Increment(), 'active row increment before controller assignment');
 expectNoThrow(() => guardedActiveRow.Decrement(), 'active row decrement before controller assignment');
 assert.strictEqual(guardedActiveRow.ItemText.text, 'Loading...');
+assert.strictEqual(guardedActiveRow.Label.Label.Text.text, 'VSync');
 assert.strictEqual(guardedActiveRow.LeftClicker._visible, false);
 assert.strictEqual(guardedActiveRow.RightClicker._visible, false);
 const guardedApplyRow = loadRow(rowScripts[14], lifecycleParent);
@@ -1629,17 +1791,38 @@ expectNoThrow(() => new Function(rowScripts[2].slice(rowScripts[2].indexOf('{') 
 const sparseApplyRow = { _parent: lifecycleParent };
 expectNoThrow(() => new Function(rowScripts[14].slice(rowScripts[14].indexOf('{') + 1, rowScripts[14].lastIndexOf('}'))).call(sparseApplyRow), 'sparse apply row load before controller assignment');
 
-global.ReturnFromScreen = () => {};
+const partialEnvironment = makeEnvironment();
+const partialActiveRow = { _parent: partialEnvironment.screen, ItemText: { text: '' } };
+const partialActiveLoad = new Function(rowScripts[2].slice(rowScripts[2].indexOf('{') + 1, rowScripts[2].lastIndexOf('}')));
+expectNoThrow(() => partialActiveLoad.call(partialActiveRow), 'partial active row load with controller initializing');
+const partialApplyRow = { _parent: partialEnvironment.screen, ItemText: { text: '', _alpha: 0 } };
+const partialApplyLoad = new Function(rowScripts[14].slice(rowScripts[14].indexOf('{') + 1, rowScripts[14].lastIndexOf('}')));
+expectNoThrow(() => partialApplyLoad.call(partialApplyRow), 'partial apply row load with controller initializing');
+initialize(partialEnvironment.controller, [0, 0, 0, 0]);
+expectNoThrow(() => partialActiveRow.Update(), 'partial active row update after controller initialization');
+expectNoThrow(() => partialApplyRow.Update(), 'partial apply row update after controller initialization');
+
+currentScreen = lifecycleParent;
 expectNoThrow(() => new Function(cancelBody).call(lifecycleParent), 'CancelScreen before controller assignment');
 const lifecycleEnvironment = makeEnvironment();
-lifecycleEnvironment.screen.Tick = () => {};
+initialize(lifecycleEnvironment.controller, [0, 0, 0, 0]);
+lifecycleEnvironment.controller.ToggleSetting(3);
+lifecycleEnvironment.controller.ApplyChanges();
+assert.strictEqual(lifecycleEnvironment.screen.inputBlocked, true);
+const callsBeforeCancel = calls.length;
 expectNoThrow(() => new Function(cancelBody).call(lifecycleEnvironment.screen), 'CancelScreen with controller');
-assert.strictEqual(lifecycleEnvironment.screen.Tick, undefined);
+assert.strictEqual(lifecycleEnvironment.screen.inputBlocked, false);
+assert.strictEqual(lifecycleEnvironment.screen.BackAvailable, true);
+assert.strictEqual(lifecycleEnvironment.screen.outTransitionStarted, true);
+assert.strictEqual(lifecycleEnvironment.screen.returnFromScreenCount, 1);
+expectNoThrow(() => lifecycleEnvironment.screen.onEnterFrame(), 'inherited onEnterFrame during exit transition');
+assert.strictEqual(calls.length, callsBeforeCancel);
 const tickHook = new Function('return function(){' + tickBody + '}')();
-const tickScreen = { GraphicsOptionsController: undefined };
-expectNoThrow(() => tickHook.call(tickScreen), 'Tick hook before controller assignment');
+const tickScreen = { GraphicsOptionsController: undefined, onEnterFrame() { this.Tick(); } };
+tickScreen.Tick = tickHook;
+expectNoThrow(() => tickScreen.onEnterFrame(), 'Tick hook before controller assignment');
 tickScreen.GraphicsOptionsController = { Tick() { this.called = true; } };
-tickHook.call(tickScreen);
+expectNoThrow(() => tickScreen.onEnterFrame(), 'Tick hook through inherited onEnterFrame');
 assert.strictEqual(tickScreen.GraphicsOptionsController.called, true);
 
 console.log('STATE_MACHINE_PASS');
@@ -1650,7 +1833,13 @@ New-Item -ItemType Directory -Path $HarnessRoot -Force | Out-Null
 try {
     $HarnessPath = Join-Path $HarnessRoot 'state-machine.js'
     Set-Content -LiteralPath $HarnessPath -Value $HarnessSource -Encoding UTF8
-    $HarnessOutput = @(& $NodeCommand.Source $HarnessPath 2>&1)
+    $HarnessErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $HarnessOutput = @(& $NodeCommand.Source $HarnessPath 2>&1)
+    } finally {
+        $ErrorActionPreference = $HarnessErrorActionPreference
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "Batman graphics shell state-machine harness failed (exit code $LASTEXITCODE):`n$($HarnessOutput -join [Environment]::NewLine)"
     }
