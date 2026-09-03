@@ -229,6 +229,9 @@ $ForbiddenTokens = @(
     'GraphicsExitPrompt',
     'YesNoPrompt',
     'CaptureInitialState',
+    'GraphicsVsyncController',
+    'InitialVsync',
+    'DraftVsync',
     '601',
     'Unsaved',
     'RestartRequired'
@@ -285,6 +288,39 @@ function Assert-NoOpActionScriptFunction {
     if ($FunctionBody.Length -ne 0) {
         throw "$Context function $FunctionName must be a no-op, but contains: $FunctionBody"
     }
+}
+
+function Get-ActionScriptNamedFunctionBody {
+    param(
+        [string]$ScriptText,
+        [string]$FunctionName,
+        [string]$Context
+    )
+
+    $FunctionToken = "function $FunctionName("
+    $FunctionIndex = $ScriptText.IndexOf($FunctionToken, [System.StringComparison]::Ordinal)
+    if ($FunctionIndex -lt 0) {
+        throw "$Context is missing function: $FunctionToken"
+    }
+
+    $BodyStart = $ScriptText.IndexOf('{', $FunctionIndex)
+    if ($BodyStart -lt 0) {
+        throw "$Context has an unterminated function: $FunctionToken"
+    }
+
+    $BraceDepth = 0
+    for ($Index = $BodyStart; $Index -lt $ScriptText.Length; $Index++) {
+        if ($ScriptText[$Index] -eq '{') {
+            $BraceDepth++
+        } elseif ($ScriptText[$Index] -eq '}') {
+            $BraceDepth--
+            if ($BraceDepth -eq 0) {
+                return $ScriptText.Substring($BodyStart + 1, $Index - $BodyStart - 1)
+            }
+        }
+    }
+
+    throw "$Context has an unterminated function: $FunctionToken"
 }
 
 function Invoke-RequiredProcess {
@@ -625,36 +661,130 @@ try {
 
 $ScreenFrame = [string]$ReflectionContract.ScreenFrame
 foreach ($RequiredScreenToken in @(
-    'class rs.ui.BatmanGraphicsVsyncController',
-    'this.InitialStateResolved = false;',
-    'this.InitialStateFailed = false;',
-    'function BeginInitialStateRequest()',
-    'flash.external.ExternalInterface.call("FE_SetControlType",4200,"");',
-    'this.InitialStateTimerId = setInterval(this,"PollInitialState",50);',
-    'if(this.InitialStatePollCount >= 200)',
+    'class rs.ui.BatmanGraphicsOptionsController',
+    'this.Settings = new Array(',
+    'this.ActiveSettingsByRow = new Object();',
+    'this.InitializationIndex = 0;',
+    'this.InitializationDeadline = undefined;',
+    'this.ApplyQueue = new Array();',
+    'this.ApplyQueueIndex = 0;',
+    'this.CurrentPendingOperation = "";',
+    'this.CurrentPendingCode = undefined;',
+    'this.CurrentPendingDeadline = undefined;',
+    'this.ApplySignalToggle = 0;',
+    'this.RollbackSignalToggle = 0;',
+    'this.UiStatus = "";',
+    'this.RollbackLocked = false;',
+    'function BeginInitialization()',
+    'this.InitializationDeadline = getTimer() + 10000;',
+    'flash.external.ExternalInterface.call("FE_SetControlType",this.Settings[this.InitializationIndex].ReadRequest,"");',
     'var rawValue = int(flash.external.ExternalInterface.call("FE_GetControlType"));',
-    'if(rawValue == 4210 || rawValue == 4211)',
-    'this.InitialVsync = rawValue - 4210;',
-    'this.DraftVsync = this.InitialVsync;',
-    'return this.InitialStateResolved && !this.ApplyInProgress && this.IsDirty();',
-    'this.SetVsync(this.DraftVsync == 0 ? 1 : 0,true);',
-    'this.SetVsync(this.DraftVsync == 0 ? 1 : 0,false);',
+    'this.Settings[this.InitializationIndex].InitialIndex = rawValue - this.Settings[this.InitializationIndex].ReadResponseBase;',
+    'this.Settings[this.InitializationIndex].DraftIndex = this.Settings[this.InitializationIndex].InitialIndex;',
+    'function IsDirty()',
+    'function IncrementSetting(rowIndex)',
+    'function DecrementSetting(rowIndex)',
+    'function ToggleSetting(rowIndex)',
     'this.Screen.BlockInput(true);',
     'this.Screen.BlockInput(false);',
-    'flash.external.ExternalInterface.call("FE_SetControlType",4210+this.DraftVsync,"");',
-    'this.ApplyTimerId = setInterval(this,"CompleteApply",1000);',
+    'function ApplyChanges()',
+    'this.CurrentPendingDeadline = getTimer() + 2000;',
+    'flash.external.ExternalInterface.call("FE_SetControlType",this.CurrentPendingSetting.WriteRequestBase + this.CurrentPendingSetting.DraftIndex,"");',
+    'if(rawValue == this.CurrentPendingSetting.WriteAcknowledgementBase + this.CurrentPendingSetting.DraftIndex)',
     'flash.external.ExternalInterface.call("FE_SetControlType",4990+this.ApplySignalToggle,"");',
-    'this.InitialVsync = this.DraftVsync;',
+    'if(rawValue == 4980+this.ApplySignalToggle)',
+    'flash.external.ExternalInterface.call("FE_SetControlType",4970+this.RollbackSignalToggle,"");',
+    'if(rawValue == 4960+this.RollbackSignalToggle)',
+    'this.UiStatus = "Apply Failed";',
+    'this.UiStatus = "Rollback Failed";',
+    'this.RollbackLocked = true;',
+    'this.CopyDraftToInitial();',
+    'this.Screen.BlockInput(true);',
+    'this.onEnterFrame = function()',
     'this.AddItem(GraphicsRow15,13,0,-1,-1);',
     'GraphicsRow15._visible = true;',
-    'this.GraphicsVsyncController.BeginInitialStateRequest();'
+    'this.GraphicsOptionsController.BeginInitialization();'
 )) {
     Assert-ContainsOrdinal -Text $ScreenFrame -Token $RequiredScreenToken -Context 'Graphics shell screen frame'
 }
-foreach ($BakedControllerToken in @('new rs.ui.BatmanGraphicsVsyncController(this,0)', 'new rs.ui.BatmanGraphicsVsyncController(this,1)')) {
-    if ($ScreenFrame.IndexOf($BakedControllerToken, [System.StringComparison]::Ordinal) -ge 0) {
-        throw "Graphics shell screen frame still contains baked VSync state: $BakedControllerToken"
+
+$ExpectedSettingDefinitions = @(
+    '{RowIndex:3,Name:"VSync",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4200,ReadResponseBase:4210,WriteRequestBase:4220,WriteAcknowledgementBase:4230,FailureResponse:4299,InitialIndex:-1,DraftIndex:-1}',
+    '{RowIndex:4,Name:"MSAA",Values:new Array("Off","2x","4x","8x","16x"),ConfigValues:new Array(0,1,2,3,5),ReadRequest:4300,ReadResponseBase:4310,WriteRequestBase:4320,WriteAcknowledgementBase:4330,FailureResponse:4399,InitialIndex:-1,DraftIndex:-1}',
+    '{RowIndex:13,Name:"PhysX",Values:new Array("Off","Normal","High"),ConfigValues:new Array(0,1,2),ReadRequest:4400,ReadResponseBase:4410,WriteRequestBase:4420,WriteAcknowledgementBase:4430,FailureResponse:4499,InitialIndex:-1,DraftIndex:-1}',
+    '{RowIndex:14,Name:"NVIDIA Stereo 3D",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4500,ReadResponseBase:4510,WriteRequestBase:4520,WriteAcknowledgementBase:4530,FailureResponse:4599,InitialIndex:-1,DraftIndex:-1}'
+)
+foreach ($ExpectedSettingDefinition in $ExpectedSettingDefinitions) {
+    Assert-ContainsOrdinal -Text $ScreenFrame -Token $ExpectedSettingDefinition -Context 'Graphics declarative setting definition'
+}
+foreach ($ExpectedSettingRow in @(3, 4, 13, 14)) {
+    $DefinitionCount = ([regex]::Matches($ScreenFrame, "RowIndex:$ExpectedSettingRow,")).Count
+    if ($DefinitionCount -ne 1) {
+        throw "Graphics setting row $ExpectedSettingRow must have exactly one declarative definition, found $DefinitionCount."
     }
+}
+if (([regex]::Matches($ScreenFrame, 'this.InitializationDeadline = getTimer\(\) \+ 10000;')).Count -ne 1) {
+    throw 'Graphics initialization must have one overall 10-second deadline with no per-setting reset.'
+}
+if ($ScreenFrame.IndexOf('FE_SetControlType",4210+', [System.StringComparison]::Ordinal) -ge 0 -or
+    $ScreenFrame.IndexOf('FE_SetControlType",4310+', [System.StringComparison]::Ordinal) -ge 0 -or
+    $ScreenFrame.IndexOf('FE_SetControlType",4410+', [System.StringComparison]::Ordinal) -ge 0 -or
+    $ScreenFrame.IndexOf('FE_SetControlType",4510+', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Graphics shell must not send read responses as write requests.'
+}
+
+$SetDraftIndexBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'SetDraftIndex' -Context 'Graphics settings edit controller'
+Assert-ContainsOrdinal -Text $SetDraftIndexBody -Token 'setting.DraftIndex = index;' -Context 'Graphics settings edit controller'
+Assert-ContainsOrdinal -Text $SetDraftIndexBody -Token 'UI_FrontEndSFX.UI_Forward' -Context 'Graphics settings forward sound'
+Assert-ContainsOrdinal -Text $SetDraftIndexBody -Token 'UI_FrontEndSFX.UI_Back' -Context 'Graphics settings backward sound'
+if ($SetDraftIndexBody.IndexOf('FE_SetControlType', [System.StringComparison]::Ordinal) -ge 0 -or
+    $SetDraftIndexBody.IndexOf('FE_GetControlType', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Graphics setting edits must remain local drafts and must not use the frontend carrier.'
+}
+$ToggleSettingBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'ToggleSetting' -Context 'Graphics normal row action'
+Assert-ContainsOrdinal -Text $ToggleSettingBody -Token 'if(nextIndex >= setting.Values.length)' -Context 'Graphics normal row action boundary'
+Assert-ContainsOrdinal -Text $ToggleSettingBody -Token 'nextIndex = 0;' -Context 'Graphics normal row action wrap'
+$IncrementSettingBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'IncrementSetting' -Context 'Graphics right action'
+Assert-ContainsOrdinal -Text $IncrementSettingBody -Token 'setting.DraftIndex >= setting.Values.length - 1' -Context 'Graphics right action boundary'
+$DecrementSettingBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'DecrementSetting' -Context 'Graphics left action'
+Assert-ContainsOrdinal -Text $DecrementSettingBody -Token 'setting.DraftIndex <= 0' -Context 'Graphics left action boundary'
+
+$ApplyChangesBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'ApplyChanges' -Context 'Graphics apply controller'
+Assert-ContainsOrdinal -Text $ApplyChangesBody -Token 'this.ApplyQueue.push(this.Settings[settingIndex]);' -Context 'Graphics apply dirty queue'
+Assert-ContainsOrdinal -Text $ApplyChangesBody -Token 'this.UiStatus = "Applying...";' -Context 'Graphics apply status'
+$BeginNextApplyStepBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'BeginNextApplyStep' -Context 'Graphics setting write controller'
+Assert-ContainsOrdinal -Text $BeginNextApplyStepBody -Token 'this.CurrentPendingDeadline = getTimer() + 2000;' -Context 'Graphics setting write deadline'
+Assert-ContainsOrdinal -Text $BeginNextApplyStepBody -Token 'this.CurrentPendingSetting.WriteRequestBase + this.CurrentPendingSetting.DraftIndex' -Context 'Graphics setting write request'
+$PollTransactionBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'PollTransaction' -Context 'Graphics transaction poller'
+$WriteAckPosition = $PollTransactionBody.IndexOf('this.CurrentPendingSetting.WriteAcknowledgementBase + this.CurrentPendingSetting.DraftIndex', [System.StringComparison]::Ordinal)
+$QueueAdvancePosition = $PollTransactionBody.IndexOf('this.ApplyQueueIndex = this.ApplyQueueIndex + 1;', [System.StringComparison]::Ordinal)
+if ($WriteAckPosition -lt 0 -or $QueueAdvancePosition -lt 0 -or $WriteAckPosition -ge $QueueAdvancePosition) {
+    throw 'Graphics setting queue must advance only after the exact setting acknowledgement.'
+}
+Assert-ContainsOrdinal -Text $PollTransactionBody -Token 'this.BeginRollback();' -Context 'Graphics setting/commit failure rollback'
+Assert-ContainsOrdinal -Text $PollTransactionBody -Token 'this.FailRollback();' -Context 'Graphics rollback timeout'
+$BeginCommitBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'BeginCommit' -Context 'Graphics commit controller'
+Assert-ContainsOrdinal -Text $BeginCommitBody -Token 'this.CurrentPendingDeadline = getTimer() + 2000;' -Context 'Graphics commit deadline'
+Assert-ContainsOrdinal -Text $BeginCommitBody -Token 'FE_SetControlType",4990+this.ApplySignalToggle,""' -Context 'Graphics commit request'
+Assert-ContainsOrdinal -Text $PollTransactionBody -Token 'rawValue == 4980+this.ApplySignalToggle' -Context 'Graphics commit acknowledgement'
+$CompleteCommitBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'CompleteCommit' -Context 'Graphics commit success'
+Assert-ContainsOrdinal -Text $CompleteCommitBody -Token 'this.CopyDraftToInitial();' -Context 'Graphics baseline update after commit'
+$BeginRollbackBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'BeginRollback' -Context 'Graphics rollback controller'
+Assert-ContainsOrdinal -Text $BeginRollbackBody -Token 'this.CurrentPendingDeadline = getTimer() + 2000;' -Context 'Graphics rollback deadline'
+Assert-ContainsOrdinal -Text $BeginRollbackBody -Token 'FE_SetControlType",4970+this.RollbackSignalToggle,""' -Context 'Graphics rollback request'
+Assert-ContainsOrdinal -Text $PollTransactionBody -Token 'rawValue == 4960+this.RollbackSignalToggle' -Context 'Graphics rollback acknowledgement'
+$CompleteRollbackBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'CompleteRollback' -Context 'Graphics rollback success'
+Assert-ContainsOrdinal -Text $CompleteRollbackBody -Token 'this.UiStatus = "Apply Failed";' -Context 'Graphics rollback success status'
+if ($CompleteRollbackBody.IndexOf('DraftIndex =', [System.StringComparison]::Ordinal) -ge 0 -or
+    $CompleteRollbackBody.IndexOf('InitialIndex =', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Successful graphics rollback must preserve draft and initial indices.'
+}
+$FailRollbackBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'FailRollback' -Context 'Graphics rollback failure'
+Assert-ContainsOrdinal -Text $FailRollbackBody -Token 'this.UiStatus = "Rollback Failed";' -Context 'Graphics rollback failure status'
+Assert-ContainsOrdinal -Text $FailRollbackBody -Token 'this.RollbackLocked = true;' -Context 'Graphics rollback failure lock'
+if ($FailRollbackBody.IndexOf('DraftIndex =', [System.StringComparison]::Ordinal) -ge 0 -or
+    $FailRollbackBody.IndexOf('InitialIndex =', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Failed graphics rollback must preserve draft and initial indices.'
 }
 foreach ($ForbiddenScreenToken in @('Helen_', 'GraphicsExitPrompt', 'YesNoPrompt', 'CaptureInitialState', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft', 'ApplyWasDispatched')) {
     if ($ScreenFrame.IndexOf($ForbiddenScreenToken, [System.StringComparison]::Ordinal) -ge 0) {
@@ -968,7 +1098,7 @@ $ExpectedRows = @(
     @{ Label = 'Fullscreen'; Value = 'Not active' },
     @{ Label = 'Resolution'; Value = 'Not active' },
     @{ Label = 'VSync'; Value = $null },
-    @{ Label = 'MSAA'; Value = 'Not active' },
+    @{ Label = 'MSAA'; Value = $null },
     @{ Label = 'Detail Level'; Value = 'Not active' },
     @{ Label = 'Bloom'; Value = 'Not active' },
     @{ Label = 'Dynamic Shadows'; Value = 'Not active' },
@@ -977,8 +1107,8 @@ $ExpectedRows = @(
     @{ Label = 'Fog Volumes'; Value = 'Not active' },
     @{ Label = 'Spherical Harmonic Lighting'; Value = 'Not active' },
     @{ Label = 'Ambient Occlusion'; Value = 'Not active' },
-    @{ Label = 'PhysX'; Value = 'Not active' },
-    @{ Label = 'Stereo 3D'; Value = 'Not active' }
+    @{ Label = 'PhysX'; Value = $null },
+    @{ Label = 'NVIDIA Stereo 3D'; Value = $null }
 )
 
 for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
@@ -990,23 +1120,34 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
     Assert-ContainsOrdinal -Text $RowScript -Token "this.LabelName = `"$ExpectedLabel`";" -Context "$RowContext stable label state"
     Assert-ContainsOrdinal -Text $RowScript -Token "this.Label.Label.Text.text = `"$ExpectedLabel`";" -Context $RowContext
     Assert-ContainsOrdinal -Text $RowScript -Token 'this._visible = true;' -Context $RowContext
-    Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = 0;' -Context $RowContext
-    Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = 0;' -Context $RowContext
-    Assert-ContainsOrdinal -Text $RowScript -Token 'this.Default = 0;' -Context $RowContext
     Assert-NoOpActionScriptFunction -ScriptText $RowScript -FunctionName 'ShowPrompt' -Context $RowContext
 
-    if ($RowIndex -eq 2) {
-        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Names = new Array("Off","On");' -Context $RowContext
-        Assert-ContainsOrdinal -Text $RowScript -Token '"Unavailable" : "Loading..."' -Context "$RowContext unresolved state"
-        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = _parent.GraphicsVsyncController.InitialVsync;' -Context "$RowContext resolved initial state"
+    if (@(3, 4, 13, 14) -contains ($RowIndex + 1)) {
+        $ActiveRowDefinitions = @{
+            3 = @{ Values = 'this.Names = new Array("Off","On");'; RowIndex = 3 }
+            4 = @{ Values = 'this.Names = new Array("Off","2x","4x","8x","16x");'; RowIndex = 4 }
+            13 = @{ Values = 'this.Names = new Array("Off","Normal","High");'; RowIndex = 13 }
+            14 = @{ Values = 'this.Names = new Array("Off","On");'; RowIndex = 14 }
+        }
+        $ActiveRowDefinition = $ActiveRowDefinitions[$RowIndex + 1]
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = -1;' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = -1;' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Default = -1;' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token $ActiveRowDefinition.Values -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token "this.RowIndex = $($ActiveRowDefinition.RowIndex);" -Context "$RowContext row binding"
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.ItemText.text = this.Names[this.State];' -Context $RowContext
-        Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = _parent.GraphicsVsyncController.DraftVsync;' -Context $RowContext
-        Assert-ContainsOrdinal -Text $RowScript -Token 'this.LeftClicker._visible = this.State > 0;' -Context $RowContext
-        Assert-ContainsOrdinal -Text $RowScript -Token 'this.RightClicker._visible = this.State < this.Names.length - 1;' -Context $RowContext
-        Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsVsyncController.ToggleVsync();' -Context $RowContext
-        Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsVsyncController.IncrementVsync();' -Context $RowContext
-        Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsVsyncController.DecrementVsync();' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = _parent.GraphicsOptionsController.GetDraftIndex(this.RowIndex);' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = _parent.GraphicsOptionsController.GetInitialIndex(this.RowIndex);' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.LeftClicker._visible = this.State > 0 && _parent.GraphicsOptionsController.CanEdit(this.RowIndex);' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.RightClicker._visible = this.State < this.Names.length - 1 && _parent.GraphicsOptionsController.CanEdit(this.RowIndex);' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsOptionsController.ToggleSetting(this.RowIndex);' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsOptionsController.IncrementSetting(this.RowIndex);' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsOptionsController.DecrementSetting(this.RowIndex);' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token '"Unavailable" : "Loading..."' -Context "$RowContext unresolved state"
     } else {
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = 0;' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = 0;' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Default = 0;' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token "this.ItemText.text = `"$ExpectedValue`";" -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.Names = new Array("Not active");' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'if(this.ItemText != undefined)' -Context "$RowContext ItemText guard"
@@ -1034,8 +1175,9 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
 $ApplyRowScript = [string]$RowClipActions[14]
 Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this.LabelName = "Apply Changes";' -Context 'Graphics row action 15 stable label state'
 Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this._visible = true;' -Context 'Graphics row action 15'
-Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this.ItemText.text = "";' -Context 'Graphics row action 15'
-Assert-ContainsOrdinal -Text $ApplyRowScript -Token '_parent.GraphicsVsyncController.ApplyChanges();' -Context 'Graphics row action 15'
+Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this.ItemText.text = _parent.GraphicsOptionsController.GetApplyStatusText();' -Context 'Graphics row action 15 status'
+Assert-ContainsOrdinal -Text $ApplyRowScript -Token '_parent.GraphicsOptionsController.ApplyChanges();' -Context 'Graphics row action 15'
+Assert-ContainsOrdinal -Text $ApplyRowScript -Token '_parent.GraphicsOptionsController.CanApply() ? 100 : 40' -Context 'Graphics row action 15 enabled state'
 Assert-NoOpActionScriptFunction -ScriptText $ApplyRowScript -FunctionName 'Increment' -Context 'Graphics row action 15'
 Assert-NoOpActionScriptFunction -ScriptText $ApplyRowScript -FunctionName 'Decrement' -Context 'Graphics row action 15'
 Assert-NoOpActionScriptFunction -ScriptText $ApplyRowScript -FunctionName 'ShowPrompt' -Context 'Graphics row action 15'

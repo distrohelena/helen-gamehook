@@ -2,8 +2,8 @@ namespace SubtitleSizeModBuilder;
 
 /// <summary>
 /// Produces the selective ActionScript shell used to expose the retail graphics-options screen.
-/// Only VSync and Apply are connected to frontend behavior; every other row remains a visible,
-/// callback-free placeholder so the stock screen layout and navigation remain stable.
+/// Four declaratively described settings are connected to the frontend carrier; every other row
+/// remains a visible, callback-free placeholder so the stock screen layout and navigation remain stable.
 /// </summary>
 internal static class GraphicsOptionsShellScriptTemplates
 {
@@ -53,131 +53,286 @@ internal static class GraphicsOptionsShellScriptTemplates
     """;
 
     /// <summary>
-    /// Initializes the graphics screen and its focused VSync controller. The controller requests the
-    /// live persisted value through the shared frontend carrier before enabling interaction.
+    /// Initializes the graphics screen and its declarative settings controller. The controller
+    /// requests live persisted values through the shared frontend carrier before enabling interaction.
     /// </summary>
-    /// <param name="snapshot">The normalized user graphics snapshot supplying the initial VSync state.</param>
+    /// <param name="snapshot">The normalized user graphics snapshot retained by the builder contract.</param>
     /// <returns>The generated screen-frame ActionScript.</returns>
     public static string CreateScreenFrame1(BatmanGraphicsIniBootstrapSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         return """
-        class rs.ui.BatmanGraphicsVsyncController
+        class rs.ui.BatmanGraphicsOptionsController
         {
            var Screen;
-           var InitialVsync;
-           var DraftVsync;
-           var InitialStateResolved;
-           var InitialStateFailed;
-           var InitialStateTimerId;
-           var InitialStatePollCount;
+           var Settings;
+           var ActiveSettingsByRow;
+           var InitializationIndex;
+           var InitializationDeadline;
+           var InitializationComplete;
+           var InitializationFailed;
+           var ApplyQueue;
+           var ApplyQueueIndex;
+           var CurrentPendingSetting;
+           var CurrentPendingOperation;
+           var CurrentPendingCode;
+           var CurrentPendingDeadline;
            var ApplySignalToggle;
+           var RollbackSignalToggle;
            var ApplyInProgress;
-           var ApplyTimerId;
-           function BatmanGraphicsVsyncController(screen)
+           var InteractionBlocked;
+           var UiStatus;
+           var RollbackLocked;
+           function BatmanGraphicsOptionsController(screen)
            {
               this.Screen = screen;
-              this.InitialVsync = 0;
-              this.DraftVsync = 0;
-              this.InitialStateResolved = false;
-              this.InitialStateFailed = false;
-              this.InitialStateTimerId = undefined;
-              this.InitialStatePollCount = 0;
+              this.Settings = new Array();
+              this.ActiveSettingsByRow = new Object();
+              this.InitializationIndex = 0;
+              this.InitializationDeadline = undefined;
+              this.InitializationComplete = false;
+              this.InitializationFailed = false;
+              this.ApplyQueue = new Array();
+              this.ApplyQueueIndex = 0;
+              this.CurrentPendingSetting = undefined;
+              this.CurrentPendingOperation = "";
+              this.CurrentPendingCode = undefined;
+              this.CurrentPendingDeadline = undefined;
               this.ApplySignalToggle = 0;
+              this.RollbackSignalToggle = 0;
               this.ApplyInProgress = false;
-              this.ApplyTimerId = undefined;
+              this.InteractionBlocked = true;
+              this.UiStatus = "";
+              this.RollbackLocked = false;
+              this.CreateSettings();
            }
-           function NormalizeVsync(value)
+           function CreateSettings()
            {
-              if(value == 0)
+              this.Settings = new Array(
+                 {RowIndex:3,Name:"VSync",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4200,ReadResponseBase:4210,WriteRequestBase:4220,WriteAcknowledgementBase:4230,FailureResponse:4299,InitialIndex:-1,DraftIndex:-1},
+                 {RowIndex:4,Name:"MSAA",Values:new Array("Off","2x","4x","8x","16x"),ConfigValues:new Array(0,1,2,3,5),ReadRequest:4300,ReadResponseBase:4310,WriteRequestBase:4320,WriteAcknowledgementBase:4330,FailureResponse:4399,InitialIndex:-1,DraftIndex:-1},
+                 {RowIndex:13,Name:"PhysX",Values:new Array("Off","Normal","High"),ConfigValues:new Array(0,1,2),ReadRequest:4400,ReadResponseBase:4410,WriteRequestBase:4420,WriteAcknowledgementBase:4430,FailureResponse:4499,InitialIndex:-1,DraftIndex:-1},
+                 {RowIndex:14,Name:"NVIDIA Stereo 3D",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4500,ReadResponseBase:4510,WriteRequestBase:4520,WriteAcknowledgementBase:4530,FailureResponse:4599,InitialIndex:-1,DraftIndex:-1}
+              );
+              this.ActiveSettingsByRow = new Object();
+              var settingIndex = 0;
+              while(settingIndex < this.Settings.length)
               {
-                 return 0;
+                 this.ActiveSettingsByRow[this.Settings[settingIndex].RowIndex] = this.Settings[settingIndex];
+                 settingIndex = settingIndex + 1;
               }
-              return 1;
+           }
+           function GetSettingForRow(rowIndex)
+           {
+              return this.ActiveSettingsByRow[rowIndex];
+           }
+           function GetDraftIndex(rowIndex)
+           {
+              var setting = this.GetSettingForRow(rowIndex);
+              if(setting == undefined)
+              {
+                 return -1;
+              }
+              return setting.DraftIndex;
+           }
+           function GetInitialIndex(rowIndex)
+           {
+              var setting = this.GetSettingForRow(rowIndex);
+              if(setting == undefined)
+              {
+                 return -1;
+              }
+              return setting.InitialIndex;
+           }
+           function IsUnavailable(rowIndex)
+           {
+              return this.InitializationFailed;
            }
            function IsDirty()
            {
-              return this.DraftVsync != this.InitialVsync;
+              if(!this.InitializationComplete || this.InitializationFailed)
+              {
+                 return false;
+              }
+              var settingIndex = 0;
+              while(settingIndex < this.Settings.length)
+              {
+                 if(this.Settings[settingIndex].DraftIndex != this.Settings[settingIndex].InitialIndex)
+                 {
+                    return true;
+                 }
+                 settingIndex = settingIndex + 1;
+              }
+              return false;
+           }
+           function CanEdit(rowIndex)
+           {
+              var setting = this.GetSettingForRow(rowIndex);
+              return setting != undefined && this.InitializationComplete && !this.InitializationFailed && !this.InteractionBlocked && !this.RollbackLocked && setting.InitialIndex >= 0 && setting.DraftIndex >= 0;
            }
            function CanApply()
            {
-              return this.InitialStateResolved && !this.ApplyInProgress && this.IsDirty();
+              return this.InitializationComplete && !this.InitializationFailed && !this.ApplyInProgress && !this.InteractionBlocked && !this.RollbackLocked && this.IsDirty();
            }
-           function BeginInitialStateRequest()
+           function BeginInitialization()
            {
-              this.ApplyInProgress = true;
+              this.InitializationIndex = 0;
+              this.InitializationDeadline = getTimer() + 10000;
+              this.InitializationComplete = false;
+              this.InitializationFailed = false;
+              this.ApplyInProgress = false;
+              this.InteractionBlocked = true;
+              this.UiStatus = "";
+              this.CurrentPendingOperation = "initialization";
               this.Screen.BlockInput(true);
-              flash.external.ExternalInterface.call("FE_SetControlType",4200,"");
-              this.InitialStateTimerId = setInterval(this,"PollInitialState",50);
+              this.RefreshRows();
+              this.SendInitializationRequest();
+           }
+           function SendInitializationRequest()
+           {
+              if(this.InitializationIndex >= this.Settings.length)
+              {
+                 this.CompleteInitialization();
+                 return undefined;
+              }
+              this.CurrentPendingSetting = this.Settings[this.InitializationIndex];
+              this.CurrentPendingCode = this.CurrentPendingSetting.ReadRequest;
+              flash.external.ExternalInterface.call("FE_SetControlType",this.Settings[this.InitializationIndex].ReadRequest,"");
+           }
+           function CompleteInitialization()
+           {
+              this.InitializationComplete = true;
+              this.InitializationFailed = false;
+              this.InteractionBlocked = false;
+              this.CurrentPendingOperation = "";
+              this.CurrentPendingSetting = undefined;
+              this.CurrentPendingCode = undefined;
+              this.CurrentPendingDeadline = undefined;
+              this.Screen.BlockInput(false);
               this.RefreshRows();
            }
-           function PollInitialState()
+           function FailInitialization()
            {
-              var rawValue = int(flash.external.ExternalInterface.call("FE_GetControlType"));
-              if(rawValue == 4210 || rawValue == 4211)
+              var settingIndex = 0;
+              while(settingIndex < this.Settings.length)
               {
-                 clearInterval(this.InitialStateTimerId);
-                 this.InitialStateTimerId = undefined;
-                 this.InitialVsync = rawValue - 4210;
-                 this.DraftVsync = this.InitialVsync;
-                 this.InitialStateResolved = true;
-                 this.ApplyInProgress = false;
-                 this.Screen.BlockInput(false);
-                 this.RefreshRows();
+                 this.Settings[settingIndex].InitialIndex = -1;
+                 this.Settings[settingIndex].DraftIndex = -1;
+                 settingIndex = settingIndex + 1;
+              }
+              this.InitializationComplete = false;
+              this.InitializationFailed = true;
+              this.ApplyInProgress = false;
+              this.InteractionBlocked = true;
+              this.CurrentPendingOperation = "";
+              this.CurrentPendingSetting = undefined;
+              this.CurrentPendingCode = undefined;
+              this.CurrentPendingDeadline = undefined;
+              this.Screen.BlockInput(false);
+              this.RefreshRows();
+           }
+           function Tick()
+           {
+              if(this.CurrentPendingOperation == "")
+              {
                  return undefined;
               }
-              this.InitialStatePollCount = this.InitialStatePollCount + 1;
-              if(this.InitialStatePollCount >= 200)
+              if(this.CurrentPendingOperation == "initialization")
               {
-                 clearInterval(this.InitialStateTimerId);
-                 this.InitialStateTimerId = undefined;
-                 this.InitialStateFailed = true;
-                 this.ApplyInProgress = false;
-                 this.Screen.BlockInput(false);
-                 this.RefreshRows();
+                 this.PollInitialization();
+                 return undefined;
+              }
+              this.PollTransaction();
+           }
+           function PollInitialization()
+           {
+              if(getTimer() >= this.InitializationDeadline)
+              {
+                 this.FailInitialization();
+                 return undefined;
+              }
+              var rawValue = int(flash.external.ExternalInterface.call("FE_GetControlType"));
+              var setting = this.Settings[this.InitializationIndex];
+              if(rawValue == setting.FailureResponse)
+              {
+                 this.FailInitialization();
+                 return undefined;
+              }
+              if(rawValue >= setting.ReadResponseBase && rawValue < setting.ReadResponseBase + setting.Values.length)
+              {
+                 this.Settings[this.InitializationIndex].InitialIndex = rawValue - this.Settings[this.InitializationIndex].ReadResponseBase;
+                 this.Settings[this.InitializationIndex].DraftIndex = this.Settings[this.InitializationIndex].InitialIndex;
+                 this.InitializationIndex = this.InitializationIndex + 1;
+                 this.SendInitializationRequest();
               }
            }
-           function SetVsync(value, forward)
+           function SetDraftIndex(rowIndex,index,forward)
            {
-              if(!this.InitialStateResolved || this.ApplyInProgress)
+              var setting = this.GetSettingForRow(rowIndex);
+              if(setting == undefined || !this.CanEdit(rowIndex) || index < 0 || index >= setting.Values.length || index == setting.DraftIndex)
               {
                  return undefined;
               }
-              var normalized = this.NormalizeVsync(value);
-              if(forward == true || (forward == undefined && normalized > this.DraftVsync))
+              if(forward)
               {
                  flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Forward");
               }
-              else if(forward == false || (forward == undefined && normalized < this.DraftVsync))
+              else
               {
                  flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Back");
               }
-              this.DraftVsync = normalized;
+              setting.DraftIndex = index;
               this.RefreshRows();
            }
-           function ToggleVsync()
+           function ToggleSetting(rowIndex)
            {
-              this.SetVsync(this.DraftVsync == 0 ? 1 : 0);
+              var setting = this.GetSettingForRow(rowIndex);
+              if(setting == undefined || !this.CanEdit(rowIndex))
+              {
+                 return undefined;
+              }
+              var nextIndex = setting.DraftIndex + 1;
+              if(nextIndex >= setting.Values.length)
+              {
+                 nextIndex = 0;
+              }
+              this.SetDraftIndex(rowIndex,nextIndex,true);
            }
-           function IncrementVsync()
+           function IncrementSetting(rowIndex)
            {
-              this.SetVsync(this.DraftVsync == 0 ? 1 : 0,true);
+              var setting = this.GetSettingForRow(rowIndex);
+              if(setting == undefined || !this.CanEdit(rowIndex) || setting.DraftIndex >= setting.Values.length - 1)
+              {
+                 return undefined;
+              }
+              this.SetDraftIndex(rowIndex,setting.DraftIndex + 1,true);
            }
-           function DecrementVsync()
+           function DecrementSetting(rowIndex)
            {
-              this.SetVsync(this.DraftVsync == 0 ? 1 : 0,false);
+              var setting = this.GetSettingForRow(rowIndex);
+              if(setting == undefined || !this.CanEdit(rowIndex) || setting.DraftIndex <= 0)
+              {
+                 return undefined;
+              }
+              this.SetDraftIndex(rowIndex,setting.DraftIndex - 1,false);
            }
            function RefreshRows()
            {
-              if(this.Screen.GraphicsRow3 != undefined)
-              {
-                 this.Screen.GraphicsRow3.State = this.DraftVsync;
-                 this.Screen.GraphicsRow3.Update();
-              }
-              if(this.Screen.GraphicsRow15 != undefined)
-              {
-                 this.Screen.GraphicsRow15.Update();
-              }
+              if(this.Screen.GraphicsRow1 != undefined) { this.Screen.GraphicsRow1.Update(); }
+              if(this.Screen.GraphicsRow2 != undefined) { this.Screen.GraphicsRow2.Update(); }
+              if(this.Screen.GraphicsRow3 != undefined) { this.Screen.GraphicsRow3.Update(); }
+              if(this.Screen.GraphicsRow4 != undefined) { this.Screen.GraphicsRow4.Update(); }
+              if(this.Screen.GraphicsRow5 != undefined) { this.Screen.GraphicsRow5.Update(); }
+              if(this.Screen.GraphicsRow6 != undefined) { this.Screen.GraphicsRow6.Update(); }
+              if(this.Screen.GraphicsRow7 != undefined) { this.Screen.GraphicsRow7.Update(); }
+              if(this.Screen.GraphicsRow8 != undefined) { this.Screen.GraphicsRow8.Update(); }
+              if(this.Screen.GraphicsRow9 != undefined) { this.Screen.GraphicsRow9.Update(); }
+              if(this.Screen.GraphicsRow10 != undefined) { this.Screen.GraphicsRow10.Update(); }
+              if(this.Screen.GraphicsRow11 != undefined) { this.Screen.GraphicsRow11.Update(); }
+              if(this.Screen.GraphicsRow12 != undefined) { this.Screen.GraphicsRow12.Update(); }
+              if(this.Screen.GraphicsRow13 != undefined) { this.Screen.GraphicsRow13.Update(); }
+              if(this.Screen.GraphicsRow14 != undefined) { this.Screen.GraphicsRow14.Update(); }
+              if(this.Screen.GraphicsRow15 != undefined) { this.Screen.GraphicsRow15.Update(); }
               this.Screen.ReUpdate();
            }
            function ApplyChanges()
@@ -186,43 +341,181 @@ internal static class GraphicsOptionsShellScriptTemplates
               {
                  return undefined;
               }
+              this.ApplyQueue = new Array();
+              var settingIndex = 0;
+              while(settingIndex < this.Settings.length)
+              {
+                 if(this.Settings[settingIndex].DraftIndex != this.Settings[settingIndex].InitialIndex)
+                 {
+                    this.ApplyQueue.push(this.Settings[settingIndex]);
+                 }
+                 settingIndex = settingIndex + 1;
+              }
+              this.ApplyQueueIndex = 0;
               this.ApplyInProgress = true;
+              this.InteractionBlocked = true;
+              this.UiStatus = "Applying...";
               this.Screen.BlockInput(true);
               this.RefreshRows();
-              flash.external.ExternalInterface.call("FE_SetControlType",4210+this.DraftVsync,"");
-              this.ApplyTimerId = setInterval(this,"CompleteApply",1000);
+              this.BeginNextApplyStep();
            }
-           function CompleteApply()
+           function BeginNextApplyStep()
            {
-              if(this.ApplyTimerId != undefined)
+              if(this.ApplyQueueIndex >= this.ApplyQueue.length)
               {
-                 clearInterval(this.ApplyTimerId);
-                 this.ApplyTimerId = undefined;
+                 this.BeginCommit();
+                 return undefined;
               }
+              this.CurrentPendingSetting = this.ApplyQueue[this.ApplyQueueIndex];
+              this.CurrentPendingOperation = "setting";
+              this.CurrentPendingCode = this.CurrentPendingSetting.WriteRequestBase + this.CurrentPendingSetting.DraftIndex;
+              this.CurrentPendingDeadline = getTimer() + 2000;
+              flash.external.ExternalInterface.call("FE_SetControlType",this.CurrentPendingSetting.WriteRequestBase + this.CurrentPendingSetting.DraftIndex,"");
+           }
+           function BeginCommit()
+           {
+              this.CurrentPendingOperation = "commit";
+              this.CurrentPendingSetting = undefined;
               this.ApplySignalToggle = this.ApplySignalToggle == 0 ? 1 : 0;
+              this.CurrentPendingCode = 4990+this.ApplySignalToggle;
+              this.CurrentPendingDeadline = getTimer() + 2000;
               flash.external.ExternalInterface.call("FE_SetControlType",4990+this.ApplySignalToggle,"");
-              this.InitialVsync = this.DraftVsync;
+           }
+           function PollTransaction()
+           {
+              if(getTimer() >= this.CurrentPendingDeadline)
+              {
+                 if(this.CurrentPendingOperation == "rollback")
+                 {
+                    this.FailRollback();
+                    return undefined;
+                 }
+                 this.BeginRollback();
+                 return undefined;
+              }
+              var rawValue = int(flash.external.ExternalInterface.call("FE_GetControlType"));
+              if(this.CurrentPendingOperation == "setting")
+              {
+                 if(rawValue == this.CurrentPendingSetting.FailureResponse)
+                 {
+                    this.BeginRollback();
+                    return undefined;
+                 }
+                 if(rawValue == this.CurrentPendingSetting.WriteAcknowledgementBase + this.CurrentPendingSetting.DraftIndex)
+                 {
+                    this.ApplyQueueIndex = this.ApplyQueueIndex + 1;
+                    this.BeginNextApplyStep();
+                 }
+                 return undefined;
+              }
+              if(this.CurrentPendingOperation == "commit")
+              {
+                 if(rawValue == 4989)
+                 {
+                    this.BeginRollback();
+                    return undefined;
+                 }
+                 if(rawValue == 4980+this.ApplySignalToggle)
+                 {
+                    this.CompleteCommit();
+                 }
+              }
+              else if(this.CurrentPendingOperation == "rollback")
+              {
+                 if(rawValue == 4969)
+                 {
+                    this.FailRollback();
+                    return undefined;
+                 }
+                 if(rawValue == 4960+this.RollbackSignalToggle)
+                 {
+                    this.CompleteRollback();
+                 }
+              }
+           }
+           function CompleteCommit()
+           {
+              this.CopyDraftToInitial();
+              this.ApplyQueue = new Array();
+              this.ApplyQueueIndex = 0;
               this.ApplyInProgress = false;
+              this.InteractionBlocked = false;
+              this.UiStatus = "";
+              this.CurrentPendingOperation = "";
+              this.CurrentPendingSetting = undefined;
+              this.CurrentPendingCode = undefined;
+              this.CurrentPendingDeadline = undefined;
               this.Screen.BlockInput(false);
               this.RefreshRows();
            }
+           function CopyDraftToInitial()
+           {
+              var settingIndex = 0;
+              while(settingIndex < this.Settings.length)
+              {
+                 this.Settings[settingIndex].InitialIndex = this.Settings[settingIndex].DraftIndex;
+                 settingIndex = settingIndex + 1;
+              }
+           }
+           function BeginRollback()
+           {
+              if(this.CurrentPendingOperation == "rollback")
+              {
+                 return undefined;
+              }
+              this.ApplyQueue = new Array();
+              this.ApplyQueueIndex = 0;
+              this.ApplyInProgress = true;
+              this.InteractionBlocked = true;
+              this.UiStatus = "Applying...";
+              this.CurrentPendingOperation = "rollback";
+              this.CurrentPendingSetting = undefined;
+              this.RollbackSignalToggle = this.RollbackSignalToggle == 0 ? 1 : 0;
+              this.CurrentPendingCode = 4970+this.RollbackSignalToggle;
+              this.CurrentPendingDeadline = getTimer() + 2000;
+              flash.external.ExternalInterface.call("FE_SetControlType",4970+this.RollbackSignalToggle,"");
+           }
+           function CompleteRollback()
+           {
+              this.ApplyInProgress = false;
+              this.InteractionBlocked = false;
+              this.UiStatus = "Apply Failed";
+              this.CurrentPendingOperation = "";
+              this.CurrentPendingSetting = undefined;
+              this.CurrentPendingCode = undefined;
+              this.CurrentPendingDeadline = undefined;
+              this.Screen.BlockInput(false);
+              this.RefreshRows();
+           }
+           function FailRollback()
+           {
+              this.ApplyInProgress = false;
+              this.InteractionBlocked = true;
+              this.RollbackLocked = true;
+              this.UiStatus = "Rollback Failed";
+              this.CurrentPendingOperation = "";
+              this.CurrentPendingSetting = undefined;
+              this.CurrentPendingCode = undefined;
+              this.CurrentPendingDeadline = undefined;
+              this.Screen.BlockInput(false);
+              this.RefreshRows();
+           }
+           function GetApplyStatusText()
+           {
+              return this.UiStatus;
+           }
            function Destroy()
            {
-              if(this.InitialStateTimerId != undefined)
-              {
-                 clearInterval(this.InitialStateTimerId);
-                 this.InitialStateTimerId = undefined;
-              }
-              if(this.ApplyTimerId != undefined)
-              {
-                 clearInterval(this.ApplyTimerId);
-                 this.ApplyTimerId = undefined;
-              }
+              this.CurrentPendingOperation = "";
+              this.CurrentPendingSetting = undefined;
+              this.CurrentPendingCode = undefined;
+              this.CurrentPendingDeadline = undefined;
+              this.Screen.onEnterFrame = undefined;
            }
         }
         function CancelScreen()
         {
-           this.GraphicsVsyncController.Destroy();
+           this.GraphicsOptionsController.Destroy();
            ReturnFromScreen();
         }
         flash.external.ExternalInterface.call("FE_SetActiveScreenName","Graphics Options");
@@ -236,7 +529,7 @@ internal static class GraphicsOptionsShellScriptTemplates
         {
            this.Title.text = "Graphics Options";
         }
-        this.GraphicsVsyncController = new rs.ui.BatmanGraphicsVsyncController(this);
+        this.GraphicsOptionsController = new rs.ui.BatmanGraphicsOptionsController(this);
         this.AddItem(GraphicsRow1,14,1,-1,-1);
         this.AddItem(GraphicsRow2,0,2,-1,-1);
         this.AddItem(GraphicsRow3,1,3,-1,-1);
@@ -253,7 +546,11 @@ internal static class GraphicsOptionsShellScriptTemplates
         this.AddItem(GraphicsRow14,12,14,-1,-1);
         this.AddItem(GraphicsRow15,13,0,-1,-1);
         GraphicsRow15._visible = true;
-        this.GraphicsVsyncController.BeginInitialStateRequest();
+        this.onEnterFrame = function()
+        {
+           this.GraphicsOptionsController.Tick();
+        };
+        this.GraphicsOptionsController.BeginInitialization();
         _rotation = -2;
         """;
     }
@@ -266,10 +563,10 @@ internal static class GraphicsOptionsShellScriptTemplates
     """;
 
     /// <summary>
-    /// Creates all fifteen row scripts in visual and navigation order, injecting the INI VSync
-    /// state only into row three and retaining no-op placeholders for all unrelated settings.
+    /// Creates all fifteen row scripts in visual and navigation order, injecting four active
+    /// declarative settings and retaining no-op placeholders for all unrelated settings.
     /// </summary>
-    /// <param name="snapshot">The normalized user graphics snapshot supplying initial VSync.</param>
+    /// <param name="snapshot">The normalized user graphics snapshot retained by the builder contract.</param>
     /// <returns>The fifteen row clip-action scripts.</returns>
     public static string[] CreateRowClipActions(BatmanGraphicsIniBootstrapSnapshot snapshot)
     {
@@ -278,8 +575,8 @@ internal static class GraphicsOptionsShellScriptTemplates
         [
             CreateRowClipAction("Fullscreen", "Not active", true),
             CreateRowClipAction("Resolution", "Not active", true),
-            CreateVsyncRowClipAction(),
-            CreateRowClipAction("MSAA", "Not active", true),
+            CreateActiveRowClipAction("VSync", 3, ["Off", "On"]),
+            CreateActiveRowClipAction("MSAA", 4, ["Off", "2x", "4x", "8x", "16x"]),
             CreateRowClipAction("Detail Level", "Not active", true),
             CreateRowClipAction("Bloom", "Not active", true),
             CreateRowClipAction("Dynamic Shadows", "Not active", true),
@@ -288,72 +585,83 @@ internal static class GraphicsOptionsShellScriptTemplates
             CreateRowClipAction("Fog Volumes", "Not active", true),
             CreateRowClipAction("Spherical Harmonic Lighting", "Not active", true),
             CreateRowClipAction("Ambient Occlusion", "Not active", true),
-            CreateRowClipAction("PhysX", "Not active", true),
-            CreateRowClipAction("Stereo 3D", "Not active", true),
+            CreateActiveRowClipAction("PhysX", 13, ["Off", "Normal", "High"]),
+            CreateActiveRowClipAction("NVIDIA Stereo 3D", 14, ["Off", "On"]),
             CreateApplyRowClipAction()
         ];
     }
 
     /// <summary>
-    /// Creates the focused VSync row, including its two visible values and controller-backed actions.
+    /// Creates an active setting row whose state and mutations are delegated to the declarative controller.
     /// </summary>
-    /// <returns>An ActionScript load handler for row three.</returns>
-    private static string CreateVsyncRowClipAction()
+    /// <param name="label">The visible setting label.</param>
+    /// <param name="rowIndex">The stable graphics row index used by the controller lookup.</param>
+    /// <param name="values">The display values in their controller index order.</param>
+    /// <returns>An ActionScript load handler for the active setting row.</returns>
+    private static string CreateActiveRowClipAction(string label, int rowIndex, string[] values)
     {
-        return """
+        ArgumentNullException.ThrowIfNull(label);
+        ArgumentNullException.ThrowIfNull(values);
+        if (values.Length == 0)
+        {
+            throw new ArgumentException("An active graphics row must have at least one display value.", nameof(values));
+        }
+
+        string escapedLabel = EscapeActionScriptString(label);
+        string escapedValues = string.Join(",", values.Select(value => $"\"{EscapeActionScriptString(value)}\""));
+
+        return $$"""
         onClipEvent(load){
-           this.LabelName = "VSync";
-           this.Names = new Array("Off","On");
-           this.State = 0;
-           this.Initial = 0;
-           this.Default = 0;
+           this.LabelName = "{{escapedLabel}}";
+           this.RowIndex = {{rowIndex}};
+           this.Names = new Array({{escapedValues}});
+           this.State = -1;
+           this.Initial = -1;
+           this.Default = -1;
            this.Update = function()
            {
-              if(_parent.GraphicsVsyncController != undefined)
-              {
-                 this.State = _parent.GraphicsVsyncController.DraftVsync;
-              }
               if(this.Label != undefined && this.Label.Label != undefined && this.Label.Label.Text != undefined)
               {
-                 this.Label.Label.Text.text = "VSync";
+                 this.Label.Label.Text.text = "{{escapedLabel}}";
               }
               else if(this.Label != undefined && this.Label.Text != undefined)
               {
-                 this.Label.Text.text = "VSync";
+                 this.Label.Text.text = "{{escapedLabel}}";
               }
               else if(this.Label != undefined)
               {
-                 this.Label.text = "VSync";
+                 this.Label.text = "{{escapedLabel}}";
               }
-              if(_parent.GraphicsVsyncController == undefined || !_parent.GraphicsVsyncController.InitialStateResolved)
+              this.State = _parent.GraphicsOptionsController.GetDraftIndex(this.RowIndex);
+              this.Initial = _parent.GraphicsOptionsController.GetInitialIndex(this.RowIndex);
+              if(!_parent.GraphicsOptionsController.InitializationComplete)
               {
-                 this.ItemText.text = _parent.GraphicsVsyncController != undefined && _parent.GraphicsVsyncController.InitialStateFailed ? "Unavailable" : "Loading...";
+                 this.ItemText.text = _parent.GraphicsOptionsController.IsUnavailable(this.RowIndex) ? "Unavailable" : "Loading...";
                  this.LeftClicker._visible = false;
                  this.RightClicker._visible = false;
                  return undefined;
               }
-              this.Initial = _parent.GraphicsVsyncController.InitialVsync;
               this.ItemText.text = this.Names[this.State];
               if(this.LeftClicker != undefined)
               {
-                 this.LeftClicker._visible = this.State > 0;
+                 this.LeftClicker._visible = this.State > 0 && _parent.GraphicsOptionsController.CanEdit(this.RowIndex);
               }
               if(this.RightClicker != undefined)
               {
-                 this.RightClicker._visible = this.State < this.Names.length - 1;
+                 this.RightClicker._visible = this.State < this.Names.length - 1 && _parent.GraphicsOptionsController.CanEdit(this.RowIndex);
               }
            };
            this.RunAction = function()
            {
-              _parent.GraphicsVsyncController.ToggleVsync();
+              _parent.GraphicsOptionsController.ToggleSetting(this.RowIndex);
            };
            this.Increment = function()
            {
-              _parent.GraphicsVsyncController.IncrementVsync();
+              _parent.GraphicsOptionsController.IncrementSetting(this.RowIndex);
            };
            this.Decrement = function()
            {
-              _parent.GraphicsVsyncController.DecrementVsync();
+              _parent.GraphicsOptionsController.DecrementSetting(this.RowIndex);
            };
            this.ShowPrompt = function()
            {
@@ -375,7 +683,7 @@ internal static class GraphicsOptionsShellScriptTemplates
     }
 
     /// <summary>
-    /// Creates the visible Apply Changes row whose activation dispatches through the focused
+    /// Creates the visible Apply Changes row whose activation dispatches through the settings
     /// controller while directional changes and prompt handling remain no-ops.
     /// </summary>
     /// <returns>An ActionScript load handler for row fifteen.</returns>
@@ -402,17 +710,9 @@ internal static class GraphicsOptionsShellScriptTemplates
               {
                  this.Label.text = "Apply Changes";
               }
-              this.ItemText.text = "";
-              if(_parent.GraphicsVsyncController != undefined)
-              {
-                 this.ItemText._alpha = _parent.GraphicsVsyncController.CanApply() ? 100 : 40;
-                 this.Label._alpha = _parent.GraphicsVsyncController.CanApply() ? 100 : 40;
-              }
-              else
-              {
-                 this.ItemText._alpha = 40;
-                 this.Label._alpha = 40;
-              }
+              this.ItemText.text = _parent.GraphicsOptionsController.GetApplyStatusText();
+              this.ItemText._alpha = _parent.GraphicsOptionsController.CanApply() ? 100 : 40;
+              this.Label._alpha = _parent.GraphicsOptionsController.CanApply() ? 100 : 40;
               if(this.LeftClicker != undefined)
               {
                  this.LeftClicker._visible = false;
@@ -425,7 +725,7 @@ internal static class GraphicsOptionsShellScriptTemplates
            };
            this.RunAction = function()
            {
-              _parent.GraphicsVsyncController.ApplyChanges();
+              _parent.GraphicsOptionsController.ApplyChanges();
            };
            this.Increment = function()
            {
