@@ -302,6 +302,23 @@ namespace
     }
 
     /**
+     * @brief Verifies that a failed publication preserved one target's existence and exact raw bytes.
+     * @param path Target file path whose pre-apply snapshot should still be present.
+     * @param expected_bytes Exact bytes captured before the publication attempt.
+     * @param missing_message Failure message used when the target disappeared during publication.
+     * @param mismatch_message Failure message used when the target bytes changed during publication.
+     */
+    void ExpectBatmanIniBytesEqual(
+        const std::filesystem::path& path,
+        const std::string& expected_bytes,
+        const char* missing_message,
+        const char* mismatch_message)
+    {
+        Expect(std::filesystem::exists(path), missing_message);
+        Expect(ReadAllBytes(path) == expected_bytes, mismatch_message);
+    }
+
+    /**
      * @brief Reads one ASCII-only UTF-16LE fixture while validating that its native encoding was preserved.
      * @param path UTF-16LE test file that should be decoded.
      * @return Decoded ASCII text without its byte-order mark.
@@ -763,8 +780,16 @@ void RunCommandExecutorTests()
 
         Expect(close_result != FALSE, "Failed to close the generated Batman graphics INI publication-blocking handle.");
         Expect(!apply_result, "Batman graphics apply unexpectedly succeeded with generated INI publication blocked.");
-        Expect(ReadAllBytes(engine_ini_path) == original_engine_bytes, "Generated INI bytes changed after blocked publication.");
-        Expect(ReadAllBytes(user_ini_path) == original_user_bytes, "UserEngine.ini bytes changed after generated publication was blocked.");
+        ExpectBatmanIniBytesEqual(
+            engine_ini_path,
+            original_engine_bytes,
+            "Generated INI disappeared after blocked publication.",
+            "Generated INI bytes changed after blocked publication.");
+        ExpectBatmanIniBytesEqual(
+            user_ini_path,
+            original_user_bytes,
+            "UserEngine.ini disappeared after generated publication was blocked.",
+            "UserEngine.ini bytes changed after generated publication was blocked.");
         ExpectNoBatmanGraphicsTransactionArtifacts(engine_ini_path.parent_path());
     }
 
@@ -786,8 +811,16 @@ void RunCommandExecutorTests()
 
         Expect(close_result != FALSE, "Failed to close the launcher Batman graphics INI publication-blocking handle.");
         Expect(!apply_result, "Batman graphics apply unexpectedly succeeded with UserEngine.ini publication blocked.");
-        Expect(ReadAllBytes(engine_ini_path) == original_engine_bytes, "Generated INI bytes were not restored after launcher publication failed.");
-        Expect(ReadAllBytes(user_ini_path) == original_user_bytes, "UserEngine.ini bytes changed after blocked publication.");
+        ExpectBatmanIniBytesEqual(
+            engine_ini_path,
+            original_engine_bytes,
+            "Generated INI disappeared after launcher publication failed.",
+            "Generated INI bytes were not restored after launcher publication failed.");
+        ExpectBatmanIniBytesEqual(
+            user_ini_path,
+            original_user_bytes,
+            "UserEngine.ini disappeared after blocked publication.",
+            "UserEngine.ini bytes changed after blocked publication.");
         ExpectNoBatmanGraphicsTransactionArtifacts(engine_ini_path.parent_path());
     }
 }

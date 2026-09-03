@@ -41,7 +41,7 @@ namespace
         std::vector<std::string> Lines;
         /** @brief Original file encoding that must be retained when the document is persisted. */
         IniTextEncoding Encoding{ IniTextEncoding::SingleByte };
-        /** @brief Exact original bytes retained so a failed dual-file publication can restore generated output. */
+        /** @brief Exact original bytes retained so failed dual-file publication can stage this document for reconciliation. */
         std::string RawBytes;
     };
 
@@ -644,22 +644,78 @@ namespace
     }
 
     /**
-     * @brief Replaces an existing target with a closed same-volume sibling file using Win32 replacement semantics.
+     * @brief Attempts to replace an existing target with a closed same-volume sibling file using Win32 replacement semantics.
      * @param target_path Existing file that should be replaced.
      * @param replacement_path Closed sibling file containing the new bytes.
-     * @return True when `ReplaceFileW` commits the replacement; otherwise false with the target left untouched.
+     * @param error_code Receives the Win32 error when the operation reports failure.
+     * @return True when `ReplaceFileW` reports success; otherwise false, with target state reconciled by the caller.
      */
     bool TryReplaceSiblingFile(
         const std::filesystem::path& target_path,
-        const std::filesystem::path& replacement_path)
+        const std::filesystem::path& replacement_path,
+        DWORD& error_code)
     {
-        return ReplaceFileW(
+        if (ReplaceFileW(
             target_path.c_str(),
             replacement_path.c_str(),
             nullptr,
-            REPLACEFILE_WRITE_THROUGH,
+            0,
             nullptr,
-            nullptr) != FALSE;
+            nullptr) != FALSE)
+        {
+            error_code = ERROR_SUCCESS;
+            return true;
+        }
+
+        error_code = GetLastError();
+        return false;
+    }
+
+    /**
+     * @brief Copies a closed recovery artifact to a unique sibling candidate without overwriting an existing candidate.
+     * @param recovery_path Staged exact original bytes used as the copy source.
+     * @param candidate_path New sibling path that will be consumed by the recovery move.
+     * @param error_code Receives the Win32 error when the copy reports failure.
+     * @return True when `CopyFileW` creates the candidate; otherwise false.
+     */
+    bool TryCopyRecoveryFile(
+        const std::filesystem::path& recovery_path,
+        const std::filesystem::path& candidate_path,
+        DWORD& error_code)
+    {
+        if (CopyFileW(recovery_path.c_str(), candidate_path.c_str(), TRUE) != FALSE)
+        {
+            error_code = ERROR_SUCCESS;
+            return true;
+        }
+
+        error_code = GetLastError();
+        return false;
+    }
+
+    /**
+     * @brief Moves a closed recovery candidate over a target, handling both absent and existing targets.
+     * @param target_path Target path that should receive the recovery bytes.
+     * @param candidate_path Closed sibling candidate containing exact original bytes.
+     * @param error_code Receives the Win32 error when the move reports failure.
+     * @return True when `MoveFileExW` reports success; otherwise false, with verification still required.
+     */
+    bool TryMoveRecoveryFile(
+        const std::filesystem::path& target_path,
+        const std::filesystem::path& candidate_path,
+        DWORD& error_code)
+    {
+        if (MoveFileExW(
+                candidate_path.c_str(),
+                target_path.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE)
+        {
+            error_code = ERROR_SUCCESS;
+            return true;
+        }
+
+        error_code = GetLastError();
+        return false;
     }
 
     /**
@@ -674,7 +730,17 @@ namespace
             return true;
         }
 
-        return GetLastError() == ERROR_FILE_NOT_FOUND;
+        const DWORD error_code = GetLastError();
+        if (error_code == ERROR_FILE_NOT_FOUND)
+        {
+            return true;
+        }
+
+        helen::Logf(
+            L"[graphics] Apply failed: unable to clean transaction file path=%ls error=%lu.",
+            path.wstring().c_str(),
+            static_cast<unsigned long>(error_code));
+        return false;
     }
 
     /**
@@ -683,19 +749,122 @@ namespace
      * @param user_stage_path Launcher `UserEngine.ini` staging path.
      * @param generated_recovery_path Exact pre-apply generated-byte recovery path.
      * @param user_recovery_path Exact pre-apply launcher-byte recovery path.
+     * @param generated_restore_candidate_path Temporary generated recovery candidate path.
+     * @param user_restore_candidate_path Temporary launcher recovery candidate path.
      * @return True when all owned paths are absent after cleanup; otherwise false.
      */
     bool CleanupBatmanGraphicsTransactionFiles(
         const std::filesystem::path& generated_stage_path,
         const std::filesystem::path& user_stage_path,
         const std::filesystem::path& generated_recovery_path,
-        const std::filesystem::path& user_recovery_path)
+        const std::filesystem::path& user_recovery_path,
+        const std::filesystem::path& generated_restore_candidate_path,
+        const std::filesystem::path& user_restore_candidate_path)
     {
         const bool generated_stage_clean = TryDeleteTransactionFile(generated_stage_path);
         const bool user_stage_clean = TryDeleteTransactionFile(user_stage_path);
         const bool generated_recovery_clean = TryDeleteTransactionFile(generated_recovery_path);
         const bool user_recovery_clean = TryDeleteTransactionFile(user_recovery_path);
-        return generated_stage_clean && user_stage_clean && generated_recovery_clean && user_recovery_clean;
+        const bool generated_restore_candidate_clean = TryDeleteTransactionFile(generated_restore_candidate_path);
+        const bool user_restore_candidate_clean = TryDeleteTransactionFile(user_restore_candidate_path);
+        return
+            generated_stage_clean &&
+            user_stage_clean &&
+            generated_recovery_clean &&
+            user_recovery_clean &&
+            generated_restore_candidate_clean &&
+            user_restore_candidate_clean;
+    }
+
+    /**
+     * @brief Reconciles one published target to exact original bytes after a Win32 publication failure.
+     * @param target_path Target whose state must match the pre-apply snapshot.
+     * @param recovery_path Closed sibling artifact containing the exact pre-apply bytes.
+     * @param restore_candidate_path Temporary sibling candidate used for a supported recovery move.
+     * @param original_bytes Exact pre-apply bytes that must be proven on disk after recovery.
+     * @param target_label Human-readable target label used by hard-compensation diagnostics.
+     * @return True when the target was already equal or was restored and verified byte-for-byte; otherwise false.
+     */
+    bool TryReconcileBatmanGraphicsIniTarget(
+        const std::filesystem::path& target_path,
+        const std::filesystem::path& recovery_path,
+        const std::filesystem::path& restore_candidate_path,
+        std::string_view original_bytes,
+        const wchar_t* target_label)
+    {
+        const std::optional<std::string> current_bytes = TryReadFileBytes(target_path);
+        if (current_bytes.has_value() && *current_bytes == original_bytes)
+        {
+            return true;
+        }
+
+        DWORD copy_error = ERROR_SUCCESS;
+        const bool copied_recovery = TryCopyRecoveryFile(recovery_path, restore_candidate_path, copy_error);
+        DWORD move_error = ERROR_SUCCESS;
+        if (copied_recovery)
+        {
+            TryMoveRecoveryFile(target_path, restore_candidate_path, move_error);
+        }
+
+        const std::optional<std::string> verified_bytes = TryReadFileBytes(target_path);
+        if (verified_bytes.has_value() && *verified_bytes == original_bytes)
+        {
+            return true;
+        }
+
+        DWORD diagnostic_error = copy_error;
+        if (diagnostic_error == ERROR_SUCCESS)
+        {
+            diagnostic_error = move_error;
+        }
+        if (diagnostic_error == ERROR_SUCCESS)
+        {
+            diagnostic_error = ERROR_INVALID_DATA;
+        }
+
+        helen::Logf(
+            L"[graphics] Apply failed: hard compensation failure for %ls path=%ls error=%lu.",
+            target_label,
+            target_path.wstring().c_str(),
+            static_cast<unsigned long>(diagnostic_error));
+        return false;
+    }
+
+    /**
+     * @brief Reconciles both INI targets against exact original snapshots after either publication reports failure.
+     * @param generated_path Target generated `BmEngine.ini` path.
+     * @param user_path Target launcher-owned `UserEngine.ini` path.
+     * @param generated_recovery_path Closed generated recovery artifact.
+     * @param user_recovery_path Closed launcher recovery artifact.
+     * @param generated_restore_candidate_path Temporary generated recovery candidate path.
+     * @param user_restore_candidate_path Temporary launcher recovery candidate path.
+     * @param original_generated_bytes Exact generated bytes captured before preparation.
+     * @param original_user_bytes Exact launcher bytes captured before preparation.
+     * @return True only when both targets are proven byte-for-byte equal to their original snapshots.
+     */
+    bool TryReconcileBatmanGraphicsIniPair(
+        const std::filesystem::path& generated_path,
+        const std::filesystem::path& user_path,
+        const std::filesystem::path& generated_recovery_path,
+        const std::filesystem::path& user_recovery_path,
+        const std::filesystem::path& generated_restore_candidate_path,
+        const std::filesystem::path& user_restore_candidate_path,
+        std::string_view original_generated_bytes,
+        std::string_view original_user_bytes)
+    {
+        const bool generated_reconciled = TryReconcileBatmanGraphicsIniTarget(
+            generated_path,
+            generated_recovery_path,
+            generated_restore_candidate_path,
+            original_generated_bytes,
+            L"generated INI");
+        const bool user_reconciled = TryReconcileBatmanGraphicsIniTarget(
+            user_path,
+            user_recovery_path,
+            user_restore_candidate_path,
+            original_user_bytes,
+            L"launcher INI");
+        return generated_reconciled && user_reconciled;
     }
 
     /**
@@ -720,6 +889,8 @@ namespace
         const std::filesystem::path user_stage_path = CreateSiblingTransactionPath(user_path, L"-user-stage");
         const std::filesystem::path generated_recovery_path = CreateSiblingTransactionPath(generated_path, L"-generated-recovery");
         const std::filesystem::path user_recovery_path = CreateSiblingTransactionPath(user_path, L"-user-recovery");
+        const std::filesystem::path generated_restore_candidate_path = CreateSiblingTransactionPath(generated_path, L"-generated-restore-candidate");
+        const std::filesystem::path user_restore_candidate_path = CreateSiblingTransactionPath(user_path, L"-user-restore-candidate");
 
         if (!TryWriteFileBytes(generated_stage_path, generated_bytes))
         {
@@ -727,7 +898,9 @@ namespace
                 generated_stage_path,
                 user_stage_path,
                 generated_recovery_path,
-                user_recovery_path);
+                user_recovery_path,
+                generated_restore_candidate_path,
+                user_restore_candidate_path);
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after generated staging failed.");
@@ -743,7 +916,9 @@ namespace
                 generated_stage_path,
                 user_stage_path,
                 generated_recovery_path,
-                user_recovery_path);
+                user_recovery_path,
+                generated_restore_candidate_path,
+                user_restore_candidate_path);
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after launcher staging failed.");
@@ -759,7 +934,9 @@ namespace
                 generated_stage_path,
                 user_stage_path,
                 generated_recovery_path,
-                user_recovery_path);
+                user_recovery_path,
+                generated_restore_candidate_path,
+                user_restore_candidate_path);
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after generated recovery staging failed.");
@@ -775,7 +952,9 @@ namespace
                 generated_stage_path,
                 user_stage_path,
                 generated_recovery_path,
-                user_recovery_path);
+                user_recovery_path,
+                generated_restore_candidate_path,
+                user_restore_candidate_path);
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after launcher recovery staging failed.");
@@ -785,41 +964,78 @@ namespace
             return false;
         }
 
-        if (!TryReplaceSiblingFile(generated_path, generated_stage_path))
+        DWORD generated_publication_error = ERROR_SUCCESS;
+        if (!TryReplaceSiblingFile(generated_path, generated_stage_path, generated_publication_error))
         {
+            const bool reconciliation_succeeded = TryReconcileBatmanGraphicsIniPair(
+                generated_path,
+                user_path,
+                generated_recovery_path,
+                user_recovery_path,
+                generated_restore_candidate_path,
+                user_restore_candidate_path,
+                original_generated_bytes,
+                original_user_bytes);
             const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(
                 generated_stage_path,
                 user_stage_path,
                 generated_recovery_path,
-                user_recovery_path);
+                user_recovery_path,
+                generated_restore_candidate_path,
+                user_restore_candidate_path);
+            if (!reconciliation_succeeded)
+            {
+                helen::Logf(L"[graphics] Apply failed: unable to prove both INI targets were restored after generated publication failure.");
+            }
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after generated publication failed.");
             }
 
-            helen::Logf(L"[graphics] Apply failed: unable to publish generated INI path=%ls.", generated_path.wstring().c_str());
+            helen::Logf(
+                L"[graphics] Apply failed: unable to publish generated INI path=%ls error=%lu.",
+                generated_path.wstring().c_str(),
+                static_cast<unsigned long>(generated_publication_error));
             return false;
         }
 
-        if (!TryReplaceSiblingFile(user_path, user_stage_path))
+        DWORD user_publication_error = ERROR_SUCCESS;
+        if (!TryReplaceSiblingFile(user_path, user_stage_path, user_publication_error))
         {
-            const bool generated_restored = TryReplaceSiblingFile(generated_path, generated_recovery_path);
+            const bool reconciliation_succeeded = TryReconcileBatmanGraphicsIniPair(
+                generated_path,
+                user_path,
+                generated_recovery_path,
+                user_recovery_path,
+                generated_restore_candidate_path,
+                user_restore_candidate_path,
+                original_generated_bytes,
+                original_user_bytes);
             const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(
                 generated_stage_path,
                 user_stage_path,
                 generated_recovery_path,
-                user_recovery_path);
-            if (!generated_restored)
+                user_recovery_path,
+                generated_restore_candidate_path,
+                user_restore_candidate_path);
+            if (!reconciliation_succeeded)
             {
-                helen::Logf(L"[graphics] Apply failed: hard compensation failure restoring exact generated INI bytes path=%ls.", generated_path.wstring().c_str());
+                helen::Logf(L"[graphics] Apply failed: unable to prove both INI targets were restored after launcher publication failure.");
             }
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after launcher publication failed.");
             }
-            if (generated_restored && cleanup_succeeded)
+
+            helen::Logf(
+                L"[graphics] Apply failed: unable to publish launcher INI path=%ls error=%lu.",
+                user_path.wstring().c_str(),
+                static_cast<unsigned long>(user_publication_error));
+            if (reconciliation_succeeded && cleanup_succeeded)
             {
-                helen::Logf(L"[graphics] Apply failed: launcher INI publication failed; generated INI was restored path=%ls.", generated_path.wstring().c_str());
+                helen::Logf(
+                    L"[graphics] Apply failed: launcher INI publication failed; both INIs were restored generated_path=%ls.",
+                    generated_path.wstring().c_str());
             }
 
             return false;
@@ -829,7 +1045,9 @@ namespace
                 generated_stage_path,
                 user_stage_path,
                 generated_recovery_path,
-                user_recovery_path))
+                user_recovery_path,
+                generated_restore_candidate_path,
+                user_restore_candidate_path))
         {
             helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after both INI publications succeeded.");
             return false;
