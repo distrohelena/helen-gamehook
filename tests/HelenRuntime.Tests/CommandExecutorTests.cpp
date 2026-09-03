@@ -618,6 +618,10 @@ void RunCommandExecutorTests()
         const std::string saved_user_ini_text = ReadAsciiFromUtf16LittleEndianText(batman_user_ini_path);
         Expect(saved_ini_text.find("UseVsync=True") != std::string::npos, "Batman graphics apply did not persist VSync.");
         Expect(saved_user_ini_text.find("UseVsync=True") != std::string::npos, "Batman graphics apply did not persist VSync to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("Fullscreen=False") != std::string::npos, "Batman graphics apply did not persist fullscreen state to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("ResX=2560") != std::string::npos, "Batman graphics apply did not persist horizontal resolution to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("ResY=1440") != std::string::npos, "Batman graphics apply did not persist vertical resolution to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("DynamicShadows=True") != std::string::npos, "Batman graphics apply did not persist Dynamic Shadows for Medium to launcher-owned UserEngine.ini.");
         Expect(saved_user_ini_text.find("LauncherOwnedSentinel=PreserveMe") != std::string::npos, "Batman graphics apply did not preserve unrelated UserEngine.ini content.");
         Expect(saved_user_ini_text.find("MaxMultisamples=1") != std::string::npos, "Batman graphics apply did not persist disabled MSAA to launcher-owned UserEngine.ini.");
         Expect(saved_user_ini_text.find("DetailMode=1") != std::string::npos, "Batman graphics apply did not persist the Medium detail mode to launcher-owned UserEngine.ini.");
