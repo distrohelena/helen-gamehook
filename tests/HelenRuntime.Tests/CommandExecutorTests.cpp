@@ -619,6 +619,16 @@ void RunCommandExecutorTests()
         Expect(saved_ini_text.find("UseVsync=True") != std::string::npos, "Batman graphics apply did not persist VSync.");
         Expect(saved_user_ini_text.find("UseVsync=True") != std::string::npos, "Batman graphics apply did not persist VSync to launcher-owned UserEngine.ini.");
         Expect(saved_user_ini_text.find("LauncherOwnedSentinel=PreserveMe") != std::string::npos, "Batman graphics apply did not preserve unrelated UserEngine.ini content.");
+        Expect(saved_user_ini_text.find("MaxMultisamples=1") != std::string::npos, "Batman graphics apply did not persist disabled MSAA to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("DetailMode=1") != std::string::npos, "Batman graphics apply did not persist the Medium detail mode to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("Bloom=True") != std::string::npos, "Batman graphics apply did not persist Bloom for Medium to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("MotionBlur=False") != std::string::npos, "Batman graphics apply did not persist Motion Blur for Medium to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("Distortion=False") != std::string::npos, "Batman graphics apply did not persist Distortion for Medium to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("FogVolumes=False") != std::string::npos, "Batman graphics apply did not persist Fog Volumes for Medium to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("DisableSphericalHarmonicLights=True") != std::string::npos, "Batman graphics apply did not persist spherical harmonic lighting for Medium to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("AmbientOcclusion=False") != std::string::npos, "Batman graphics apply did not persist ambient occlusion for Medium to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("PhysXLevel=1") != std::string::npos, "Batman graphics apply did not persist PhysX to launcher-owned UserEngine.ini.");
+        Expect(saved_user_ini_text.find("Stereo=True") != std::string::npos, "Batman graphics apply did not persist stereo to launcher-owned UserEngine.ini.");
         Expect(saved_ini_text.find("MaxMultisamples=1") != std::string::npos, "Batman graphics apply did not persist disabled MSAA.");
         Expect(saved_ini_text.find("DetailMode=1") != std::string::npos, "Batman graphics apply did not persist the Medium detail mode.");
         Expect(saved_ini_text.find("Bloom=True") != std::string::npos, "Batman graphics apply did not persist Bloom for Medium.");
