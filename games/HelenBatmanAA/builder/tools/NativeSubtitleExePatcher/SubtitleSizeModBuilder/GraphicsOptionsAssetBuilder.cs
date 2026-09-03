@@ -102,9 +102,10 @@ internal static class GraphicsOptionsAssetBuilder
     }
 
     /// <summary>
-    /// Builds the graphics-options shell frontend with an INI-bootstrapped VSync row.
-    /// The shell stages the extracted script tree, replaces only the screen and row scripts needed by
-    /// the stock navigation path, patches sprite 600 into the frontend XML, and imports that result.
+    /// Builds the graphics-options shell frontend with eleven transmitted settings and a derived
+    /// Detail Level preset row. The shell stages the extracted script tree, replaces only the screen
+    /// and row scripts needed by the stock navigation path, patches sprite 600 into the frontend XML,
+    /// and imports that result.
     /// </summary>
     /// <param name="paths">The resolved shell build paths.</param>
     public static void BuildShell(GraphicsOptionsShellBuildPaths paths)
@@ -529,7 +530,7 @@ internal static class GraphicsOptionsAssetBuilder
 
     /// <summary>
     /// Writes the fifteen shell row clip actions in one-to-one order with the graphics row depths,
-    /// using the normalized INI snapshot for the VSync row.
+    /// using the normalized INI snapshot retained by the shell build contract.
     /// A mismatch is rejected before any row is written so depth/action drift cannot produce a malformed shell.
     /// </summary>
     /// <param name="scriptsRoot">The staged writable frontend script root.</param>

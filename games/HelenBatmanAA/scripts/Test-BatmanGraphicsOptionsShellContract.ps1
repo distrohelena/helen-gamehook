@@ -1,6 +1,8 @@
 param(
     [string]$BatmanRoot,
-    [string]$BatmanUserIniPath
+    [string]$BatmanUserIniPath,
+    [ValidateSet('Debug', 'Release')]
+    [string]$Configuration = 'Debug'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -157,12 +159,12 @@ if ($ValidateShellInputsPosition -lt 0 -or $PrepareOutputDirectoriesPosition -lt
 }
 
 $BuilderProjectPath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\SubtitleSizeModBuilder.csproj'
-$DebugAssemblyPath = Join-Path $BatmanRoot 'builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\bin\Debug\net8.0\SubtitleSizeModBuilder.dll'
+$DebugAssemblyPath = Join-Path $BatmanRoot "builder\tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\bin\$Configuration\net8.0\SubtitleSizeModBuilder.dll"
 if (-not (Test-Path -LiteralPath $BuilderProjectPath -PathType Leaf)) {
     throw "Batman graphics-options builder project was not found: $BuilderProjectPath"
 }
 
-$BuildOutput = & dotnet build $BuilderProjectPath -c Debug --nologo --disable-build-servers -nr:false -p:UseSharedCompilation=false 2>&1
+$BuildOutput = & dotnet build $BuilderProjectPath -c $Configuration --nologo --disable-build-servers -nr:false -p:UseSharedCompilation=false 2>&1
 if ($LASTEXITCODE -ne 0) {
     throw "Batman graphics-options builder failed to build:`n$($BuildOutput -join [Environment]::NewLine)"
 }
@@ -233,7 +235,6 @@ $ForbiddenTokens = @(
     'GraphicsVsyncController',
     'InitialVsync',
     'DraftVsync',
-    '601',
     'Unsaved',
     'RestartRequired',
     'GetInt',
@@ -817,6 +818,14 @@ foreach ($RequiredScreenToken in @(
     'function IncrementSetting(rowIndex)',
     'function DecrementSetting(rowIndex)',
     'function ToggleSetting(rowIndex)',
+    'function GetDetailLevelDraftIndex()',
+    'function GetDetailLevelInitialIndex()',
+    'function CanEditDetailLevel()',
+    'function SetDetailPreset(index)',
+    'function ToggleDetailPreset()',
+    'function IncrementDetailPreset()',
+    'function DecrementDetailPreset()',
+    'this.DetailLeafRows = new Array(6,7,8,9,10,11,12);',
     'this.Screen.BlockInput(true);',
     'this.Screen.BlockInput(false);',
     'function ApplyChanges()',
@@ -848,13 +857,32 @@ if ($ScreenFrame.IndexOf('this.GraphicsOptionsController.Destroy();', [System.St
 $ExpectedSettingDefinitions = @(
     '{RowIndex:3,Name:"VSync",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4200,ReadResponseBase:4210,WriteRequestBase:4220,WriteAcknowledgementBase:4230,FailureResponse:4299,InitialIndex:-1,DraftIndex:-1}',
     '{RowIndex:4,Name:"MSAA",Values:new Array("Off","2x","4x","8x","16x"),ConfigValues:new Array(0,1,2,3,5),ReadRequest:4300,ReadResponseBase:4310,WriteRequestBase:4320,WriteAcknowledgementBase:4330,FailureResponse:4399,InitialIndex:-1,DraftIndex:-1}',
+    '{RowIndex:6,Name:"Bloom",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4600,ReadResponseBase:4601,WriteRequestBase:4603,WriteAcknowledgementBase:4605,FailureResponse:4609,InitialIndex:-1,DraftIndex:-1}',
+    '{RowIndex:7,Name:"Dynamic Shadows",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4610,ReadResponseBase:4611,WriteRequestBase:4613,WriteAcknowledgementBase:4615,FailureResponse:4619,InitialIndex:-1,DraftIndex:-1}',
+    '{RowIndex:8,Name:"Motion Blur",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4620,ReadResponseBase:4621,WriteRequestBase:4623,WriteAcknowledgementBase:4625,FailureResponse:4629,InitialIndex:-1,DraftIndex:-1}',
+    '{RowIndex:9,Name:"Distortion",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4630,ReadResponseBase:4631,WriteRequestBase:4633,WriteAcknowledgementBase:4635,FailureResponse:4639,InitialIndex:-1,DraftIndex:-1}',
+    '{RowIndex:10,Name:"Fog Volumes",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4640,ReadResponseBase:4641,WriteRequestBase:4643,WriteAcknowledgementBase:4645,FailureResponse:4649,InitialIndex:-1,DraftIndex:-1}',
+    '{RowIndex:11,Name:"Spherical Harmonic Lighting",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4650,ReadResponseBase:4651,WriteRequestBase:4653,WriteAcknowledgementBase:4655,FailureResponse:4659,InitialIndex:-1,DraftIndex:-1}',
+    '{RowIndex:12,Name:"Ambient Occlusion",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4660,ReadResponseBase:4661,WriteRequestBase:4663,WriteAcknowledgementBase:4665,FailureResponse:4669,InitialIndex:-1,DraftIndex:-1}',
     '{RowIndex:13,Name:"PhysX",Values:new Array("Off","Normal","High"),ConfigValues:new Array(0,1,2),ReadRequest:4400,ReadResponseBase:4410,WriteRequestBase:4420,WriteAcknowledgementBase:4430,FailureResponse:4499,InitialIndex:-1,DraftIndex:-1}',
     '{RowIndex:14,Name:"Stereo 3D",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4500,ReadResponseBase:4510,WriteRequestBase:4520,WriteAcknowledgementBase:4530,FailureResponse:4599,InitialIndex:-1,DraftIndex:-1}'
 )
 foreach ($ExpectedSettingDefinition in $ExpectedSettingDefinitions) {
     Assert-ContainsOrdinal -Text $ScreenFrame -Token $ExpectedSettingDefinition -Context 'Graphics declarative setting definition'
 }
-foreach ($ExpectedSettingRow in @(3, 4, 13, 14)) {
+if ($ExpectedSettingDefinitions.Count -ne 11) {
+    throw "The graphics shell contract must define exactly eleven transmitted settings, found $($ExpectedSettingDefinitions.Count)."
+}
+if ($ScreenFrame.IndexOf('RowIndex:5,', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Detail Level must remain a derived shell-local controller and must not be a Settings record.'
+}
+if ($ScreenFrame.IndexOf('Name:"Detail Level"', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Detail Level must not be serialized as a transmitted Settings record.'
+}
+if ($ScreenFrame.IndexOf('this.Settings.length != 11', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Graphics setting count checks must not replace the declarative Settings contract.'
+}
+foreach ($ExpectedSettingRow in @(3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14)) {
     $DefinitionCount = ([regex]::Matches($ScreenFrame, "RowIndex:$ExpectedSettingRow,")).Count
     if ($DefinitionCount -ne 1) {
         throw "Graphics setting row $ExpectedSettingRow must have exactly one declarative definition, found $DefinitionCount."
@@ -880,6 +908,13 @@ if ($ScreenFrame.IndexOf('getTimer() >=', [System.StringComparison]::Ordinal) -g
 }
 if ($ScreenFrame.IndexOf('FE_SetControlType",4210+', [System.StringComparison]::Ordinal) -ge 0 -or
     $ScreenFrame.IndexOf('FE_SetControlType",4310+', [System.StringComparison]::Ordinal) -ge 0 -or
+    $ScreenFrame.IndexOf('FE_SetControlType",4601+', [System.StringComparison]::Ordinal) -ge 0 -or
+    $ScreenFrame.IndexOf('FE_SetControlType",4611+', [System.StringComparison]::Ordinal) -ge 0 -or
+    $ScreenFrame.IndexOf('FE_SetControlType",4621+', [System.StringComparison]::Ordinal) -ge 0 -or
+    $ScreenFrame.IndexOf('FE_SetControlType",4631+', [System.StringComparison]::Ordinal) -ge 0 -or
+    $ScreenFrame.IndexOf('FE_SetControlType",4641+', [System.StringComparison]::Ordinal) -ge 0 -or
+    $ScreenFrame.IndexOf('FE_SetControlType",4651+', [System.StringComparison]::Ordinal) -ge 0 -or
+    $ScreenFrame.IndexOf('FE_SetControlType",4661+', [System.StringComparison]::Ordinal) -ge 0 -or
     $ScreenFrame.IndexOf('FE_SetControlType",4410+', [System.StringComparison]::Ordinal) -ge 0 -or
     $ScreenFrame.IndexOf('FE_SetControlType",4510+', [System.StringComparison]::Ordinal) -ge 0) {
     throw 'Graphics shell must not send read responses as write requests.'
@@ -1233,7 +1268,7 @@ try {
             '--project',
             $BuilderProjectPath,
             '-c',
-            'Debug',
+            $Configuration,
             '--no-restore',
             '--',
             'build-main-menu-graphics-shell',
@@ -1267,14 +1302,14 @@ $ExpectedRows = @(
     @{ Label = 'Resolution'; Value = 'Not active' },
     @{ Label = 'VSync'; Value = $null },
     @{ Label = 'MSAA'; Value = $null },
-    @{ Label = 'Detail Level'; Value = 'Not active' },
-    @{ Label = 'Bloom'; Value = 'Not active' },
-    @{ Label = 'Dynamic Shadows'; Value = 'Not active' },
-    @{ Label = 'Motion Blur'; Value = 'Not active' },
-    @{ Label = 'Distortion'; Value = 'Not active' },
-    @{ Label = 'Fog Volumes'; Value = 'Not active' },
-    @{ Label = 'Spherical Harmonic Lighting'; Value = 'Not active' },
-    @{ Label = 'Ambient Occlusion'; Value = 'Not active' },
+    @{ Label = 'Detail Level'; Value = $null },
+    @{ Label = 'Bloom'; Value = $null },
+    @{ Label = 'Dynamic Shadows'; Value = $null },
+    @{ Label = 'Motion Blur'; Value = $null },
+    @{ Label = 'Distortion'; Value = $null },
+    @{ Label = 'Fog Volumes'; Value = $null },
+    @{ Label = 'Spherical Harmonic Lighting'; Value = $null },
+    @{ Label = 'Ambient Occlusion'; Value = $null },
     @{ Label = 'PhysX'; Value = $null },
     @{ Label = 'Stereo 3D'; Value = $null }
 )
@@ -1290,10 +1325,17 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
     Assert-ContainsOrdinal -Text $RowScript -Token 'this._visible = true;' -Context $RowContext
     Assert-NoOpActionScriptFunction -ScriptText $RowScript -FunctionName 'ShowPrompt' -Context $RowContext
 
-    if (@(3, 4, 13, 14) -contains ($RowIndex + 1)) {
+    if (@(3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14) -contains ($RowIndex + 1)) {
         $ActiveRowDefinitions = @{
             3 = @{ Values = 'this.Names = new Array("Off","On");'; RowIndex = 3 }
             4 = @{ Values = 'this.Names = new Array("Off","2x","4x","8x","16x");'; RowIndex = 4 }
+            6 = @{ Values = 'this.Names = new Array("Off","On");'; RowIndex = 6 }
+            7 = @{ Values = 'this.Names = new Array("Off","On");'; RowIndex = 7 }
+            8 = @{ Values = 'this.Names = new Array("Off","On");'; RowIndex = 8 }
+            9 = @{ Values = 'this.Names = new Array("Off","On");'; RowIndex = 9 }
+            10 = @{ Values = 'this.Names = new Array("Off","On");'; RowIndex = 10 }
+            11 = @{ Values = 'this.Names = new Array("Off","On");'; RowIndex = 11 }
+            12 = @{ Values = 'this.Names = new Array("Off","On");'; RowIndex = 12 }
             13 = @{ Values = 'this.Names = new Array("Off","Normal","High");'; RowIndex = 13 }
             14 = @{ Values = 'this.Names = new Array("Off","On");'; RowIndex = 14 }
         }
@@ -1327,6 +1369,21 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
         foreach ($ActiveFunctionName in @('RunAction', 'Increment', 'Decrement')) {
             $ActiveFunctionBody = Get-ActionScriptFunctionBody -ScriptText $RowScript -FunctionName $ActiveFunctionName -Context "$RowContext $ActiveFunctionName"
             Assert-ContainsOrdinal -Text $ActiveFunctionBody -Token 'if(_parent.GraphicsOptionsController != undefined)' -Context "$RowContext $ActiveFunctionName controller guard"
+        }
+    } elseif (($RowIndex + 1) -eq 5) {
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Names = new Array("Low","Medium","High","Very High","Custom");' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = -1;' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = -1;' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Default = -1;' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'GetDetailLevelDraftIndex();' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'GetDetailLevelInitialIndex();' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'ToggleDetailPreset();' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'IncrementDetailPreset();' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'DecrementDetailPreset();' -Context $RowContext
+        if ($RowScript.IndexOf('ToggleSetting', [System.StringComparison]::Ordinal) -ge 0 -or
+            $RowScript.IndexOf('IncrementSetting', [System.StringComparison]::Ordinal) -ge 0 -or
+            $RowScript.IndexOf('DecrementSetting', [System.StringComparison]::Ordinal) -ge 0) {
+            throw "$RowContext must delegate only to detail preset methods."
         }
     } else {
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = 0;' -Context $RowContext
@@ -1505,11 +1562,14 @@ function makeEnvironment() {
 function initialize(controller, values) {
     controller.BeginInitialization();
     assert.deepStrictEqual(settingSignals(), [4200]);
-    const responses = [4210 + values[0], 4310 + values[1], 4410 + values[2], 4510 + values[3]];
+    const responseBases = [4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510];
+    const startupRequests = [4200, 4300, 4600, 4610, 4620, 4630, 4640, 4650, 4660, 4400, 4500];
+    const responses = values.map((value, index) => responseBases[index] + value);
     for (const response of responses) {
         queueResponses(response);
         controller.Tick();
     }
+    assert.deepStrictEqual(settingSignals(), startupRequests);
     assert.strictEqual(controller.InitializationComplete, true);
     assert.strictEqual(controller.CanApply(), false);
 }
@@ -1543,31 +1603,35 @@ assert.deepStrictEqual(settingSignals(), [4200]);
 queueResponses(9999);
 controller.Tick();
 assert.deepStrictEqual(settingSignals(), [4200]);
-queueResponses(4211);
-controller.Tick();
-assert.deepStrictEqual(settingSignals(), [4200, 4300]);
-queueResponses(4314);
-controller.Tick();
-assert.deepStrictEqual(settingSignals(), [4200, 4300, 4400]);
-queueResponses(4412);
-controller.Tick();
-assert.deepStrictEqual(settingSignals(), [4200, 4300, 4400, 4500]);
-queueResponses(4511);
-controller.Tick();
-assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [1, 4, 2, 1]);
-assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), [1, 4, 2, 1]);
+const startupValues = [1, 4, 0, 0, 0, 0, 0, 0, 0, 2, 1];
+const startupResponseBases = [4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510];
+const startupRequests = [4200, 4300, 4600, 4610, 4620, 4630, 4640, 4650, 4660, 4400, 4500];
+for (let startupIndex = 0; startupIndex < startupValues.length; startupIndex += 1) {
+    queueResponses(startupResponseBases[startupIndex] + startupValues[startupIndex]);
+    controller.Tick();
+}
+assert.deepStrictEqual(settingSignals(), startupRequests);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), startupValues);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), startupValues);
+assert.strictEqual(controller.Settings.length, 11);
 assert.strictEqual(controller.InitializationDeadline, 10000);
+assert.strictEqual(controller.GetDetailLevelInitialIndex(), 0);
+assert.strictEqual(controller.GetDetailLevelDraftIndex(), 0);
+assert.strictEqual(controller.CanEditDetailLevel(), true);
 assert.strictEqual(controller.CanApply(), false);
 
 setNow(0);
 environment = makeEnvironment();
 controller = environment.controller;
 controller.BeginInitialization();
-queueResponses(4299);
-controller.Tick();
+queueResponses(4210); controller.Tick();
+queueResponses(4310); controller.Tick();
+queueResponses(4609); controller.Tick();
 assert.strictEqual(controller.InitializationFailed, true);
-assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [-1, -1, -1, -1]);
-assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), [-1, -1, -1, -1]);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), Array(11).fill(-1));
+assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), Array(11).fill(-1));
+assert.strictEqual(controller.GetDetailLevelDraftIndex(), 4);
+assert.strictEqual(controller.CanEditDetailLevel(), false);
 assert.strictEqual(controller.CanApply(), false);
 assert.strictEqual(controller.CanEdit(3), false);
 assert.strictEqual(environment.screen.bBlockInput, false);
@@ -1591,16 +1655,16 @@ assert.strictEqual(controller.InitializationDeadline, 2147493000);
 setNow(-2147474296);
 controller.Tick();
 assert.strictEqual(controller.InitializationFailed, true);
-assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), [-1, -1, -1, -1]);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), Array(11).fill(-1));
 
 setNow(0);
 clearCalls();
 environment = makeEnvironment();
 controller = environment.controller;
-initialize(controller, [0, 0, 0, 0]);
+initialize(controller, Array(11).fill(0));
 controller.IncrementSetting(3);
 assert.strictEqual(controller.Settings[0].DraftIndex, 1);
-assert.strictEqual(settingSignals().filter(value => value >= 4200 && value < 4600).length, 4);
+assert.strictEqual(settingSignals().length, 11);
 controller.DecrementSetting(3);
 controller.DecrementSetting(3);
 assert.strictEqual(controller.Settings[0].DraftIndex, 0);
@@ -1613,46 +1677,63 @@ controller.IncrementSetting(4);
 assert.strictEqual(controller.Settings[1].DraftIndex, 2);
 assert.strictEqual(controller.CanApply(), true);
 
+controller.SetDetailPreset(0);
+assert.strictEqual(controller.GetDetailLevelDraftIndex(), 0);
+controller.SetDetailPreset(1);
+assert.deepStrictEqual(controller.Settings.slice(2, 9).map(setting => setting.DraftIndex), [1, 1, 0, 0, 0, 0, 0]);
+assert.strictEqual(controller.GetDetailLevelDraftIndex(), 1);
+controller.SetDetailPreset(2);
+assert.deepStrictEqual(controller.Settings.slice(2, 9).map(setting => setting.DraftIndex), [1, 1, 1, 1, 1, 1, 0]);
+assert.strictEqual(controller.GetDetailLevelDraftIndex(), 2);
+controller.SetDetailPreset(3);
+assert.deepStrictEqual(controller.Settings.slice(2, 9).map(setting => setting.DraftIndex), [1, 1, 1, 1, 1, 1, 1]);
+assert.strictEqual(controller.GetDetailLevelDraftIndex(), 3);
+controller.IncrementDetailPreset();
+assert.strictEqual(controller.GetDetailLevelDraftIndex(), 3);
+controller.DecrementDetailPreset();
+assert.strictEqual(controller.GetDetailLevelDraftIndex(), 2);
+controller.SetDetailPreset(3);
+controller.DecrementSetting(9);
+assert.strictEqual(controller.GetDetailLevelDraftIndex(), 4);
+controller.IncrementDetailPreset();
+assert.strictEqual(controller.GetDetailLevelDraftIndex(), 4);
+controller.DecrementDetailPreset();
+assert.strictEqual(controller.GetDetailLevelDraftIndex(), 3);
+controller.ToggleDetailPreset();
+assert.strictEqual(controller.GetDetailLevelDraftIndex(), 0);
+assert.strictEqual(settingSignals().length, 11);
+
 setNow(0);
 clearCalls();
 environment = makeEnvironment();
 controller = environment.controller;
-initialize(controller, [0, 0, 0, 0]);
-controller.ToggleSetting(14);
-controller.IncrementSetting(4);
-controller.IncrementSetting(4);
-controller.ToggleSetting(3);
+initialize(controller, Array(11).fill(0));
+controller.SetDetailPreset(2);
 controller.ApplyChanges();
 assert.strictEqual(environment.screen.bBlockInput, true);
 assert.strictEqual(environment.screen.bLockInput, true);
 assert.deepStrictEqual(environment.screen.blockStates.slice(-1), [true]);
 assert.strictEqual(environment.screen.TryBack(), false);
 assert.strictEqual(environment.screen.returnFromScreenCount, 0);
-assert.deepStrictEqual(settingSignals().slice(4), [4221]);
-queueResponses(4230);
-controller.Tick();
-assert.deepStrictEqual(settingSignals().slice(4), [4221]);
-queueResponses(4231);
-controller.Tick();
-assert.deepStrictEqual(settingSignals().slice(4), [4221, 4322]);
-assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [0, 0, 0, 0]);
-queueResponses(4330);
-controller.Tick();
-assert.deepStrictEqual(settingSignals().slice(4), [4221, 4322]);
-queueResponses(4332);
-controller.Tick();
-assert.deepStrictEqual(settingSignals().slice(4), [4221, 4322, 4521]);
-queueResponses(4530);
-controller.Tick();
-assert.deepStrictEqual(settingSignals().slice(4), [4221, 4322, 4521]);
-queueResponses(4531);
-controller.Tick();
+assert.deepStrictEqual(settingSignals().slice(-1), [4604]);
+queueResponses(4606); controller.Tick();
+assert.deepStrictEqual(settingSignals().slice(-1), [4614]);
+queueResponses(4616); controller.Tick();
+assert.deepStrictEqual(settingSignals().slice(-1), [4624]);
+queueResponses(4626); controller.Tick();
+assert.deepStrictEqual(settingSignals().slice(-1), [4634]);
+queueResponses(4636); controller.Tick();
+assert.deepStrictEqual(settingSignals().slice(-1), [4644]);
+queueResponses(4646); controller.Tick();
+assert.deepStrictEqual(settingSignals().slice(-1), [4654]);
+queueResponses(4656); controller.Tick();
 const commitSignal = settingSignals()[settingSignals().length - 1];
 assert.strictEqual(commitSignal, 4991);
-assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [0, 0, 0, 0]);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), Array(11).fill(0));
 queueResponses(4981);
 controller.Tick();
-assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [1, 2, 0, 1]);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0]);
+assert.strictEqual(controller.GetDetailLevelInitialIndex(), 2);
 assert.strictEqual(controller.GetApplyStatusText(), '');
 assert.strictEqual(controller.CanApply(), false);
 assert.strictEqual(environment.screen.bBlockInput, false);
@@ -1661,14 +1742,14 @@ assert.deepStrictEqual(environment.screen.blockStates.slice(-1), [false]);
 
 controller.ToggleSetting(3);
 controller.ApplyChanges();
-assert.deepStrictEqual(settingSignals().slice(-1), [4220]);
-queueResponses(4230);
+assert.deepStrictEqual(settingSignals().slice(-1), [4221]);
+queueResponses(4231);
 controller.Tick();
 const secondCommitSignal = settingSignals()[settingSignals().length - 1];
 assert.strictEqual(secondCommitSignal, 4990);
 queueResponses(4980);
 controller.Tick();
-assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [0, 2, 0, 1]);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0]);
 assert.strictEqual(environment.screen.bBlockInput, false);
 assert.strictEqual(environment.screen.bLockInput, false);
 assert.strictEqual(environment.screen.onKeyDown(), true);
@@ -1679,7 +1760,7 @@ function applyAndReachSettingFailure(failureResponse) {
     clearCalls();
     const failedEnvironment = makeEnvironment();
     const failedController = failedEnvironment.controller;
-    initialize(failedController, [0, 0, 0, 0]);
+    initialize(failedController, Array(11).fill(0));
     failedController.ToggleSetting(3);
     failedController.ApplyChanges();
     queueResponses(failureResponse);
@@ -1704,7 +1785,7 @@ setNow(0);
 clearCalls();
 environment = makeEnvironment();
 controller = environment.controller;
-initialize(controller, [0, 0, 0, 0]);
+initialize(controller, Array(11).fill(0));
 controller.ToggleSetting(3);
 controller.ApplyChanges();
 queueResponses(4299);
@@ -1737,7 +1818,7 @@ setNow(0);
 clearCalls();
 environment = makeEnvironment();
 controller = environment.controller;
-initialize(controller, [0, 0, 0, 0]);
+initialize(controller, Array(11).fill(0));
 controller.ToggleSetting(3);
 controller.ApplyChanges();
 queueResponses(4231);
@@ -1760,7 +1841,7 @@ setNow(0);
 clearCalls();
 environment = makeEnvironment();
 controller = environment.controller;
-initialize(controller, [0, 0, 0, 0]);
+initialize(controller, Array(11).fill(0));
 controller.ToggleSetting(3);
 controller.ApplyChanges();
 queueResponses(4231);
@@ -1849,7 +1930,7 @@ assert.strictEqual(activeMissingLabel.RightClicker._visible, false);
 assert.strictEqual(applyMissingItemText.Label._alpha, 40);
 assert.strictEqual(applyMissingLabel.ItemText.text, '');
 assert.strictEqual(applyMissingLabel.ItemText._alpha, 40);
-initialize(partialEnvironment.controller, [0, 0, 0, 0]);
+initialize(partialEnvironment.controller, Array(11).fill(0));
 expectNoThrow(() => partialActiveRow.Update(), 'partial active row update after controller initialization');
 expectNoThrow(() => partialApplyRow.Update(), 'partial apply row update after controller initialization');
 expectNoThrow(() => activeMissingItemText.Update(), 'active row update without ItemText');
@@ -1882,7 +1963,7 @@ assert.strictEqual(applyMissingRightClicker.Label._alpha, 40);
 currentScreen = lifecycleParent;
 expectNoThrow(() => new Function(cancelBody).call(lifecycleParent), 'CancelScreen before controller assignment');
 const lifecycleEnvironment = makeEnvironment();
-initialize(lifecycleEnvironment.controller, [0, 0, 0, 0]);
+initialize(lifecycleEnvironment.controller, Array(11).fill(0));
 lifecycleEnvironment.controller.ToggleSetting(3);
 lifecycleEnvironment.controller.ApplyChanges();
 assert.strictEqual(lifecycleEnvironment.screen.bBlockInput, true);

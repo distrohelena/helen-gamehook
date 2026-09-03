@@ -2,8 +2,8 @@ namespace SubtitleSizeModBuilder;
 
 /// <summary>
 /// Produces the selective ActionScript shell used to expose the retail graphics-options screen.
-/// Four declaratively described settings are connected to the frontend carrier; every other row
-/// remains a visible, callback-free placeholder so the stock screen layout and navigation remain stable.
+/// Eleven declaratively described settings are connected to the frontend carrier, while Detail Level
+/// is a shell-local derived preset over seven quality leaves and the stock layout remains stable.
 /// </summary>
 internal static class GraphicsOptionsShellScriptTemplates
 {
@@ -67,6 +67,7 @@ internal static class GraphicsOptionsShellScriptTemplates
            var Screen;
            var Settings;
            var ActiveSettingsByRow;
+           var DetailLeafRows;
            var InitializationIndex;
            var InitializationDeadline;
            var InitializationComplete;
@@ -88,6 +89,7 @@ internal static class GraphicsOptionsShellScriptTemplates
               this.Screen = screen;
               this.Settings = new Array();
               this.ActiveSettingsByRow = new Object();
+              this.DetailLeafRows = new Array(6,7,8,9,10,11,12);
               this.InitializationIndex = 0;
               this.InitializationDeadline = undefined;
               this.InitializationComplete = false;
@@ -111,6 +113,13 @@ internal static class GraphicsOptionsShellScriptTemplates
               this.Settings = new Array(
                  {RowIndex:3,Name:"VSync",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4200,ReadResponseBase:4210,WriteRequestBase:4220,WriteAcknowledgementBase:4230,FailureResponse:4299,InitialIndex:-1,DraftIndex:-1},
                  {RowIndex:4,Name:"MSAA",Values:new Array("Off","2x","4x","8x","16x"),ConfigValues:new Array(0,1,2,3,5),ReadRequest:4300,ReadResponseBase:4310,WriteRequestBase:4320,WriteAcknowledgementBase:4330,FailureResponse:4399,InitialIndex:-1,DraftIndex:-1},
+                 {RowIndex:6,Name:"Bloom",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4600,ReadResponseBase:4601,WriteRequestBase:4603,WriteAcknowledgementBase:4605,FailureResponse:4609,InitialIndex:-1,DraftIndex:-1},
+                 {RowIndex:7,Name:"Dynamic Shadows",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4610,ReadResponseBase:4611,WriteRequestBase:4613,WriteAcknowledgementBase:4615,FailureResponse:4619,InitialIndex:-1,DraftIndex:-1},
+                 {RowIndex:8,Name:"Motion Blur",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4620,ReadResponseBase:4621,WriteRequestBase:4623,WriteAcknowledgementBase:4625,FailureResponse:4629,InitialIndex:-1,DraftIndex:-1},
+                 {RowIndex:9,Name:"Distortion",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4630,ReadResponseBase:4631,WriteRequestBase:4633,WriteAcknowledgementBase:4635,FailureResponse:4639,InitialIndex:-1,DraftIndex:-1},
+                 {RowIndex:10,Name:"Fog Volumes",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4640,ReadResponseBase:4641,WriteRequestBase:4643,WriteAcknowledgementBase:4645,FailureResponse:4649,InitialIndex:-1,DraftIndex:-1},
+                 {RowIndex:11,Name:"Spherical Harmonic Lighting",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4650,ReadResponseBase:4651,WriteRequestBase:4653,WriteAcknowledgementBase:4655,FailureResponse:4659,InitialIndex:-1,DraftIndex:-1},
+                 {RowIndex:12,Name:"Ambient Occlusion",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4660,ReadResponseBase:4661,WriteRequestBase:4663,WriteAcknowledgementBase:4665,FailureResponse:4669,InitialIndex:-1,DraftIndex:-1},
                  {RowIndex:13,Name:"PhysX",Values:new Array("Off","Normal","High"),ConfigValues:new Array(0,1,2),ReadRequest:4400,ReadResponseBase:4410,WriteRequestBase:4420,WriteAcknowledgementBase:4430,FailureResponse:4499,InitialIndex:-1,DraftIndex:-1},
                  {RowIndex:14,Name:"Stereo 3D",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4500,ReadResponseBase:4510,WriteRequestBase:4520,WriteAcknowledgementBase:4530,FailureResponse:4599,InitialIndex:-1,DraftIndex:-1}
               );
@@ -143,6 +152,201 @@ internal static class GraphicsOptionsShellScriptTemplates
                  return -1;
               }
               return setting.InitialIndex;
+           }
+           function GetDetailLevelDraftIndex()
+           {
+              var leafIndex = 0;
+              while(leafIndex < this.DetailLeafRows.length)
+              {
+                 var setting = this.GetSettingForRow(this.DetailLeafRows[leafIndex]);
+                 if(setting == undefined || setting.DraftIndex < 0 || setting.DraftIndex > 1)
+                 {
+                    return 4;
+                 }
+                 leafIndex = leafIndex + 1;
+              }
+              var isLow = true;
+              var isMedium = true;
+              var isHigh = true;
+              var isVeryHigh = true;
+              leafIndex = 0;
+              while(leafIndex < this.DetailLeafRows.length)
+              {
+                 var draftSetting = this.GetSettingForRow(this.DetailLeafRows[leafIndex]);
+                 if(draftSetting.DraftIndex != 0)
+                 {
+                    isLow = false;
+                 }
+                 if((leafIndex < 2 && draftSetting.DraftIndex != 1) || (leafIndex >= 2 && draftSetting.DraftIndex != 0))
+                 {
+                    isMedium = false;
+                 }
+                 if((leafIndex < 6 && draftSetting.DraftIndex != 1) || (leafIndex == 6 && draftSetting.DraftIndex != 0))
+                 {
+                    isHigh = false;
+                 }
+                 if(draftSetting.DraftIndex != 1)
+                 {
+                    isVeryHigh = false;
+                 }
+                 leafIndex = leafIndex + 1;
+              }
+              if(isLow)
+              {
+                 return 0;
+              }
+              if(isMedium)
+              {
+                 return 1;
+              }
+              if(isHigh)
+              {
+                 return 2;
+              }
+              if(isVeryHigh)
+              {
+                 return 3;
+              }
+              return 4;
+           }
+           function GetDetailLevelInitialIndex()
+           {
+              var leafIndex = 0;
+              while(leafIndex < this.DetailLeafRows.length)
+              {
+                 var setting = this.GetSettingForRow(this.DetailLeafRows[leafIndex]);
+                 if(setting == undefined || setting.InitialIndex < 0 || setting.InitialIndex > 1)
+                 {
+                    return 4;
+                 }
+                 leafIndex = leafIndex + 1;
+              }
+              var isLow = true;
+              var isMedium = true;
+              var isHigh = true;
+              var isVeryHigh = true;
+              leafIndex = 0;
+              while(leafIndex < this.DetailLeafRows.length)
+              {
+                 var initialSetting = this.GetSettingForRow(this.DetailLeafRows[leafIndex]);
+                 if(initialSetting.InitialIndex != 0)
+                 {
+                    isLow = false;
+                 }
+                 if((leafIndex < 2 && initialSetting.InitialIndex != 1) || (leafIndex >= 2 && initialSetting.InitialIndex != 0))
+                 {
+                    isMedium = false;
+                 }
+                 if((leafIndex < 6 && initialSetting.InitialIndex != 1) || (leafIndex == 6 && initialSetting.InitialIndex != 0))
+                 {
+                    isHigh = false;
+                 }
+                 if(initialSetting.InitialIndex != 1)
+                 {
+                    isVeryHigh = false;
+                 }
+                 leafIndex = leafIndex + 1;
+              }
+              if(isLow)
+              {
+                 return 0;
+              }
+              if(isMedium)
+              {
+                 return 1;
+              }
+              if(isHigh)
+              {
+                 return 2;
+              }
+              if(isVeryHigh)
+              {
+                 return 3;
+              }
+              return 4;
+           }
+           function CanEditDetailLevel()
+           {
+              if(!this.InitializationComplete || this.InitializationFailed || this.InteractionBlocked || this.RollbackLocked)
+              {
+                 return false;
+              }
+              var leafIndex = 0;
+              while(leafIndex < this.DetailLeafRows.length)
+              {
+                 var setting = this.GetSettingForRow(this.DetailLeafRows[leafIndex]);
+                 if(setting == undefined || setting.InitialIndex < 0 || setting.DraftIndex < 0)
+                 {
+                    return false;
+                 }
+                 leafIndex = leafIndex + 1;
+              }
+              return true;
+           }
+           function SetDetailPreset(index)
+           {
+              if((index != 0 && index != 1 && index != 2 && index != 3) || !this.CanEditDetailLevel())
+              {
+                 return undefined;
+              }
+              flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Forward");
+              var leafIndex = 0;
+              while(leafIndex < this.DetailLeafRows.length)
+              {
+                 var targetIndex = 0;
+                 if((index == 1 && leafIndex < 2) || (index >= 2 && leafIndex < 6) || (index == 3 && leafIndex == 6))
+                 {
+                    targetIndex = 1;
+                 }
+                 this.GetSettingForRow(this.DetailLeafRows[leafIndex]).DraftIndex = targetIndex;
+                 leafIndex = leafIndex + 1;
+              }
+              this.RefreshRows();
+           }
+           function ToggleDetailPreset()
+           {
+              if(!this.CanEditDetailLevel())
+              {
+                 return undefined;
+              }
+              var currentIndex = this.GetDetailLevelDraftIndex();
+              var targetIndex = 0;
+              if(currentIndex >= 0 && currentIndex < 3)
+              {
+                 targetIndex = currentIndex + 1;
+              }
+              this.SetDetailPreset(targetIndex);
+           }
+           function IncrementDetailPreset()
+           {
+              if(!this.CanEditDetailLevel())
+              {
+                 return undefined;
+              }
+              var currentIndex = this.GetDetailLevelDraftIndex();
+              if(currentIndex < 0 || currentIndex >= 3)
+              {
+                 return undefined;
+              }
+              this.SetDetailPreset(currentIndex + 1);
+           }
+           function DecrementDetailPreset()
+           {
+              if(!this.CanEditDetailLevel())
+              {
+                 return undefined;
+              }
+              var currentIndex = this.GetDetailLevelDraftIndex();
+              var targetIndex = currentIndex - 1;
+              if(currentIndex == 4)
+              {
+                 targetIndex = 3;
+              }
+              if(targetIndex < 0)
+              {
+                 return undefined;
+              }
+              this.SetDetailPreset(targetIndex);
            }
            function IsUnavailable(rowIndex)
            {
@@ -591,8 +795,8 @@ internal static class GraphicsOptionsShellScriptTemplates
     """;
 
     /// <summary>
-    /// Creates all fifteen row scripts in visual and navigation order, injecting four active
-    /// declarative settings and retaining no-op placeholders for all unrelated settings.
+    /// Creates all fifteen row scripts in visual and navigation order, injecting eleven transmitted
+    /// settings plus the derived Detail Level controller while retaining fixed inactive rows.
     /// </summary>
     /// <param name="snapshot">The normalized user graphics snapshot retained by the builder contract.</param>
     /// <returns>The fifteen row clip-action scripts.</returns>
@@ -605,18 +809,133 @@ internal static class GraphicsOptionsShellScriptTemplates
             CreateRowClipAction("Resolution", "Not active", true),
             CreateActiveRowClipAction("VSync", 3, ["Off", "On"]),
             CreateActiveRowClipAction("MSAA", 4, ["Off", "2x", "4x", "8x", "16x"]),
-            CreateRowClipAction("Detail Level", "Not active", true),
-            CreateRowClipAction("Bloom", "Not active", true),
-            CreateRowClipAction("Dynamic Shadows", "Not active", true),
-            CreateRowClipAction("Motion Blur", "Not active", true),
-            CreateRowClipAction("Distortion", "Not active", true),
-            CreateRowClipAction("Fog Volumes", "Not active", true),
-            CreateRowClipAction("Spherical Harmonic Lighting", "Not active", true),
-            CreateRowClipAction("Ambient Occlusion", "Not active", true),
+            CreateDetailLevelRowClipAction(),
+            CreateActiveRowClipAction("Bloom", 6, ["Off", "On"]),
+            CreateActiveRowClipAction("Dynamic Shadows", 7, ["Off", "On"]),
+            CreateActiveRowClipAction("Motion Blur", 8, ["Off", "On"]),
+            CreateActiveRowClipAction("Distortion", 9, ["Off", "On"]),
+            CreateActiveRowClipAction("Fog Volumes", 10, ["Off", "On"]),
+            CreateActiveRowClipAction("Spherical Harmonic Lighting", 11, ["Off", "On"]),
+            CreateActiveRowClipAction("Ambient Occlusion", 12, ["Off", "On"]),
             CreateActiveRowClipAction("PhysX", 13, ["Off", "Normal", "High"]),
             CreateActiveRowClipAction("Stereo 3D", 14, ["Off", "On"]),
             CreateApplyRowClipAction()
         ];
+    }
+
+    /// <summary>
+    /// Creates the derived Detail Level row. Its display is computed from the seven quality leaves,
+    /// and all user actions delegate to the controller's preset methods without transport calls.
+    /// </summary>
+    /// <returns>An ActionScript load handler for the derived detail preset row.</returns>
+    private static string CreateDetailLevelRowClipAction()
+    {
+        return """
+        onClipEvent(load){
+           this.LabelName = "Detail Level";
+           this.Names = new Array("Low","Medium","High","Very High","Custom");
+           this.State = -1;
+           this.Initial = -1;
+           this.Default = -1;
+           this.Update = function()
+           {
+              if(this.Label != undefined && this.Label.Label != undefined && this.Label.Label.Text != undefined)
+              {
+                 this.Label.Label.Text.text = "Detail Level";
+              }
+              else if(this.Label != undefined && this.Label.Text != undefined)
+              {
+                 this.Label.Text.text = "Detail Level";
+              }
+              else if(this.Label != undefined)
+              {
+                 this.Label.text = "Detail Level";
+              }
+              if(_parent.GraphicsOptionsController == undefined)
+              {
+                 if(this.ItemText != undefined)
+                 {
+                    this.ItemText.text = "Loading...";
+                 }
+                 if(this.LeftClicker != undefined)
+                 {
+                    this.LeftClicker._visible = false;
+                 }
+                 if(this.RightClicker != undefined)
+                 {
+                    this.RightClicker._visible = false;
+                 }
+                 return undefined;
+              }
+              this.State = _parent.GraphicsOptionsController.GetDetailLevelDraftIndex();
+              this.Initial = _parent.GraphicsOptionsController.GetDetailLevelInitialIndex();
+              if(!_parent.GraphicsOptionsController.InitializationComplete)
+              {
+                 if(this.ItemText != undefined)
+                 {
+                    this.ItemText.text = _parent.GraphicsOptionsController.IsUnavailable(5) ? "Unavailable" : "Loading...";
+                 }
+                 if(this.LeftClicker != undefined)
+                 {
+                    this.LeftClicker._visible = false;
+                 }
+                 if(this.RightClicker != undefined)
+                 {
+                    this.RightClicker._visible = false;
+                 }
+                 return undefined;
+              }
+              if(this.ItemText != undefined)
+              {
+                 this.ItemText.text = this.Names[this.State];
+              }
+              if(this.LeftClicker != undefined)
+              {
+                 this.LeftClicker._visible = this.State > 0 && _parent.GraphicsOptionsController.CanEditDetailLevel();
+              }
+              if(this.RightClicker != undefined)
+              {
+                 this.RightClicker._visible = this.State < 3 && _parent.GraphicsOptionsController.CanEditDetailLevel();
+              }
+           };
+           this.RunAction = function()
+           {
+              if(_parent.GraphicsOptionsController != undefined)
+              {
+                 _parent.GraphicsOptionsController.ToggleDetailPreset();
+              }
+           };
+           this.Increment = function()
+           {
+              if(_parent.GraphicsOptionsController != undefined)
+              {
+                 _parent.GraphicsOptionsController.IncrementDetailPreset();
+              }
+           };
+           this.Decrement = function()
+           {
+              if(_parent.GraphicsOptionsController != undefined)
+              {
+                 _parent.GraphicsOptionsController.DecrementDetailPreset();
+              }
+           };
+           this.ShowPrompt = function()
+           {
+           };
+           this.Destroy = function()
+           {
+              if(this.Names != undefined)
+              {
+                 while(this.Names.length > 0)
+                 {
+                    this.Names.pop();
+                 }
+              }
+           };
+           this._visible = true;
+           this.Update();
+        }
+        """;
     }
 
     /// <summary>
