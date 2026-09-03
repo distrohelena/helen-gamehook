@@ -21,7 +21,7 @@ function New-GraphicsCarrierChecks {
     <#
     Return the ordered structural checks for the shared Batman graphics state carrier.
     The offsets and constants deliberately identify the verified retail structure;
-    both observers reuse this list so a raw state code controls only emission and
+    all shared graphics observers reuse this list so a raw state code controls only emission and
     never changes address resolution or causes observers to scan different shapes.
     #>
     return @(
@@ -83,12 +83,148 @@ function New-GraphicsCarrierChecks {
     )
 }
 
+function ConvertTo-StrictGraphicsIntegralValue {
+    <#
+    Validate one protocol value without accepting PowerShell coercions. Only the
+    integral CLR numeric types that can represent the pack's signed int protocol
+    values are accepted, and the result is range-checked before any int cast.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [AllowNull()] [object]$Value,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    if ($null -eq $Value) { throw "$Context must be a non-null integral numeric value." }
+    $integralTypes = @([byte], [sbyte], [int16], [uint16], [int32], [uint32], [int64], [uint64])
+    if ($integralTypes -notcontains $Value.GetType()) { throw "$Context must be an integral CLR numeric value, not $($Value.GetType().FullName)." }
+    [decimal]$decimalValue = $Value
+    if ($decimalValue -lt [decimal][int]::MinValue -or $decimalValue -gt [decimal][int]::MaxValue) { throw "$Context is outside the signed 32-bit protocol range." }
+    return [long]$decimalValue
+}
+
+function ConvertTo-StrictGraphicsIntegerArray {
+    <# Validate and clone an array of raw protocol integers. #>
+    param(
+        [Parameter(Mandatory = $true)] [AllowNull()] [object[]]$Values,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    if ($null -eq $Values -or $Values.Count -eq 0) { throw "$Context must be a non-empty integer array." }
+    $clonedValues = @(
+        for ($index = 0; $index -lt $Values.Count; $index++) {
+            [int](ConvertTo-StrictGraphicsIntegralValue -Value $Values[$index] -Context "$Context value $($index + 1)")
+        }
+    )
+    return $clonedValues
+}
+
+function ConvertTo-StrictGraphicsMappingArray {
+    <#
+    Validate and clone mapping objects so generated manifests never retain caller
+    references and never silently coerce strings, booleans, nulls, or fractions.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [AllowNull()] [object[]]$Mappings,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    if ($null -eq $Mappings) { throw "$Context must be a non-null mapping array." }
+    $clonedMappings = @(
+        for ($index = 0; $index -lt $Mappings.Count; $index++) {
+            $mapping = $Mappings[$index]
+            if ($null -eq $mapping) { throw "$Context mapping $($index + 1) must be an object." }
+            $propertyNames = if ($mapping -is [Collections.IDictionary]) { @($mapping.Keys | ForEach-Object { [string]$_ }) } else { @($mapping.PSObject.Properties.Name) }
+            if ($propertyNames -notcontains 'match' -or $propertyNames -notcontains 'value') { throw "$Context mapping $($index + 1) must contain match and value members." }
+            $matchValue = if ($mapping -is [Collections.IDictionary]) { $mapping['match'] } else { $mapping.PSObject.Properties['match'].Value }
+            $configValue = if ($mapping -is [Collections.IDictionary]) { $mapping['value'] } else { $mapping.PSObject.Properties['value'].Value }
+            $match = ConvertTo-StrictGraphicsIntegralValue -Value $matchValue -Context "$Context mapping $($index + 1) match"
+            $value = ConvertTo-StrictGraphicsIntegralValue -Value $configValue -Context "$Context mapping $($index + 1) value"
+            [ordered]@{ match = [int]$match; value = [int]$value }
+        }
+    )
+    return $clonedMappings
+}
+
 $graphicsProtocol = @(
     [ordered]@{ Id='graphicsObserverVsync'; Key='vsync'; Read=4200; Responses=@(4210,4211); Writes=@(4220,4221); Acks=@(4230,4231); Failure=4299; ConfigValues=@(0,1) },
     [ordered]@{ Id='graphicsObserverMsaa'; Key='msaa'; Read=4300; Responses=@(4310,4311,4312,4313,4314); Writes=@(4320,4321,4322,4323,4324); Acks=@(4330,4331,4332,4333,4334); Failure=4399; ConfigValues=@(0,1,2,3,5) },
     [ordered]@{ Id='graphicsObserverPhysx'; Key='physx'; Read=4400; Responses=@(4410,4411,4412); Writes=@(4420,4421,4422); Acks=@(4430,4431,4432); Failure=4499; ConfigValues=@(0,1,2) },
     [ordered]@{ Id='graphicsObserverStereo'; Key='stereo'; Read=4500; Responses=@(4510,4511); Writes=@(4520,4521); Acks=@(4530,4531); Failure=4599; ConfigValues=@(0,1) }
 )
+
+$graphicsCommandValues = @(4960,4961,4969,4970,4971,4980,4981,4989,4990,4991)
+
+function Assert-GraphicsProtocolTable {
+    <#
+    Validate the authoritative four-setting table and command signal values before
+    any union, mapping, or observer generation can index malformed protocol data.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [AllowNull()] [object[]]$Protocol,
+        [Parameter(Mandatory = $true)] [AllowNull()] [object[]]$CommandValues
+    )
+
+    if ($null -eq $Protocol -or $Protocol.Count -eq 0) { throw 'Graphics protocol table must contain at least one setting.' }
+    if ($null -eq $CommandValues -or $CommandValues.Count -eq 0) { throw 'Graphics command protocol must contain at least one raw value.' }
+    $requiredPropertyNames = @('Id', 'Key', 'Read', 'Responses', 'Writes', 'Acks', 'Failure', 'ConfigValues')
+    $commandSet = [Collections.Generic.HashSet[int]]::new()
+    for ($commandIndex = 0; $commandIndex -lt $CommandValues.Count; $commandIndex++) {
+        $commandValue = ConvertTo-StrictGraphicsIntegralValue -Value $CommandValues[$commandIndex] -Context "Graphics command value $($commandIndex + 1)"
+        if (-not $commandSet.Add([int]$commandValue)) { throw "Graphics command protocol contains duplicate raw value $commandValue." }
+    }
+
+    $settingRawSet = [Collections.Generic.HashSet[int]]::new()
+    $settingIdSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $settingKeySet = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    for ($protocolIndex = 0; $protocolIndex -lt $Protocol.Count; $protocolIndex++) {
+        $entry = $Protocol[$protocolIndex]
+        $entryContext = "Graphics protocol entry $($protocolIndex + 1)"
+        if ($null -eq $entry) { throw "$entryContext must be an object." }
+        $actualPropertyNames = if ($entry -is [Collections.IDictionary]) { @($entry.Keys | ForEach-Object { [string]$_ } | Sort-Object) } else { @($entry.PSObject.Properties.Name | Sort-Object) }
+        $expectedPropertyNames = @($requiredPropertyNames | Sort-Object)
+        if (($actualPropertyNames -join '|') -cne ($expectedPropertyNames -join '|')) { throw "$entryContext must contain exactly Id, Key, Read, Responses, Writes, Acks, Failure, and ConfigValues." }
+        if ($entry.Id -isnot [string] -or [string]::IsNullOrWhiteSpace($entry.Id)) { throw "$entryContext Id must be a non-empty string." }
+        if ($entry.Key -isnot [string] -or [string]::IsNullOrWhiteSpace($entry.Key)) { throw "$entryContext Key must be a non-empty string." }
+        if (-not $settingIdSet.Add($entry.Id)) { throw "$entryContext duplicates setting Id '$($entry.Id)'." }
+        if (-not $settingKeySet.Add($entry.Key)) { throw "$entryContext duplicates setting Key '$($entry.Key)'." }
+        $read = ConvertTo-StrictGraphicsIntegralValue -Value $entry.Read -Context "$entryContext Read"
+        $failure = ConvertTo-StrictGraphicsIntegralValue -Value $entry.Failure -Context "$entryContext Failure"
+
+        $categoryNames = @('Responses', 'Writes', 'Acks', 'ConfigValues')
+        $categoryValues = [ordered]@{}
+        foreach ($categoryName in $categoryNames) {
+            $category = $entry.$categoryName
+            if ($null -eq $category -or $category -isnot [Array] -or $category.Count -eq 0) { throw "$entryContext $categoryName must be a non-empty array." }
+            $values = @()
+            $categorySet = [Collections.Generic.HashSet[int]]::new()
+            for ($valueIndex = 0; $valueIndex -lt $category.Count; $valueIndex++) {
+                $value = ConvertTo-StrictGraphicsIntegralValue -Value $category[$valueIndex] -Context "$entryContext $categoryName value $($valueIndex + 1)"
+                if (-not $categorySet.Add([int]$value)) { throw "$entryContext $categoryName contains duplicate value $value." }
+                $values += [int]$value
+            }
+            $categoryValues[$categoryName] = $values
+        }
+        if ($categoryValues.Responses.Count -ne $categoryValues.Writes.Count -or $categoryValues.Responses.Count -ne $categoryValues.Acks.Count -or $categoryValues.Responses.Count -ne $categoryValues.ConfigValues.Count) { throw "$entryContext Responses, Writes, Acks, and ConfigValues must have equal cardinality." }
+
+        $rawCategoryValues = [ordered]@{
+            Read = @([int]$read)
+            Responses = $categoryValues.Responses
+            Writes = $categoryValues.Writes
+            Acks = $categoryValues.Acks
+            Failure = @([int]$failure)
+        }
+        $entryRawSet = [Collections.Generic.HashSet[int]]::new()
+        foreach ($categoryName in @('Read', 'Responses', 'Writes', 'Acks', 'Failure')) {
+            foreach ($rawValue in $rawCategoryValues[$categoryName]) {
+                if (-not $entryRawSet.Add([int]$rawValue)) { throw "$entryContext raw protocol categories overlap at value $rawValue." }
+                if ($commandSet.Contains([int]$rawValue)) { throw "$entryContext raw protocol value $rawValue conflicts with a command value." }
+                if (-not $settingRawSet.Add([int]$rawValue)) { throw "$entryContext raw protocol value $rawValue duplicates another setting entry." }
+            }
+        }
+    }
+}
+
+Assert-GraphicsProtocolTable -Protocol $graphicsProtocol -CommandValues $graphicsCommandValues
 
 function New-GraphicsCarrierObserver {
     <#
@@ -100,24 +236,40 @@ function New-GraphicsCarrierObserver {
     param(
         [Parameter(Mandatory = $true)] [string]$Id,
         [Parameter(Mandatory = $true)] [string]$TargetConfigKey,
-        [Parameter(Mandatory = $true)] [object[]]$AddressMatchValues,
-        [Parameter(Mandatory = $true)] [object[]]$Mappings,
-        [Nullable[int]]$ResponseRequestValue = $null,
-        [object[]]$ResponseMappings = @(),
-        [object[]]$AcknowledgementMappings = @(),
-        [Nullable[int]]$FailureResponseValue = $null,
+        [Parameter(Mandatory = $true)] [AllowNull()] [object[]]$AddressMatchValues,
+        [Parameter(Mandatory = $true)] [AllowNull()] [object[]]$Mappings,
+        [AllowNull()] [object]$ResponseRequestValue = $null,
+        [AllowNull()] [object[]]$ResponseMappings = @(),
+        [AllowNull()] [object[]]$AcknowledgementMappings = @(),
+        [AllowNull()] [object]$FailureResponseValue = $null,
         [AllowEmptyString()] [string]$Command = ''
     )
 
     $responseRequestSupplied = $PSBoundParameters.ContainsKey('ResponseRequestValue')
     $responseMappingsSupplied = $PSBoundParameters.ContainsKey('ResponseMappings')
-    if ($responseRequestSupplied -and @($ResponseMappings).Count -eq 0) { throw "Graphics carrier observer '$Id' declares a response request without response mappings." }
-    if ($responseMappingsSupplied -and -not $responseRequestSupplied -and @($ResponseMappings).Count -ne 0) { throw "Graphics carrier observer '$Id' declares response mappings without a request value." }
+    if ($responseRequestSupplied) {
+        $responseRequest = ConvertTo-StrictGraphicsIntegralValue -Value $ResponseRequestValue -Context "Graphics carrier observer '$Id' response request"
+    }
+    if ($responseMappingsSupplied) {
+        if ($null -eq $ResponseMappings -or $ResponseMappings.Count -eq 0) { throw "Graphics carrier observer '$Id' declares empty response mappings." }
+        $responseMappingsClone = @(ConvertTo-StrictGraphicsMappingArray -Mappings $ResponseMappings -Context "Graphics carrier observer '$Id' response mappings")
+    }
+    if ($responseRequestSupplied -ne $responseMappingsSupplied) { throw "Graphics carrier observer '$Id' must declare a response request and response mappings together." }
 
     $acknowledgementMappingsSupplied = $PSBoundParameters.ContainsKey('AcknowledgementMappings')
     $failureResponseSupplied = $PSBoundParameters.ContainsKey('FailureResponseValue')
-    if ($acknowledgementMappingsSupplied -and @($AcknowledgementMappings).Count -eq 0) { throw "Graphics carrier observer '$Id' declares empty acknowledgement mappings." }
+    if ($failureResponseSupplied) {
+        $failureResponse = ConvertTo-StrictGraphicsIntegralValue -Value $FailureResponseValue -Context "Graphics carrier observer '$Id' failure response"
+    }
+    if ($acknowledgementMappingsSupplied) {
+        if ($null -eq $AcknowledgementMappings -or $AcknowledgementMappings.Count -eq 0) { throw "Graphics carrier observer '$Id' declares empty acknowledgement mappings." }
+        $acknowledgementMappingsClone = @(ConvertTo-StrictGraphicsMappingArray -Mappings $AcknowledgementMappings -Context "Graphics carrier observer '$Id' acknowledgement mappings")
+    }
     if ($acknowledgementMappingsSupplied -ne $failureResponseSupplied) { throw "Graphics carrier observer '$Id' must declare acknowledgement mappings and a failure response together." }
+
+    if ($null -eq $Mappings -or $Mappings.Count -eq 0) { throw "Graphics carrier observer '$Id' must declare non-empty mappings." }
+    $addressMatchValuesClone = @(ConvertTo-StrictGraphicsIntegerArray -Values $AddressMatchValues -Context "Graphics carrier observer '$Id' address match values")
+    $mappingsClone = @(ConvertTo-StrictGraphicsMappingArray -Mappings $Mappings -Context "Graphics carrier observer '$Id' mappings")
 
     $observer = [ordered]@{
         id = $Id
@@ -128,17 +280,17 @@ function New-GraphicsCarrierObserver {
         valueOffset = [int]12
         pollIntervalMs = [int]50
         targetConfigKey = $TargetConfigKey
-        addressMatchValues = @($AddressMatchValues | ForEach-Object { [int]$_ })
+        addressMatchValues = $addressMatchValuesClone
         checks = @(New-GraphicsCarrierChecks)
-        mappings = $Mappings
+        mappings = $mappingsClone
     }
     if ($responseRequestSupplied) {
-        $observer.responseRequestValue = [int]$ResponseRequestValue
-        $observer.responseMappings = $ResponseMappings
+        $observer.responseRequestValue = [int]$responseRequest
+        $observer.responseMappings = $responseMappingsClone
     }
     if ($acknowledgementMappingsSupplied) {
-        $observer.acknowledgementMappings = $AcknowledgementMappings
-        $observer.failureResponseValue = [int]$FailureResponseValue
+        $observer.acknowledgementMappings = $acknowledgementMappingsClone
+        $observer.failureResponseValue = [int]$failureResponse
     }
     if (-not [string]::IsNullOrWhiteSpace($Command)) { $observer.command = $Command }
     return $observer
@@ -501,7 +653,6 @@ try {
             }
         })
     }
-    $graphicsCommandValues = @(4960,4961,4969,4970,4971,4980,4981,4989,4990,4991)
     $graphicsAddressMatchValues = [Collections.Generic.List[int]]::new()
     foreach ($protocol in $graphicsProtocol) {
         foreach ($addressValue in @($protocol.Read) + @($protocol.Responses) + @($protocol.Writes) + @($protocol.Acks) + @($protocol.Failure)) {

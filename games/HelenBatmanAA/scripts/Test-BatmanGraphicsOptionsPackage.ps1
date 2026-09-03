@@ -39,6 +39,118 @@ function Assert-ExactOrderedProperties {
     }
 }
 
+function Assert-StrictJsonInteger {
+    <# Accept only non-null integral CLR values produced for JSON integers. #>
+    param(
+        [Parameter(Mandatory = $true)] [AllowNull()] [object]$Value,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    if ($null -eq $Value) { throw "$Context must be a non-null JSON integer." }
+    $integralTypes = @([byte], [sbyte], [int16], [uint16], [int32], [uint32], [int64], [uint64])
+    if ($integralTypes -notcontains $Value.GetType()) { throw "$Context must be an integral JSON number, not $($Value.GetType().FullName)." }
+    [decimal]$decimalValue = $Value
+    if ($decimalValue -gt [decimal][long]::MaxValue) { throw "$Context is outside the signed 64-bit JSON integer range." }
+    return [long]$Value
+}
+
+function Assert-StrictJsonString {
+    <# Accept only non-null JSON strings, preserving ordinal identity checks for callers. #>
+    param(
+        [Parameter(Mandatory = $true)] [AllowNull()] [object]$Value,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    if ($null -eq $Value -or $Value -isnot [string]) { throw "$Context must be a non-null JSON string." }
+    return [string]$Value
+}
+
+function Assert-StrictJsonIntegerEquals {
+    param(
+        [Parameter(Mandatory = $true)] [AllowNull()] [object]$Value,
+        [Parameter(Mandatory = $true)] [long]$Expected,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    $actual = Assert-StrictJsonInteger -Value $Value -Context $Context
+    if ($actual -ne $Expected) { throw "$Context drifted. Expected $Expected but found $actual." }
+}
+
+function Assert-StrictJsonStringEquals {
+    param(
+        [Parameter(Mandatory = $true)] [AllowNull()] [object]$Value,
+        [Parameter(Mandatory = $true)] [string]$Expected,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    $actual = Assert-StrictJsonString -Value $Value -Context $Context
+    if (-not [String]::Equals($actual, $Expected, [StringComparison]::Ordinal)) { throw "$Context drifted. Expected '$Expected' but found '$actual'." }
+}
+
+function Assert-StrictJsonIntegerArrayEquals {
+    param(
+        [Parameter(Mandatory = $true)] [AllowNull()] [object]$Values,
+        [Parameter(Mandatory = $true)] [long[]]$Expected,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    if ($null -eq $Values) { throw "$Context must be a non-null JSON array." }
+    $actualValues = @($Values)
+    if ($actualValues.Count -ne $Expected.Count) { throw "$Context count drifted. Expected $($Expected.Count) but found $($actualValues.Count)." }
+    for ($index = 0; $index -lt $Expected.Count; $index++) {
+        Assert-StrictJsonIntegerEquals -Value $actualValues[$index] -Expected $Expected[$index] -Context "$Context value $($index + 1)"
+    }
+}
+
+function Assert-StrictJsonMappingEquals {
+    param(
+        [Parameter(Mandatory = $true)] [AllowNull()] [object]$Mapping,
+        [Parameter(Mandatory = $true)] [long]$ExpectedMatch,
+        [Parameter(Mandatory = $true)] [long]$ExpectedValue,
+        [Parameter(Mandatory = $true)] [string]$Context
+    )
+
+    if ($null -eq $Mapping) { throw "$Context must be an object." }
+    Assert-ExactOrderedProperties -Object $Mapping -Names @('match', 'value') -Context $Context
+    Assert-StrictJsonIntegerEquals -Value $Mapping.match -Expected $ExpectedMatch -Context "$Context match"
+    Assert-StrictJsonIntegerEquals -Value $Mapping.value -Expected $ExpectedValue -Context "$Context value"
+}
+
+function Assert-GraphicsFilesJsonShape {
+    <# Enforce the complete generated virtual-file schema before binary validation. #>
+    param(
+        [Parameter(Mandatory = $true)] [AllowNull()] [object]$Files,
+        [Parameter(Mandatory = $true)] [long]$ExpectedBaseSize,
+        [Parameter(Mandatory = $true)] [string]$ExpectedBaseSha256,
+        [Parameter(Mandatory = $true)] [long]$ExpectedTargetSize,
+        [Parameter(Mandatory = $true)] [string]$ExpectedTargetSha256
+    )
+
+    if ($null -eq $Files) { throw 'files.json must contain an object.' }
+    Assert-ExactOrderedProperties -Object $Files -Names @('virtualFiles') -Context 'files.json'
+    if ($null -eq $Files.virtualFiles -or @($Files.virtualFiles).Count -ne 1) { throw 'files.json must contain exactly one virtual file.' }
+    $virtualFile = @($Files.virtualFiles)[0]
+    Assert-ExactOrderedProperties -Object $virtualFile -Names @('id', 'path', 'mode', 'source') -Context 'files.json virtualFiles[0]'
+    Assert-StrictJsonStringEquals -Value $virtualFile.id -Expected 'frontendGraphicsOptionsPackage' -Context 'files.json virtualFiles[0].id'
+    Assert-StrictJsonStringEquals -Value $virtualFile.path -Expected 'BmGame/CookedPC/Maps/Frontend/Frontend.umap' -Context 'files.json virtualFiles[0].path'
+    Assert-StrictJsonStringEquals -Value $virtualFile.mode -Expected 'delta-on-read' -Context 'files.json virtualFiles[0].mode'
+    if ($null -eq $virtualFile.source) { throw 'files.json virtualFiles[0].source must be an object.' }
+    Assert-ExactOrderedProperties -Object $virtualFile.source -Names @('kind', 'path', 'base', 'target', 'chunkSize') -Context 'files.json virtualFiles[0].source'
+    Assert-StrictJsonStringEquals -Value $virtualFile.source.kind -Expected 'delta-file' -Context 'files.json virtualFiles[0].source.kind'
+    Assert-StrictJsonStringEquals -Value $virtualFile.source.path -Expected 'assets/deltas/Frontend-graphics-options.hgdelta' -Context 'files.json virtualFiles[0].source.path'
+    Assert-StrictJsonIntegerEquals -Value $virtualFile.source.chunkSize -Expected 65536 -Context 'files.json virtualFiles[0].source.chunkSize'
+
+    $expectedNestedSizes = [ordered]@{ base = $ExpectedBaseSize; target = $ExpectedTargetSize }
+    $expectedNestedHashes = [ordered]@{ base = $ExpectedBaseSha256; target = $ExpectedTargetSha256 }
+    foreach ($nestedName in @('base', 'target')) {
+        $nested = $virtualFile.source.$nestedName
+        if ($null -eq $nested) { throw "files.json virtualFiles[0].source.$nestedName must be an object." }
+        Assert-ExactOrderedProperties -Object $nested -Names @('size', 'sha256') -Context "files.json virtualFiles[0].source.$nestedName"
+        Assert-StrictJsonIntegerEquals -Value $nested.size -Expected $expectedNestedSizes[$nestedName] -Context "files.json virtualFiles[0].source.$nestedName.size"
+        Assert-StrictJsonStringEquals -Value $nested.sha256 -Expected $expectedNestedHashes[$nestedName] -Context "files.json virtualFiles[0].source.$nestedName.sha256"
+    }
+}
+
 function Assert-ContainsOrdinal {
     param(
         [Parameter(Mandatory = $true)] [AllowEmptyString()] [string]$Text,
@@ -496,31 +608,40 @@ if (Test-Path -LiteralPath $texturesJsonPath) { throw 'Graphics-options shell mu
 
 $pack = Get-Content -LiteralPath $packJsonPath -Raw | ConvertFrom-Json
 Assert-ExactOrderedProperties -Object $pack -Names @('schemaVersion', 'id', 'name', 'targets', 'config', 'builds') -Context 'pack.json'
-if ($pack.schemaVersion -ne 1 -or $pack.id -ne 'batman-aa-graphics-options' -or $pack.name -ne 'Batman Graphics Options') { throw 'pack.json graphics-options identity drifted.' }
-if (@($pack.targets).Count -ne 1 -or $pack.targets[0].gameId -ne 'batman-arkham-asylum' -or @($pack.targets[0].executables).Count -ne 1 -or $pack.targets[0].executables[0] -ne 'ShippingPC-BmGame.exe') { throw 'pack.json target executable drifted.' }
+Assert-StrictJsonIntegerEquals -Value $pack.schemaVersion -Expected 1 -Context 'pack.json schemaVersion'
+Assert-StrictJsonStringEquals -Value $pack.id -Expected 'batman-aa-graphics-options' -Context 'pack.json id'
+Assert-StrictJsonStringEquals -Value $pack.name -Expected 'Batman Graphics Options' -Context 'pack.json name'
+if ($null -eq $pack.targets -or @($pack.targets).Count -ne 1) { throw 'pack.json must contain exactly one target.' }
 Assert-ExactOrderedProperties -Object $pack.targets[0] -Names @('gameId', 'executables') -Context 'pack.json target'
-Assert-ExactOrderedProperties -Object $pack.config[0] -Names @('key', 'type', 'defaultValue') -Context 'pack.json config entry'
+Assert-StrictJsonStringEquals -Value $pack.targets[0].gameId -Expected 'batman-arkham-asylum' -Context 'pack.json target gameId'
+if ($null -eq $pack.targets[0].executables -or @($pack.targets[0].executables).Count -ne 1) { throw 'pack.json target must contain exactly one executable.' }
+Assert-StrictJsonStringEquals -Value $pack.targets[0].executables[0] -Expected 'ShippingPC-BmGame.exe' -Context 'pack.json target executable'
 $expectedConfigKeys = @('fullscreen', 'resolutionWidth', 'resolutionHeight', 'vsync', 'msaa', 'detailLevel', 'bloom', 'dynamicShadows', 'motionBlur', 'distortion', 'fogVolumes', 'sphericalHarmonicLighting', 'ambientOcclusion', 'physx', 'stereo', 'applySignal', 'rollbackSignal')
 if (@($pack.config).Count -ne $expectedConfigKeys.Count) { throw "pack.json config must contain exactly $($expectedConfigKeys.Count) entries." }
 for ($index = 0; $index -lt $expectedConfigKeys.Count; $index++) {
     $configEntry = $pack.config[$index]
     Assert-ExactOrderedProperties -Object $configEntry -Names @('key', 'type', 'defaultValue') -Context "pack.json config entry $($index + 1)"
-    if ($configEntry.key -cne $expectedConfigKeys[$index] -or $configEntry.type -cne 'int' -or $configEntry.defaultValue -ne 0) {
-        throw "pack.json config entry $($index + 1) drifted."
-    }
+    Assert-StrictJsonStringEquals -Value $configEntry.key -Expected $expectedConfigKeys[$index] -Context "pack.json config entry $($index + 1) key"
+    Assert-StrictJsonStringEquals -Value $configEntry.type -Expected 'int' -Context "pack.json config entry $($index + 1) type"
+    Assert-StrictJsonIntegerEquals -Value $configEntry.defaultValue -Expected 0 -Context "pack.json config entry $($index + 1) defaultValue"
 }
-if (@($pack.builds).Count -ne 1 -or $pack.builds[0] -ne 'steam-goty-1.0') { throw 'pack.json build list drifted.' }
+if ($null -eq $pack.builds -or @($pack.builds).Count -ne 1) { throw 'pack.json build list must contain exactly one build.' }
+Assert-StrictJsonStringEquals -Value $pack.builds[0] -Expected 'steam-goty-1.0' -Context 'pack.json build list entry'
 
 $build = Get-Content -LiteralPath $buildJsonPath -Raw | ConvertFrom-Json
 Assert-ExactOrderedProperties -Object $build -Names @('id', 'executable', 'match', 'startupCommands') -Context 'build.json'
 $expectedMatch = & (Join-Path $PSScriptRoot 'Get-BatmanSteamBuildMatch.ps1')
-if ($build.id -ne $expectedMatch.BuildId -or $build.executable -ne $expectedMatch.Executable -or $build.match.fileSize -ne $expectedMatch.FileSize -or $build.match.sha256 -cne $expectedMatch.Sha256) { throw 'build.json retail executable identity drifted.' }
+Assert-StrictJsonStringEquals -Value $build.id -Expected $expectedMatch.BuildId -Context 'build.json id'
+Assert-StrictJsonStringEquals -Value $build.executable -Expected $expectedMatch.Executable -Context 'build.json executable'
+Assert-StrictJsonIntegerEquals -Value $build.match.fileSize -Expected $expectedMatch.FileSize -Context 'build.json match fileSize'
+Assert-StrictJsonStringEquals -Value $build.match.sha256 -Expected $expectedMatch.Sha256 -Context 'build.json match sha256'
 Assert-ExactProperties -Object $build.match -Names @('fileSize', 'sha256') -Context 'build.json match'
-if (@($build.startupCommands).Count -ne 1 -or $build.startupCommands[0] -cne 'loadBatmanGraphicsDraftIntoConfig') { throw 'build.json startup command drifted.' }
+if ($null -eq $build.startupCommands -or @($build.startupCommands).Count -ne 1) { throw 'build.json startup command list must contain exactly one command.' }
+Assert-StrictJsonStringEquals -Value $build.startupCommands[0] -Expected 'loadBatmanGraphicsDraftIntoConfig' -Context 'build.json startup command'
 
 $bindings = Get-Content -LiteralPath $bindingsJsonPath -Raw | ConvertFrom-Json
 Assert-ExactProperties -Object $bindings -Names @('bindings') -Context 'bindings.json'
-if (@($bindings.bindings).Count -ne 0) { throw 'bindings.json must contain zero bindings.' }
+if ($null -eq $bindings.bindings -or @($bindings.bindings).Count -ne 0) { throw 'bindings.json must contain zero bindings.' }
 $commands = Get-Content -LiteralPath $commandsJsonPath -Raw | ConvertFrom-Json
 Assert-ExactProperties -Object $commands -Names @('commands') -Context 'commands.json'
 if (@($commands.commands).Count -ne 2) { throw 'commands.json must contain exactly two commands.' }
@@ -528,12 +649,18 @@ $loadCommand = $commands.commands[0]
 $applyCommand = $commands.commands[1]
 Assert-ExactOrderedProperties -Object $loadCommand -Names @('id', 'name', 'steps') -Context 'commands.json load command'
 Assert-ExactOrderedProperties -Object $applyCommand -Names @('id', 'name', 'steps') -Context 'commands.json apply command'
-if ($loadCommand.id -cne 'loadBatmanGraphicsDraftIntoConfig' -or $loadCommand.name -cne 'Load Batman Graphics Draft Into Config' -or @($loadCommand.steps).Count -ne 1) { throw 'commands.json load command identity drifted.' }
-if ($applyCommand.id -cne 'applyBatmanGraphicsDraft' -or $applyCommand.name -cne 'Apply Batman Graphics Draft' -or @($applyCommand.steps).Count -ne 2) { throw 'commands.json apply command identity drifted.' }
+Assert-StrictJsonStringEquals -Value $loadCommand.id -Expected 'loadBatmanGraphicsDraftIntoConfig' -Context 'commands.json load command id'
+Assert-StrictJsonStringEquals -Value $loadCommand.name -Expected 'Load Batman Graphics Draft Into Config' -Context 'commands.json load command name'
+if ($null -eq $loadCommand.steps -or @($loadCommand.steps).Count -ne 1) { throw 'commands.json load command must contain exactly one step.' }
+Assert-StrictJsonStringEquals -Value $applyCommand.id -Expected 'applyBatmanGraphicsDraft' -Context 'commands.json apply command id'
+Assert-StrictJsonStringEquals -Value $applyCommand.name -Expected 'Apply Batman Graphics Draft' -Context 'commands.json apply command name'
+if ($null -eq $applyCommand.steps -or @($applyCommand.steps).Count -ne 2) { throw 'commands.json apply command must contain exactly two steps.' }
 Assert-ExactOrderedProperties -Object $loadCommand.steps[0] -Names @('kind') -Context 'commands.json load step'
 Assert-ExactOrderedProperties -Object $applyCommand.steps[0] -Names @('kind') -Context 'commands.json apply config step'
 Assert-ExactOrderedProperties -Object $applyCommand.steps[1] -Names @('kind') -Context 'commands.json apply load step'
-if ($loadCommand.steps[0].kind -cne 'load-batman-graphics-draft-into-config' -or $applyCommand.steps[0].kind -cne 'apply-batman-graphics-config' -or $applyCommand.steps[1].kind -cne 'load-batman-graphics-draft-into-config') { throw 'commands.json step kinds drifted.' }
+Assert-StrictJsonStringEquals -Value $loadCommand.steps[0].kind -Expected 'load-batman-graphics-draft-into-config' -Context 'commands.json load step kind'
+Assert-StrictJsonStringEquals -Value $applyCommand.steps[0].kind -Expected 'apply-batman-graphics-config' -Context 'commands.json apply config step kind'
+Assert-StrictJsonStringEquals -Value $applyCommand.steps[1].kind -Expected 'load-batman-graphics-draft-into-config' -Context 'commands.json apply load step kind'
 
 $hooks = Get-Content -LiteralPath $hooksJsonPath -Raw | ConvertFrom-Json
 Assert-ExactOrderedProperties -Object $hooks -Names @('runtimeSlots', 'stateObservers', 'hooks') -Context 'hooks.json'
@@ -541,7 +668,7 @@ if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($ho
 
 function Assert-GraphicsCarrierChecks {
     param([Parameter(Mandatory = $true)] [psobject]$Observer, [Parameter(Mandatory = $true)] [string]$Context)
-    if (@($Observer.checks).Count -ne 11) { throw "$Context must contain exactly eleven checks." }
+    if ($null -eq $Observer.checks -or @($Observer.checks).Count -ne 11) { throw "$Context must contain exactly eleven checks." }
     $expectedConstantChecks = @(
         @{ offset = -16; expectedValue = 50 },
         @{ offset = -12; expectedValue = 100 },
@@ -559,7 +686,9 @@ function Assert-GraphicsCarrierChecks {
         $check = $Observer.checks[$index]
         Assert-ExactOrderedProperties -Object $check -Names @('comparison', 'offset', 'expectedValue') -Context "$Context check $($index + 1)"
         $expected = $expectedConstantChecks[$index]
-        if ($check.comparison -cne 'equals-constant' -or $check.offset -ne $expected.offset -or $check.expectedValue -ne $expected.expectedValue) { throw "$Context constant check $($index + 1) drifted." }
+        Assert-StrictJsonStringEquals -Value $check.comparison -Expected 'equals-constant' -Context "$Context check $($index + 1) comparison"
+        Assert-StrictJsonIntegerEquals -Value $check.offset -Expected $expected.offset -Context "$Context check $($index + 1) offset"
+        Assert-StrictJsonIntegerEquals -Value $check.expectedValue -Expected $expected.expectedValue -Context "$Context check $($index + 1) expectedValue"
     }
 }
 
@@ -578,14 +707,25 @@ for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observe
     $observer = $hooks.stateObservers[$observerIndex]
     $expectedProperties = if ($observerIndex -lt 4) { $expectedObserverProperties } else { $expectedCommandObserverProperties }
     Assert-ExactOrderedProperties -Object $observer -Names $expectedProperties -Context "hooks.json $($expectedObserverIds[$observerIndex])"
-    if ($observer.id -cne $expectedObserverIds[$observerIndex] -or $observer.targetConfigKey -cne $expectedObserverTargets[$observerIndex]) { throw "hooks.json observer $($observerIndex + 1) identity drifted." }
-    if ($observer.addressGroup -cne 'batmanFrontendControlType') { throw "hooks.json $($observer.id) address group drifted." }
-    if ($observer.scanStartAddress -cne '0x10000000' -or $observer.scanEndAddress -cne '0x30000000' -or $observer.scanStride -ne 4 -or $observer.valueOffset -ne 12 -or $observer.pollIntervalMs -ne 50) { throw "hooks.json $($observer.id) scan geometry drifted." }
-    if (@($observer.addressMatchValues).Count -ne $expectedAddressMatchValues.Count -or (@($observer.addressMatchValues) -join ',') -cne ($expectedAddressMatchValues -join ',')) { throw "hooks.json $($observer.id) addressMatchValues drifted." }
+    Assert-StrictJsonStringEquals -Value $observer.id -Expected $expectedObserverIds[$observerIndex] -Context "hooks.json observer $($observerIndex + 1) id"
+    Assert-StrictJsonStringEquals -Value $observer.targetConfigKey -Expected $expectedObserverTargets[$observerIndex] -Context "hooks.json $($observerIndex + 1) targetConfigKey"
+    Assert-StrictJsonStringEquals -Value $observer.addressGroup -Expected 'batmanFrontendControlType' -Context "hooks.json observer $($observerIndex + 1) addressGroup"
+    Assert-StrictJsonStringEquals -Value $observer.scanStartAddress -Expected '0x10000000' -Context "hooks.json observer $($observerIndex + 1) scanStartAddress"
+    Assert-StrictJsonStringEquals -Value $observer.scanEndAddress -Expected '0x30000000' -Context "hooks.json observer $($observerIndex + 1) scanEndAddress"
+    Assert-StrictJsonIntegerEquals -Value $observer.scanStride -Expected 4 -Context "hooks.json observer $($observerIndex + 1) scanStride"
+    Assert-StrictJsonIntegerEquals -Value $observer.valueOffset -Expected 12 -Context "hooks.json observer $($observerIndex + 1) valueOffset"
+    Assert-StrictJsonIntegerEquals -Value $observer.pollIntervalMs -Expected 50 -Context "hooks.json observer $($observerIndex + 1) pollIntervalMs"
+    Assert-StrictJsonIntegerArrayEquals -Values $observer.addressMatchValues -Expected $expectedAddressMatchValues -Context "hooks.json observer $($observerIndex + 1) addressMatchValues"
     Assert-GraphicsCarrierChecks -Observer $observer -Context "hooks.json $($observer.id)"
     $mappingNames = if ($observerIndex -lt 4) { @('mappings', 'responseMappings', 'acknowledgementMappings') } else { @('mappings', 'acknowledgementMappings') }
     foreach ($mappingName in $mappingNames) {
-        foreach ($entry in @($observer.$mappingName)) { Assert-ExactOrderedProperties -Object $entry -Names @('match', 'value') -Context "hooks.json $($observer.id) $mappingName" }
+        if ($null -eq $observer.$mappingName) { throw "hooks.json $($observer.id) $mappingName must be an array." }
+        foreach ($entry in @($observer.$mappingName)) {
+            if ($null -eq $entry) { throw "hooks.json $($observer.id) $mappingName contains a null mapping." }
+            Assert-ExactOrderedProperties -Object $entry -Names @('match', 'value') -Context "hooks.json $($observer.id) $mappingName"
+            $null = Assert-StrictJsonInteger -Value $entry.match -Context "hooks.json $($observer.id) $mappingName match"
+            $null = Assert-StrictJsonInteger -Value $entry.value -Context "hooks.json $($observer.id) $mappingName value"
+        }
     }
 }
 
@@ -598,12 +738,13 @@ $expectedGraphicsProtocols = @(
 for ($protocolIndex = 0; $protocolIndex -lt $expectedGraphicsProtocols.Count; $protocolIndex++) {
     $protocol = $expectedGraphicsProtocols[$protocolIndex]
     $observer = $hooks.stateObservers[$protocolIndex]
-    if (@($observer.mappings).Count -ne $protocol.Writes.Count -or @($observer.responseMappings).Count -ne $protocol.Responses.Count -or @($observer.acknowledgementMappings).Count -ne $protocol.Acks.Count) { throw "hooks.json $($protocol.Id) mapping counts drifted." }
-    if ($observer.responseRequestValue -ne $protocol.Read -or $observer.failureResponseValue -ne $protocol.Failure) { throw "hooks.json $($protocol.Id) request/failure values drifted." }
+    if ($null -eq $observer.mappings -or @($observer.mappings).Count -ne $protocol.Writes.Count -or $null -eq $observer.responseMappings -or @($observer.responseMappings).Count -ne $protocol.Responses.Count -or $null -eq $observer.acknowledgementMappings -or @($observer.acknowledgementMappings).Count -ne $protocol.Acks.Count) { throw "hooks.json $($protocol.Id) mapping counts drifted." }
+    Assert-StrictJsonIntegerEquals -Value $observer.responseRequestValue -Expected $protocol.Read -Context "hooks.json $($protocol.Id) responseRequestValue"
+    Assert-StrictJsonIntegerEquals -Value $observer.failureResponseValue -Expected $protocol.Failure -Context "hooks.json $($protocol.Id) failureResponseValue"
     for ($mappingIndex = 0; $mappingIndex -lt $protocol.Writes.Count; $mappingIndex++) {
-        if ($observer.mappings[$mappingIndex].match -ne $protocol.Writes[$mappingIndex] -or $observer.mappings[$mappingIndex].value -ne $protocol.ConfigValues[$mappingIndex]) { throw "hooks.json $($protocol.Id) write mapping drifted." }
-        if ($observer.responseMappings[$mappingIndex].match -ne $protocol.ConfigValues[$mappingIndex] -or $observer.responseMappings[$mappingIndex].value -ne $protocol.Responses[$mappingIndex]) { throw "hooks.json $($protocol.Id) response mapping drifted." }
-        if ($observer.acknowledgementMappings[$mappingIndex].match -ne $protocol.Writes[$mappingIndex] -or $observer.acknowledgementMappings[$mappingIndex].value -ne $protocol.Acks[$mappingIndex]) { throw "hooks.json $($protocol.Id) acknowledgement mapping drifted." }
+        Assert-StrictJsonMappingEquals -Mapping $observer.mappings[$mappingIndex] -ExpectedMatch $protocol.Writes[$mappingIndex] -ExpectedValue $protocol.ConfigValues[$mappingIndex] -Context "hooks.json $($protocol.Id) write mapping $($mappingIndex + 1)"
+        Assert-StrictJsonMappingEquals -Mapping $observer.responseMappings[$mappingIndex] -ExpectedMatch $protocol.ConfigValues[$mappingIndex] -ExpectedValue $protocol.Responses[$mappingIndex] -Context "hooks.json $($protocol.Id) response mapping $($mappingIndex + 1)"
+        Assert-StrictJsonMappingEquals -Mapping $observer.acknowledgementMappings[$mappingIndex] -ExpectedMatch $protocol.Writes[$mappingIndex] -ExpectedValue $protocol.Acks[$mappingIndex] -Context "hooks.json $($protocol.Id) acknowledgement mapping $($mappingIndex + 1)"
     }
 }
 
@@ -613,8 +754,12 @@ $physxObserver = $hooks.stateObservers[2]
 $stereoObserver = $hooks.stateObservers[3]
 $applyObserver = $hooks.stateObservers[4]
 $rollbackObserver = $hooks.stateObservers[5]
-if ($applyObserver.id -cne 'graphicsObserverApplySignal' -or $applyObserver.targetConfigKey -cne 'applySignal' -or $applyObserver.command -cne 'applyBatmanGraphicsDraft') { throw 'hooks.json apply observer identity drifted.' }
-if ($rollbackObserver.id -cne 'graphicsObserverRollbackSignal' -or $rollbackObserver.targetConfigKey -cne 'rollbackSignal' -or $rollbackObserver.command -cne 'loadBatmanGraphicsDraftIntoConfig') { throw 'hooks.json rollback observer identity drifted.' }
+Assert-StrictJsonStringEquals -Value $applyObserver.id -Expected 'graphicsObserverApplySignal' -Context 'hooks.json apply observer id'
+Assert-StrictJsonStringEquals -Value $applyObserver.targetConfigKey -Expected 'applySignal' -Context 'hooks.json apply observer targetConfigKey'
+Assert-StrictJsonStringEquals -Value $applyObserver.command -Expected 'applyBatmanGraphicsDraft' -Context 'hooks.json apply observer command'
+Assert-StrictJsonStringEquals -Value $rollbackObserver.id -Expected 'graphicsObserverRollbackSignal' -Context 'hooks.json rollback observer id'
+Assert-StrictJsonStringEquals -Value $rollbackObserver.targetConfigKey -Expected 'rollbackSignal' -Context 'hooks.json rollback observer targetConfigKey'
+Assert-StrictJsonStringEquals -Value $rollbackObserver.command -Expected 'loadBatmanGraphicsDraftIntoConfig' -Context 'hooks.json rollback observer command'
 $expectedApplyMappingMatches = @(4990, 4991)
 $expectedApplyMappingValues = @(0, 1)
 $expectedApplyAcknowledgementMatches = @(4990, 4991)
@@ -623,27 +768,28 @@ $expectedRollbackMappingMatches = @(4970, 4971)
 $expectedRollbackMappingValues = @(0, 1)
 $expectedRollbackAcknowledgementMatches = @(4970, 4971)
 $expectedRollbackAcknowledgementValues = @(4960, 4961)
-if (@($applyObserver.mappings).Count -ne $expectedApplyMappingMatches.Count -or @($applyObserver.acknowledgementMappings).Count -ne $expectedApplyAcknowledgementMatches.Count) { throw 'hooks.json apply mapping counts drifted.' }
+if ($null -eq $applyObserver.mappings -or @($applyObserver.mappings).Count -ne $expectedApplyMappingMatches.Count -or $null -eq $applyObserver.acknowledgementMappings -or @($applyObserver.acknowledgementMappings).Count -ne $expectedApplyAcknowledgementMatches.Count) { throw 'hooks.json apply mapping counts drifted.' }
 for ($mappingIndex = 0; $mappingIndex -lt $expectedApplyMappingMatches.Count; $mappingIndex++) {
-    if ($applyObserver.mappings[$mappingIndex].match -ne $expectedApplyMappingMatches[$mappingIndex] -or $applyObserver.mappings[$mappingIndex].value -ne $expectedApplyMappingValues[$mappingIndex]) { throw 'hooks.json apply mappings drifted.' }
-    if ($applyObserver.acknowledgementMappings[$mappingIndex].match -ne $expectedApplyAcknowledgementMatches[$mappingIndex] -or $applyObserver.acknowledgementMappings[$mappingIndex].value -ne $expectedApplyAcknowledgementValues[$mappingIndex]) { throw 'hooks.json apply acknowledgement mappings drifted.' }
+    Assert-StrictJsonMappingEquals -Mapping $applyObserver.mappings[$mappingIndex] -ExpectedMatch $expectedApplyMappingMatches[$mappingIndex] -ExpectedValue $expectedApplyMappingValues[$mappingIndex] -Context "hooks.json apply mapping $($mappingIndex + 1)"
+    Assert-StrictJsonMappingEquals -Mapping $applyObserver.acknowledgementMappings[$mappingIndex] -ExpectedMatch $expectedApplyAcknowledgementMatches[$mappingIndex] -ExpectedValue $expectedApplyAcknowledgementValues[$mappingIndex] -Context "hooks.json apply acknowledgement mapping $($mappingIndex + 1)"
 }
-if ($applyObserver.failureResponseValue -ne 4989) { throw 'hooks.json apply failure response drifted.' }
-if (@($rollbackObserver.mappings).Count -ne $expectedRollbackMappingMatches.Count -or @($rollbackObserver.acknowledgementMappings).Count -ne $expectedRollbackAcknowledgementMatches.Count) { throw 'hooks.json rollback mapping counts drifted.' }
+Assert-StrictJsonIntegerEquals -Value $applyObserver.failureResponseValue -Expected 4989 -Context 'hooks.json apply failureResponseValue'
+if ($null -eq $rollbackObserver.mappings -or @($rollbackObserver.mappings).Count -ne $expectedRollbackMappingMatches.Count -or $null -eq $rollbackObserver.acknowledgementMappings -or @($rollbackObserver.acknowledgementMappings).Count -ne $expectedRollbackAcknowledgementMatches.Count) { throw 'hooks.json rollback mapping counts drifted.' }
 for ($mappingIndex = 0; $mappingIndex -lt $expectedRollbackMappingMatches.Count; $mappingIndex++) {
-    if ($rollbackObserver.mappings[$mappingIndex].match -ne $expectedRollbackMappingMatches[$mappingIndex] -or $rollbackObserver.mappings[$mappingIndex].value -ne $expectedRollbackMappingValues[$mappingIndex]) { throw 'hooks.json rollback mappings drifted.' }
-    if ($rollbackObserver.acknowledgementMappings[$mappingIndex].match -ne $expectedRollbackAcknowledgementMatches[$mappingIndex] -or $rollbackObserver.acknowledgementMappings[$mappingIndex].value -ne $expectedRollbackAcknowledgementValues[$mappingIndex]) { throw 'hooks.json rollback acknowledgement mappings drifted.' }
+    Assert-StrictJsonMappingEquals -Mapping $rollbackObserver.mappings[$mappingIndex] -ExpectedMatch $expectedRollbackMappingMatches[$mappingIndex] -ExpectedValue $expectedRollbackMappingValues[$mappingIndex] -Context "hooks.json rollback mapping $($mappingIndex + 1)"
+    Assert-StrictJsonMappingEquals -Mapping $rollbackObserver.acknowledgementMappings[$mappingIndex] -ExpectedMatch $expectedRollbackAcknowledgementMatches[$mappingIndex] -ExpectedValue $expectedRollbackAcknowledgementValues[$mappingIndex] -Context "hooks.json rollback acknowledgement mapping $($mappingIndex + 1)"
 }
-if ($rollbackObserver.failureResponseValue -ne 4969) { throw 'hooks.json rollback failure response drifted.' }
+Assert-StrictJsonIntegerEquals -Value $rollbackObserver.failureResponseValue -Expected 4969 -Context 'hooks.json rollback failureResponseValue'
 
 $files = Get-Content -LiteralPath $filesJsonPath -Raw | ConvertFrom-Json
-Assert-ExactProperties -Object $files -Names @('virtualFiles') -Context 'files.json'
-if (@($files.virtualFiles).Count -ne 1) { throw 'files.json must contain exactly one virtual file.' }
-Assert-HgdeltaVirtualFileContract -Context 'graphics-options shell' -VirtualFile $files.virtualFiles[0] -ExpectedId 'frontendGraphicsOptionsPackage' -ExpectedPath 'BmGame/CookedPC/Maps/Frontend/Frontend.umap' -ExpectedMode 'delta-on-read' -ExpectedKind 'delta-file' -ExpectedDeltaRelativePath 'assets/deltas/Frontend-graphics-options.hgdelta' -BasePath $basePath -TargetPath $targetPath -DeltaFilePath $deltaPath -ChunkSize 65536 -ChunkTableOffset 116
-
 $baseInfo = Get-Item -LiteralPath $basePath
 $baseHash = (Get-FileHash -LiteralPath $basePath -Algorithm SHA256).Hash
 if ($baseInfo.Length -ne 2988548 -or $baseHash -cne '271916B888F83374122AF0FCCC5C685804F4C8286A92A772CD71E4F48A00F2CC') { throw 'Retail Frontend.umap base identity is not the verified retail input.' }
+$targetFileInfo = Get-Item -LiteralPath $targetPath
+$targetFileHash = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Assert-GraphicsFilesJsonShape -Files $files -ExpectedBaseSize $baseInfo.Length -ExpectedBaseSha256 $baseHash.ToLowerInvariant() -ExpectedTargetSize $targetFileInfo.Length -ExpectedTargetSha256 $targetFileHash
+Assert-HgdeltaVirtualFileContract -Context 'graphics-options shell' -VirtualFile $files.virtualFiles[0] -ExpectedId 'frontendGraphicsOptionsPackage' -ExpectedPath 'BmGame/CookedPC/Maps/Frontend/Frontend.umap' -ExpectedMode 'delta-on-read' -ExpectedKind 'delta-file' -ExpectedDeltaRelativePath 'assets/deltas/Frontend-graphics-options.hgdelta' -BasePath $basePath -TargetPath $targetPath -DeltaFilePath $deltaPath -ChunkSize 65536 -ChunkTableOffset 116
+
 $targetInfo = Get-UnrealPackageStorageInfo -Path $targetPath
 if ($targetInfo.CompressionChunkCount -le 0) { throw 'Generated shell target must retain chunk-compressed Unreal storage.' }
 
