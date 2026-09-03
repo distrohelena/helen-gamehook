@@ -3,7 +3,8 @@ param(
     [string]$BatmanRoot,
     [string]$Configuration = 'Debug',
     [string]$BuilderRoot,
-    [string]$BatmanUserIniPath
+    [string]$BatmanUserIniPath,
+    [switch]$MutationTestsOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -310,24 +311,161 @@ function Get-RetailExportFileSnapshot {
     )
 }
 
+function Assert-RetailProtectedXmlMutationTests {
+    <# Prove that an unrelated protected root-tag reorder or content mutation is rejected. #>
+    $mutationRoot = Join-Path ([IO.Path]::GetTempPath()) ('HelenBatmanRetailXmlMutation-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $mutationRoot | Out-Null
+    $basePath = Join-Path $mutationRoot 'base.xml'
+    $reorderedPath = Join-Path $mutationRoot 'reordered.xml'
+    $changedPath = Join-Path $mutationRoot 'changed.xml'
+    $retailShapeXmlPath = Join-Path $mutationRoot 'retail-shape.xml'
+    $reconstructedShapeXmlPath = Join-Path $mutationRoot 'reconstructed-shape.xml'
+    $retailShapeSvgPath = Join-Path $mutationRoot '600.svg'
+    $reconstructedShapeSvgPath = Join-Path $mutationRoot '1017.svg'
+    $baseXml = @'
+<swf><tags><item type="DefineTextTag" id="1"><text>first</text></item><item type="DefineShapeTag" id="2"><shape>second</shape></item></tags></swf>
+'@
+    $reorderedXml = @'
+<swf><tags><item type="DefineShapeTag" id="2"><shape>second</shape></item><item type="DefineTextTag" id="1"><text>first</text></item></tags></swf>
+'@
+    $changedXml = @'
+<swf><tags><item type="DefineTextTag" id="1"><text>first</text></item><item type="DefineShapeTag" id="2"><shape>changed</shape></item></tags></swf>
+'@
+    $retailShapeXml = @'
+<swf><tags><item type="DefineShapeTag" forceWriteAsLong="true" shapeId="600"><records><item type="StraightEdgeRecord" deltaX="12" /></records></item></tags></swf>
+'@
+    $reconstructedShapeXml = @'
+<swf><tags><item type="DefineShapeTag" forceWriteAsLong="true" shapeId="1017"><records><item type="StraightEdgeRecord" deltaX="12" /></records></item></tags></swf>
+'@
+    $retailShapeSvg = @'
+<svg xmlns="http://www.w3.org/2000/svg"><pattern id="PatternID_600_1" /><path d="M0 0 L12 12" style="fill:url(#PatternID_600_1)" /></svg>
+'@
+    $reconstructedShapeSvg = @'
+<svg xmlns="http://www.w3.org/2000/svg"><pattern id="PatternID_1017_1" /><path d="M0 0 L12 12" style="fill:url(#PatternID_1017_1)" /></svg>
+'@
+    [IO.File]::WriteAllText($basePath, $baseXml, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($reorderedPath, $reorderedXml, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($changedPath, $changedXml, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($retailShapeXmlPath, $retailShapeXml, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($reconstructedShapeXmlPath, $reconstructedShapeXml, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($retailShapeSvgPath, $retailShapeSvg, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($reconstructedShapeSvgPath, $reconstructedShapeSvg, [Text.UTF8Encoding]::new($false))
+    try {
+        $reorderError = $null
+        try { Assert-RetailProtectedXmlMatches -RetailXmlPath $basePath -ReconstructedXmlPath $reorderedPath } catch { $reorderError = $_.Exception.Message }
+        if ([string]::IsNullOrWhiteSpace($reorderError) -or $reorderError -notmatch 'root index/order') { throw 'Retail XML mutation test did not reject unrelated protected root-tag reorder.' }
+        $changeError = $null
+        try { Assert-RetailProtectedXmlMatches -RetailXmlPath $basePath -ReconstructedXmlPath $changedPath } catch { $changeError = $_.Exception.Message }
+        if ([string]::IsNullOrWhiteSpace($changeError) -or $changeError -notmatch 'fingerprint') { throw 'Retail XML mutation test did not reject unrelated protected root-tag content change.' }
+        Assert-RetailShapeRemap -RetailSvgPath $retailShapeSvgPath -ReconstructedSvgPath $reconstructedShapeSvgPath -RetailXmlPath $retailShapeXmlPath -ReconstructedXmlPath $reconstructedShapeXmlPath
+        Write-Output 'Retail XML mutation tests: unrelated reorder/change rejected; shape ID-only remap accepted.'
+    } finally {
+        if (Test-Path -LiteralPath $mutationRoot) {
+            Remove-Item -LiteralPath $mutationRoot -Recurse -Force
+        }
+    }
+}
+
 function Get-RetailXmlProtectedFingerprint {
-    <# Hash every unchanged SWF tag while excluding only the intentional menu/sprite-600 route. #>
+    <# Hash every unchanged root SWF tag with its original index; only documented inserted/rewritten nodes are excluded. #>
     param([Parameter(Mandatory = $true)] [string]$XmlPath)
     [xml]$document = Get-Content -LiteralPath $XmlPath -Raw
-    return @(
-        foreach ($item in @($document.SelectNodes('/swf/tags/item'))) {
-            $type = $item.GetAttribute('type')
-            $spriteId = $item.GetAttribute('spriteId')
-            $itemText = $item.OuterXml
-            if ($type -eq 'DefineSpriteTag' -and $spriteId -in @('333', '600')) { continue }
-            if ($type -eq 'ExportAssetsTag' -and ($itemText.Contains('ScreenOptionsGraphics') -or $itemText.Contains('>600<'))) { continue }
-            if ($type -eq 'DoInitActionTag' -and $itemText.Contains('600')) { continue }
-            [pscustomobject]@{
+    $items = @($document.SelectNodes('/swf/tags/item'))
+    $fingerprints = [Collections.Generic.List[object]]::new()
+    for ($rootIndex = 0; $rootIndex -lt $items.Count; $rootIndex++) {
+        $item = $items[$rootIndex]
+        $type = $item.GetAttribute('type')
+        $spriteId = $item.GetAttribute('spriteId')
+        $shapeId = $item.GetAttribute('shapeId')
+        $itemText = $item.OuterXml
+        $exportNames = @($item.SelectNodes('./names/item') | ForEach-Object { $_.InnerText })
+        $exportTags = @($item.SelectNodes('./tags/item') | ForEach-Object { $_.InnerText })
+        if ($type -eq 'DefineSpriteTag' -and $spriteId -in @('333', '600')) { continue }
+        if ($type -eq 'ExportAssetsTag' -and $exportNames.Count -eq 1 -and $exportNames[0] -ceq 'ScreenOptionsGraphics' -and $exportTags.Count -eq 1 -and $exportTags[0] -ceq '600') { continue }
+        if ($type -eq 'DoInitActionTag' -and $spriteId -eq '600') { continue }
+        if ($type -eq 'DefineShapeTag' -and $shapeId -in @('600', '1017')) { continue }
+        $fingerprints.Add([pscustomobject]@{
+                RootIndex = $rootIndex
                 Type = $type
                 Sha256 = (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($itemText))) -Algorithm SHA256).Hash
-            }
+            })
+    }
+    return $fingerprints.ToArray()
+}
+
+function Assert-RetailProtectedXmlMatches {
+    <# Compare ordered protected root-tag fingerprints so unrelated reorder, insertion, or content drift fails. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$RetailXmlPath,
+        [Parameter(Mandatory = $true)] [string]$ReconstructedXmlPath
+    )
+
+    $retailFingerprint = @(Get-RetailXmlProtectedFingerprint -XmlPath $RetailXmlPath)
+    $reconstructedFingerprint = @(Get-RetailXmlProtectedFingerprint -XmlPath $ReconstructedXmlPath)
+    if ($retailFingerprint.Count -ne $reconstructedFingerprint.Count) { throw "Verified retail XML protected root-tag count changed: retail=$($retailFingerprint.Count), reconstructed=$($reconstructedFingerprint.Count)." }
+    for ($index = 0; $index -lt $retailFingerprint.Count; $index++) {
+        $retailItem = $retailFingerprint[$index]
+        $reconstructedItem = $reconstructedFingerprint[$index]
+        if ($retailItem.RootIndex -ne $reconstructedItem.RootIndex -or $retailItem.Type -cne $reconstructedItem.Type) {
+            throw "Verified retail XML protected root index/order changed at fingerprint index ${index}: retailRootIndex=$($retailItem.RootIndex), reconstructedRootIndex=$($reconstructedItem.RootIndex), retailType=$($retailItem.Type), reconstructedType=$($reconstructedItem.Type)."
         }
-    ) | Sort-Object Type, Sha256
+        if ($retailItem.Sha256 -cne $reconstructedItem.Sha256) {
+            throw "Verified retail XML protected fingerprint changed at root index $($retailItem.RootIndex), fingerprint index $index outside the documented shell remaps."
+        }
+    }
+}
+
+function Assert-RetailShapeRemap {
+    <# Prove the sole reserved-shape remap changes only the documented identifier, not geometry or styles. #>
+    param(
+        [Parameter(Mandatory = $true)] [string]$RetailSvgPath,
+        [Parameter(Mandatory = $true)] [string]$ReconstructedSvgPath,
+        [Parameter(Mandatory = $true)] [string]$RetailXmlPath,
+        [Parameter(Mandatory = $true)] [string]$ReconstructedXmlPath
+    )
+
+    $retailXml = [xml](Get-Content -LiteralPath $RetailXmlPath -Raw)
+    $reconstructedXml = [xml](Get-Content -LiteralPath $ReconstructedXmlPath -Raw)
+    $retailShapeTags = @($retailXml.SelectNodes("/swf/tags/item[@type='DefineShapeTag' and @shapeId='600']"))
+    $reconstructedShapeTags = @($reconstructedXml.SelectNodes("/swf/tags/item[@type='DefineShapeTag' and @shapeId='1017']"))
+    if ($retailShapeTags.Count -ne 1 -or $reconstructedShapeTags.Count -ne 1) { throw "Expected exactly one XML shape remap 600->1017, found retail=$($retailShapeTags.Count), reconstructed=$($reconstructedShapeTags.Count)." }
+    $retailRootItems = @($retailXml.SelectNodes('/swf/tags/item'))
+    $reconstructedRootItems = @($reconstructedXml.SelectNodes('/swf/tags/item'))
+    $retailShapeIndex = -1
+    for ($rootIndex = 0; $rootIndex -lt $retailRootItems.Count; $rootIndex++) {
+        if ([object]::ReferenceEquals($retailRootItems[$rootIndex], $retailShapeTags[0])) { $retailShapeIndex = $rootIndex; break }
+    }
+    $reconstructedShapeIndex = -1
+    for ($rootIndex = 0; $rootIndex -lt $reconstructedRootItems.Count; $rootIndex++) {
+        if ([object]::ReferenceEquals($reconstructedRootItems[$rootIndex], $reconstructedShapeTags[0])) { $reconstructedShapeIndex = $rootIndex; break }
+    }
+    if ($retailShapeIndex -ne $reconstructedShapeIndex) { throw "XML shape remap moved root index: retail=$retailShapeIndex, reconstructed=$reconstructedShapeIndex." }
+    $retailShapeXml = $retailShapeTags[0].OuterXml -replace 'shapeId="600"', 'shapeId="TASK6_SHAPE_ID"'
+    $reconstructedShapeXml = $reconstructedShapeTags[0].OuterXml -replace 'shapeId="1017"', 'shapeId="TASK6_SHAPE_ID"'
+    if ($retailShapeXml -cne $reconstructedShapeXml) { throw 'XML shape remap 600->1017 changed protected shape geometry or records.' }
+
+    $retailSvgText = [IO.File]::ReadAllText($RetailSvgPath)
+    $reconstructedSvgText = [IO.File]::ReadAllText($ReconstructedSvgPath)
+    [xml]$retailSvg = $retailSvgText
+    [xml]$reconstructedSvg = $reconstructedSvgText
+    $retailIds = @($retailSvg.SelectNodes('//@id') | ForEach-Object { $_.Value })
+    $reconstructedIds = @($reconstructedSvg.SelectNodes('//@id') | ForEach-Object { $_.Value })
+    if ($retailIds.Count -eq 0 -or $retailIds.Count -ne $reconstructedIds.Count) { throw "SVG shape remap identifier count drifted: retail=$($retailIds.Count), reconstructed=$($reconstructedIds.Count)." }
+    $retailNormalizedSvg = [xml]$retailSvgText
+    $reconstructedNormalizedSvg = [xml]$reconstructedSvgText
+    for ($idIndex = 0; $idIndex -lt $retailIds.Count; $idIndex++) {
+        $placeholder = "TASK6_SHAPE_ID_$idIndex"
+        foreach ($attribute in @($retailNormalizedSvg.SelectNodes('//@*'))) { $attribute.Value = $attribute.Value.Replace($retailIds[$idIndex], $placeholder) }
+        foreach ($attribute in @($reconstructedNormalizedSvg.SelectNodes('//@*'))) { $attribute.Value = $attribute.Value.Replace($reconstructedIds[$idIndex], $placeholder) }
+    }
+    $retailNormalizedText = $retailNormalizedSvg.OuterXml
+    $reconstructedNormalizedText = $reconstructedNormalizedSvg.OuterXml
+    $retailNormalizedHash = (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($retailNormalizedText))) -Algorithm SHA256).Hash
+    $reconstructedNormalizedHash = (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($reconstructedNormalizedText))) -Algorithm SHA256).Hash
+    if ($retailNormalizedHash -cne $reconstructedNormalizedHash) { throw 'SVG shape remap 600->1017 changed geometry, style, path, or embedded image data.' }
+    $retailSvgHash = (Get-FileHash -LiteralPath $RetailSvgPath -Algorithm SHA256).Hash
+    $reconstructedSvgHash = (Get-FileHash -LiteralPath $ReconstructedSvgPath -Algorithm SHA256).Hash
+    Write-Output "Shape remap proof: shapes\600.svg -> shapes\1017.svg; XMLRootIndex=$retailShapeIndex; rawRetail=$retailSvgHash rawReconstructed=$reconstructedSvgHash normalized=$retailNormalizedHash"
 }
 
 function Assert-RetailExportPreservation {
@@ -364,26 +502,46 @@ function Assert-RetailExportPreservation {
         'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_37\CLIPACTIONRECORD onClipEvent(load).as',
         'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\PlaceObject2_290_List_Template_29\CLIPACTIONRECORD onClipEvent(load).as'
     )
+    $intentionalSprite333Assets = @(
+        'sprites\DefineSprite_333_ScreenOptionsMenu\7.png',
+        'sprites\DefineSprite_333_ScreenOptionsMenu\8.png',
+        'sprites\DefineSprite_333_ScreenOptionsMenu\11.png',
+        'sprites\DefineSprite_333_ScreenOptionsMenu\15.png',
+        'sprites\DefineSprite_333_ScreenOptionsMenu\16.png',
+        'sprites\DefineSprite_333_ScreenOptionsMenu\18.png',
+        'sprites\DefineSprite_333_ScreenOptionsMenu\19.png',
+        'sprites\DefineSprite_333_ScreenOptionsMenu\20.png',
+        'sprites\DefineSprite_333_ScreenOptionsMenu\22.png',
+        'sprites\DefineSprite_333_ScreenOptionsMenu\23.png',
+        'sprites\DefineSprite_333_ScreenOptionsMenu\24.png'
+    )
     $retailFiles = @(Get-RetailExportFileSnapshot -Root $RetailExportRoot)
     $reconstructedFiles = @(Get-RetailExportFileSnapshot -Root $ReconstructedExportRoot)
+    $shapeRemap = [ordered]@{ 'shapes\600.svg' = 'shapes\1017.svg' }
+    $mappedTargetPaths = @($shapeRemap.Values)
+    foreach ($sourcePath in $shapeRemap.Keys) {
+        $targetPath = $shapeRemap[$sourcePath]
+        $retailShape = @($retailFiles | Where-Object RelativePath -ceq $sourcePath)
+        $reconstructedSourceShape = @($reconstructedFiles | Where-Object RelativePath -ceq $sourcePath)
+        $retailTargetShape = @($retailFiles | Where-Object RelativePath -ceq $targetPath)
+        $reconstructedShape = @($reconstructedFiles | Where-Object RelativePath -ceq $targetPath)
+        if ($retailShape.Count -ne 1 -or $reconstructedSourceShape.Count -ne 0 -or $retailTargetShape.Count -ne 0 -or $reconstructedShape.Count -ne 1) {
+            throw "Explicit shape remap $sourcePath -> $targetPath did not have retail-only source and reconstructed-only target files."
+        }
+        Assert-RetailShapeRemap -RetailSvgPath (Join-Path $RetailExportRoot $sourcePath) -ReconstructedSvgPath (Join-Path $ReconstructedExportRoot $targetPath) -RetailXmlPath $RetailXmlPath -ReconstructedXmlPath $ReconstructedXmlPath
+    }
     $allPaths = @($retailFiles.RelativePath + $reconstructedFiles.RelativePath | Sort-Object -Unique)
     foreach ($relativePath in $allPaths) {
         $retail = $retailFiles | Where-Object RelativePath -ceq $relativePath | Select-Object -First 1
         $reconstructed = $reconstructedFiles | Where-Object RelativePath -ceq $relativePath | Select-Object -First 1
-        $intentional = $intentionalScripts -contains $relativePath -or $relativePath -match '^scripts\\DefineSprite_600_ScreenOptionsGraphics\\' -or $relativePath -match '^sprites\\(?:333|600)(?:\\|\.|$)'
+        $intentional = $intentionalScripts -contains $relativePath -or $intentionalSprite333Assets -contains $relativePath -or $relativePath -match '^scripts\\DefineSprite_600_ScreenOptionsGraphics(?:\\|$)' -or $relativePath -match '^sprites\\DefineSprite_600_ScreenOptionsGraphics(?:\\|$)' -or $mappedTargetPaths -contains $relativePath -or $shapeRemap.Keys -contains $relativePath
         if ($intentional) { continue }
         if ($null -eq $retail -or $null -eq $reconstructed -or $retail.Length -ne $reconstructed.Length -or $retail.Sha256 -cne $reconstructed.Sha256) {
             throw "Verified retail asset/script changed outside the explicit shell allowlist: $relativePath"
         }
     }
-    $retailXmlFingerprint = @(Get-RetailXmlProtectedFingerprint -XmlPath $RetailXmlPath)
-    $reconstructedXmlFingerprint = @(Get-RetailXmlProtectedFingerprint -XmlPath $ReconstructedXmlPath)
-    if ($retailXmlFingerprint.Count -ne $reconstructedXmlFingerprint.Count) { throw 'Verified retail XML protected tag count changed outside the explicit sprite 333/600 allowlist.' }
-    for ($index = 0; $index -lt $retailXmlFingerprint.Count; $index++) {
-        if ($retailXmlFingerprint[$index].Type -cne $reconstructedXmlFingerprint[$index].Type -or $retailXmlFingerprint[$index].Sha256 -cne $reconstructedXmlFingerprint[$index].Sha256) {
-            throw "Verified retail XML protected tag changed at fingerprint index $index outside the explicit shell allowlist."
-        }
-    }
+    Assert-RetailProtectedXmlMatches -RetailXmlPath $RetailXmlPath -ReconstructedXmlPath $ReconstructedXmlPath
+    Write-Output 'Retail XML preservation: ordered protected root indices and fingerprints match.'
 }
 
 function Assert-ShellLiveHandshakeExport {
@@ -485,6 +643,12 @@ function Assert-CurrentGraphicsSourceProvenance {
     if (-not $allowListMatch.Success -or (([regex]::Matches($allowListMatch.Groups['items'].Value, '"')).Count / 2) -ne 21) {
         throw 'Current shell builder must retain exactly 21 allow-listed patched source files.'
     }
+}
+
+if ($MutationTestsOnly) {
+    Assert-RetailProtectedXmlMutationTests
+    Write-Output 'PASS'
+    return
 }
 
 if ([string]::IsNullOrWhiteSpace($BatmanRoot)) { $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path } else { $BatmanRoot = (Resolve-Path $BatmanRoot).Path }
