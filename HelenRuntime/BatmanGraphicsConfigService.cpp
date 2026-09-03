@@ -6,11 +6,14 @@
 #include <windows.h>
 
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <cstring>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -21,6 +24,22 @@
 
 namespace
 {
+    /**
+     * @brief Serializes every Batman graphics INI transaction in this process from snapshot through cleanup.
+     *
+     * The service can be instantiated more than once, so the lock is process-wide rather than a member lock.
+     * Holding it across preparation, publication, reconciliation, and cleanup prevents concurrent applies from
+     * interleaving snapshots or touching one another's sibling transaction files.
+     */
+    std::mutex BatmanGraphicsApplyMutex;
+
+    /**
+     * @brief Supplies a monotonic per-process identity component for sibling transaction paths.
+     *
+     * The sequence remains collision-safe even when several callers request paths during the same tick count.
+     */
+    std::atomic<std::uint64_t> BatmanGraphicsTransactionSequence{ 0 };
+
     /**
      * @brief Identifies the on-disk text encoding that must be preserved for one Batman INI document.
      */
@@ -574,10 +593,15 @@ namespace
      * @brief Writes exact bytes to a newly-created sibling transaction file and closes it before publication starts.
      * @param path New transaction file path that must not already exist.
      * @param bytes Exact encoded content that should be staged.
+     * @param file_created Receives true once this call creates the path, including when a later write fails.
      * @return True when the file is completely written, flushed, and closed; otherwise false.
      */
-    bool TryWriteFileBytes(const std::filesystem::path& path, std::string_view bytes)
+    bool TryWriteFileBytes(
+        const std::filesystem::path& path,
+        std::string_view bytes,
+        bool& file_created)
     {
+        file_created = false;
         const HANDLE handle = CreateFileW(
             path.c_str(),
             GENERIC_WRITE,
@@ -590,6 +614,8 @@ namespace
         {
             return false;
         }
+
+        file_created = true;
 
         std::size_t offset = 0;
         bool write_succeeded = true;
@@ -617,7 +643,6 @@ namespace
         const BOOL close_succeeded = CloseHandle(handle);
         if (!write_succeeded || close_succeeded == FALSE)
         {
-            DeleteFileW(path.c_str());
             return false;
         }
 
@@ -625,10 +650,10 @@ namespace
     }
 
     /**
-     * @brief Creates a unique transaction filename beside one target using the process and tick-count identity.
+     * @brief Creates a unique transaction filename beside one target using process, tick, and sequence identity.
      * @param target_path Existing target whose parent directory must contain the transaction file.
      * @param role_suffix Distinct suffix identifying generated, launcher, or recovery ownership.
-     * @return Sibling path reserved by the caller through `TryWriteFileBytes`.
+     * @return Sibling path that the caller must reserve through `TryWriteFileBytes`.
      */
     std::filesystem::path CreateSiblingTransactionPath(
         const std::filesystem::path& target_path,
@@ -639,6 +664,8 @@ namespace
         transaction_path += std::to_wstring(GetCurrentProcessId());
         transaction_path += L"-";
         transaction_path += std::to_wstring(GetTickCount64());
+        transaction_path += L"-";
+        transaction_path += std::to_wstring(BatmanGraphicsTransactionSequence.fetch_add(1, std::memory_order_relaxed));
         transaction_path += role_suffix;
         return std::filesystem::path(transaction_path);
     }
@@ -672,25 +699,35 @@ namespace
     }
 
     /**
-     * @brief Copies a closed recovery artifact to a unique sibling candidate without overwriting an existing candidate.
-     * @param recovery_path Staged exact original bytes used as the copy source.
+     * @brief Stages exact recovery bytes into a newly-created sibling candidate without overwriting any existing path.
+     * @param recovery_path Closed recovery artifact whose exact bytes should be copied.
      * @param candidate_path New sibling path that will be consumed by the recovery move.
-     * @param error_code Receives the Win32 error when the copy reports failure.
-     * @return True when `CopyFileW` creates the candidate; otherwise false.
+     * @param candidate_created Receives true when this attempt created the candidate, including a partial write.
+     * @param error_code Receives a Win32-compatible diagnostic when reading or staging fails.
+     * @return True when the candidate is completely written and closed; otherwise false.
      */
-    bool TryCopyRecoveryFile(
+    bool TryStageRecoveryCandidate(
         const std::filesystem::path& recovery_path,
         const std::filesystem::path& candidate_path,
+        bool& candidate_created,
         DWORD& error_code)
     {
-        if (CopyFileW(recovery_path.c_str(), candidate_path.c_str(), TRUE) != FALSE)
+        candidate_created = false;
+        const std::optional<std::string> recovery_bytes = TryReadFileBytes(recovery_path);
+        if (!recovery_bytes.has_value())
         {
-            error_code = ERROR_SUCCESS;
-            return true;
+            error_code = ERROR_READ_FAULT;
+            return false;
         }
 
-        error_code = GetLastError();
-        return false;
+        if (!TryWriteFileBytes(candidate_path, *recovery_bytes, candidate_created))
+        {
+            error_code = ERROR_WRITE_FAULT;
+            return false;
+        }
+
+        error_code = ERROR_SUCCESS;
+        return true;
     }
 
     /**
@@ -744,36 +781,23 @@ namespace
     }
 
     /**
-     * @brief Cleans every stage and recovery path owned by one dual-INI publication attempt.
-     * @param generated_stage_path Generated `BmEngine.ini` staging path.
-     * @param user_stage_path Launcher `UserEngine.ini` staging path.
-     * @param generated_recovery_path Exact pre-apply generated-byte recovery path.
-     * @param user_recovery_path Exact pre-apply launcher-byte recovery path.
-     * @param generated_restore_candidate_path Temporary generated recovery candidate path.
-     * @param user_restore_candidate_path Temporary launcher recovery candidate path.
-     * @return True when all owned paths are absent after cleanup; otherwise false.
+     * @brief Cleans every transaction path successfully created by one dual-INI publication attempt.
+     * @param owned_transaction_files Paths created by this attempt; paths not in this collection are never deleted.
+     * @return True when all owned paths are absent after cleanup; otherwise false, with each failure logged by path.
      */
     bool CleanupBatmanGraphicsTransactionFiles(
-        const std::filesystem::path& generated_stage_path,
-        const std::filesystem::path& user_stage_path,
-        const std::filesystem::path& generated_recovery_path,
-        const std::filesystem::path& user_recovery_path,
-        const std::filesystem::path& generated_restore_candidate_path,
-        const std::filesystem::path& user_restore_candidate_path)
+        const std::vector<std::filesystem::path>& owned_transaction_files)
     {
-        const bool generated_stage_clean = TryDeleteTransactionFile(generated_stage_path);
-        const bool user_stage_clean = TryDeleteTransactionFile(user_stage_path);
-        const bool generated_recovery_clean = TryDeleteTransactionFile(generated_recovery_path);
-        const bool user_recovery_clean = TryDeleteTransactionFile(user_recovery_path);
-        const bool generated_restore_candidate_clean = TryDeleteTransactionFile(generated_restore_candidate_path);
-        const bool user_restore_candidate_clean = TryDeleteTransactionFile(user_restore_candidate_path);
-        return
-            generated_stage_clean &&
-            user_stage_clean &&
-            generated_recovery_clean &&
-            user_recovery_clean &&
-            generated_restore_candidate_clean &&
-            user_restore_candidate_clean;
+        bool cleanup_succeeded = true;
+        for (const std::filesystem::path& transaction_file : owned_transaction_files)
+        {
+            if (!TryDeleteTransactionFile(transaction_file))
+            {
+                cleanup_succeeded = false;
+            }
+        }
+
+        return cleanup_succeeded;
     }
 
     /**
@@ -789,6 +813,7 @@ namespace
         const std::filesystem::path& target_path,
         const std::filesystem::path& recovery_path,
         const std::filesystem::path& restore_candidate_path,
+        std::vector<std::filesystem::path>& owned_transaction_files,
         std::string_view original_bytes,
         const wchar_t* target_label)
     {
@@ -798,8 +823,18 @@ namespace
             return true;
         }
 
+        bool candidate_created = false;
         DWORD copy_error = ERROR_SUCCESS;
-        const bool copied_recovery = TryCopyRecoveryFile(recovery_path, restore_candidate_path, copy_error);
+        const bool copied_recovery = TryStageRecoveryCandidate(
+            recovery_path,
+            restore_candidate_path,
+            candidate_created,
+            copy_error);
+        if (candidate_created)
+        {
+            owned_transaction_files.push_back(restore_candidate_path);
+        }
+
         DWORD move_error = ERROR_SUCCESS;
         if (copied_recovery)
         {
@@ -849,6 +884,7 @@ namespace
         const std::filesystem::path& user_recovery_path,
         const std::filesystem::path& generated_restore_candidate_path,
         const std::filesystem::path& user_restore_candidate_path,
+        std::vector<std::filesystem::path>& owned_transaction_files,
         std::string_view original_generated_bytes,
         std::string_view original_user_bytes)
     {
@@ -856,12 +892,14 @@ namespace
             generated_path,
             generated_recovery_path,
             generated_restore_candidate_path,
+            owned_transaction_files,
             original_generated_bytes,
             L"generated INI");
         const bool user_reconciled = TryReconcileBatmanGraphicsIniTarget(
             user_path,
             user_recovery_path,
             user_restore_candidate_path,
+            owned_transaction_files,
             original_user_bytes,
             L"launcher INI");
         return generated_reconciled && user_reconciled;
@@ -891,16 +929,17 @@ namespace
         const std::filesystem::path user_recovery_path = CreateSiblingTransactionPath(user_path, L"-user-recovery");
         const std::filesystem::path generated_restore_candidate_path = CreateSiblingTransactionPath(generated_path, L"-generated-restore-candidate");
         const std::filesystem::path user_restore_candidate_path = CreateSiblingTransactionPath(user_path, L"-user-restore-candidate");
+        std::vector<std::filesystem::path> owned_transaction_files;
+        bool file_created = false;
 
-        if (!TryWriteFileBytes(generated_stage_path, generated_bytes))
+        if (!TryWriteFileBytes(generated_stage_path, generated_bytes, file_created))
         {
-            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(
-                generated_stage_path,
-                user_stage_path,
-                generated_recovery_path,
-                user_recovery_path,
-                generated_restore_candidate_path,
-                user_restore_candidate_path);
+            if (file_created)
+            {
+                owned_transaction_files.push_back(generated_stage_path);
+            }
+
+            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(owned_transaction_files);
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after generated staging failed.");
@@ -909,16 +948,16 @@ namespace
             helen::Logf(L"[graphics] Apply failed: unable to stage generated INI path=%ls.", generated_path.wstring().c_str());
             return false;
         }
+        owned_transaction_files.push_back(generated_stage_path);
 
-        if (!TryWriteFileBytes(user_stage_path, user_bytes))
+        if (!TryWriteFileBytes(user_stage_path, user_bytes, file_created))
         {
-            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(
-                generated_stage_path,
-                user_stage_path,
-                generated_recovery_path,
-                user_recovery_path,
-                generated_restore_candidate_path,
-                user_restore_candidate_path);
+            if (file_created)
+            {
+                owned_transaction_files.push_back(user_stage_path);
+            }
+
+            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(owned_transaction_files);
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after launcher staging failed.");
@@ -927,16 +966,16 @@ namespace
             helen::Logf(L"[graphics] Apply failed: unable to stage launcher INI path=%ls.", user_path.wstring().c_str());
             return false;
         }
+        owned_transaction_files.push_back(user_stage_path);
 
-        if (!TryWriteFileBytes(generated_recovery_path, original_generated_bytes))
+        if (!TryWriteFileBytes(generated_recovery_path, original_generated_bytes, file_created))
         {
-            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(
-                generated_stage_path,
-                user_stage_path,
-                generated_recovery_path,
-                user_recovery_path,
-                generated_restore_candidate_path,
-                user_restore_candidate_path);
+            if (file_created)
+            {
+                owned_transaction_files.push_back(generated_recovery_path);
+            }
+
+            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(owned_transaction_files);
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after generated recovery staging failed.");
@@ -945,16 +984,16 @@ namespace
             helen::Logf(L"[graphics] Apply failed: unable to stage generated INI recovery bytes path=%ls.", generated_path.wstring().c_str());
             return false;
         }
+        owned_transaction_files.push_back(generated_recovery_path);
 
-        if (!TryWriteFileBytes(user_recovery_path, original_user_bytes))
+        if (!TryWriteFileBytes(user_recovery_path, original_user_bytes, file_created))
         {
-            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(
-                generated_stage_path,
-                user_stage_path,
-                generated_recovery_path,
-                user_recovery_path,
-                generated_restore_candidate_path,
-                user_restore_candidate_path);
+            if (file_created)
+            {
+                owned_transaction_files.push_back(user_recovery_path);
+            }
+
+            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(owned_transaction_files);
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after launcher recovery staging failed.");
@@ -963,6 +1002,7 @@ namespace
             helen::Logf(L"[graphics] Apply failed: unable to stage launcher INI recovery bytes path=%ls.", user_path.wstring().c_str());
             return false;
         }
+        owned_transaction_files.push_back(user_recovery_path);
 
         DWORD generated_publication_error = ERROR_SUCCESS;
         if (!TryReplaceSiblingFile(generated_path, generated_stage_path, generated_publication_error))
@@ -974,15 +1014,10 @@ namespace
                 user_recovery_path,
                 generated_restore_candidate_path,
                 user_restore_candidate_path,
+                owned_transaction_files,
                 original_generated_bytes,
                 original_user_bytes);
-            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(
-                generated_stage_path,
-                user_stage_path,
-                generated_recovery_path,
-                user_recovery_path,
-                generated_restore_candidate_path,
-                user_restore_candidate_path);
+            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(owned_transaction_files);
             if (!reconciliation_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to prove both INI targets were restored after generated publication failure.");
@@ -1009,15 +1044,10 @@ namespace
                 user_recovery_path,
                 generated_restore_candidate_path,
                 user_restore_candidate_path,
+                owned_transaction_files,
                 original_generated_bytes,
                 original_user_bytes);
-            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(
-                generated_stage_path,
-                user_stage_path,
-                generated_recovery_path,
-                user_recovery_path,
-                generated_restore_candidate_path,
-                user_restore_candidate_path);
+            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(owned_transaction_files);
             if (!reconciliation_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to prove both INI targets were restored after launcher publication failure.");
@@ -1041,13 +1071,7 @@ namespace
             return false;
         }
 
-        if (!CleanupBatmanGraphicsTransactionFiles(
-                generated_stage_path,
-                user_stage_path,
-                generated_recovery_path,
-                user_recovery_path,
-                generated_restore_candidate_path,
-                user_restore_candidate_path))
+        if (!CleanupBatmanGraphicsTransactionFiles(owned_transaction_files))
         {
             helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after both INI publications succeeded.");
             return false;
@@ -2055,6 +2079,7 @@ namespace helen
      */
     bool BatmanGraphicsConfigService::ApplyFromDispatcher(const CommandDispatcher& dispatcher) const
     {
+        const std::lock_guard<std::mutex> transaction_lock(BatmanGraphicsApplyMutex);
         BatmanGraphicsDraftState state;
         if (!TryReadDraftStateFromDispatcher(dispatcher, state))
         {

@@ -8,12 +8,16 @@
 #include <HelenHook/RuntimeSlotDefinition.h>
 #include <HelenHook/RuntimeValueStore.h>
 
+#include <array>
+#include <atomic>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <cmath>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <windows.h>
 
 namespace
@@ -525,6 +529,147 @@ namespace
         command.Steps.push_back(helen::CommandStepDefinition{ .Kind = "load-batman-graphics-draft-into-config" });
         return command;
     }
+
+    /**
+     * @brief Seeds one dispatcher with a complete, deliberately distinctive Batman graphics state.
+     * @param dispatcher Dispatcher that should receive the state values.
+     * @param high_state True for the high preset; false for the medium preset.
+     */
+    void SeedConcurrentBatmanGraphicsState(helen::CommandDispatcher& dispatcher, bool high_state)
+    {
+        RegisterBatmanGraphicsConfigKeys(dispatcher);
+        Expect(dispatcher.TrySetInt("fullscreen", high_state ? 1 : 0), "Failed to seed concurrent fullscreen state.");
+        Expect(dispatcher.TrySetInt("resolutionWidth", high_state ? 3840 : 1920), "Failed to seed concurrent horizontal resolution state.");
+        Expect(dispatcher.TrySetInt("resolutionHeight", high_state ? 2160 : 1080), "Failed to seed concurrent vertical resolution state.");
+        Expect(dispatcher.TrySetInt("vsync", high_state ? 1 : 0), "Failed to seed concurrent VSync state.");
+        Expect(dispatcher.TrySetInt("msaa", high_state ? 3 : 0), "Failed to seed concurrent MSAA state.");
+        Expect(dispatcher.TrySetInt("detailLevel", high_state ? 3 : 1), "Failed to seed concurrent detail state.");
+        Expect(dispatcher.TrySetInt("bloom", 1), "Failed to seed concurrent Bloom state.");
+        Expect(dispatcher.TrySetInt("dynamicShadows", 1), "Failed to seed concurrent shadow state.");
+        Expect(dispatcher.TrySetInt("motionBlur", high_state ? 1 : 0), "Failed to seed concurrent motion-blur state.");
+        Expect(dispatcher.TrySetInt("distortion", high_state ? 1 : 0), "Failed to seed concurrent distortion state.");
+        Expect(dispatcher.TrySetInt("fogVolumes", high_state ? 1 : 0), "Failed to seed concurrent fog state.");
+        Expect(dispatcher.TrySetInt("sphericalHarmonicLighting", high_state ? 1 : 0), "Failed to seed concurrent spherical-lighting state.");
+        Expect(dispatcher.TrySetInt("ambientOcclusion", high_state ? 1 : 0), "Failed to seed concurrent ambient-occlusion state.");
+        Expect(dispatcher.TrySetInt("physx", high_state ? 2 : 0), "Failed to seed concurrent PhysX state.");
+        Expect(dispatcher.TrySetInt("stereo", high_state ? 1 : 0), "Failed to seed concurrent stereo state.");
+    }
+
+    /**
+     * @brief Checks whether a decoded published INI contains every assignment for one concurrent test state.
+     * @param text Decoded INI text whose complete state should be checked.
+     * @param high_state True to check the high state; false to check the medium state.
+     * @return True only when all distinguishing assignments are present with the expected values.
+     */
+    bool ContainsConcurrentBatmanGraphicsState(std::string_view text, bool high_state)
+    {
+        const std::array<std::string_view, 15> expected_values = high_state
+            ? std::array<std::string_view, 15>{
+                "Fullscreen=True", "UseVsync=True", "ResX=3840", "ResY=2160", "MaxMultisamples=8",
+                "DetailMode=2", "Bloom=True", "DynamicShadows=True", "MotionBlur=True", "Distortion=True",
+                "FogVolumes=True", "DisableSphericalHarmonicLights=False", "AmbientOcclusion=True", "PhysXLevel=2", "Stereo=True" }
+            : std::array<std::string_view, 15>{
+                "Fullscreen=False", "UseVsync=False", "ResX=1920", "ResY=1080", "MaxMultisamples=1",
+                "DetailMode=1", "Bloom=True", "DynamicShadows=True", "MotionBlur=False", "Distortion=False",
+                "FogVolumes=False", "DisableSphericalHarmonicLights=True", "AmbientOcclusion=False", "PhysXLevel=0", "Stereo=False" };
+
+        for (const std::string_view expected_value : expected_values)
+        {
+            if (text.find(expected_value) == std::string_view::npos)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @brief Runs coordinated concurrent applies against one fixture and verifies serialized, complete publication.
+     * @param scenario_name Unique fixture directory name for this concurrency scenario.
+     */
+    void RunConcurrentBatmanGraphicsApplyTest(std::string_view scenario_name)
+    {
+        const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath(scenario_name);
+        const std::filesystem::path user_ini_path = GetSiblingBatmanUserEngineIniPath(engine_ini_path);
+
+        constexpr int apply_round_count = 4;
+        for (int round = 0; round < apply_round_count; ++round)
+        {
+            WriteAllText(engine_ini_path, CreateBatmanGraphicsIniText());
+            WriteAsciiAsUtf16LittleEndianText(user_ini_path, CreateBatmanLauncherOwnedGraphicsIniText(true));
+
+            helen::CommandDispatcher low_dispatcher;
+            helen::CommandDispatcher high_dispatcher;
+            SeedConcurrentBatmanGraphicsState(low_dispatcher, false);
+            SeedConcurrentBatmanGraphicsState(high_dispatcher, true);
+
+            helen::BatmanGraphicsConfigService low_service(engine_ini_path);
+            helen::BatmanGraphicsConfigService high_service(engine_ini_path);
+            std::atomic<int> ready_count{ 0 };
+            std::atomic<bool> release_threads{ false };
+            bool low_result = false;
+            bool high_result = false;
+            std::exception_ptr low_exception;
+            std::exception_ptr high_exception;
+
+            std::thread low_thread([&]() {
+                ready_count.fetch_add(1, std::memory_order_release);
+                while (!release_threads.load(std::memory_order_acquire))
+                {
+                    std::this_thread::yield();
+                }
+
+                try
+                {
+                    low_result = low_service.ApplyFromDispatcher(low_dispatcher);
+                }
+                catch (...)
+                {
+                    low_exception = std::current_exception();
+                }
+            });
+            std::thread high_thread([&]() {
+                ready_count.fetch_add(1, std::memory_order_release);
+                while (!release_threads.load(std::memory_order_acquire))
+                {
+                    std::this_thread::yield();
+                }
+
+                try
+                {
+                    high_result = high_service.ApplyFromDispatcher(high_dispatcher);
+                }
+                catch (...)
+                {
+                    high_exception = std::current_exception();
+                }
+            });
+
+            while (ready_count.load(std::memory_order_acquire) != 2)
+            {
+                std::this_thread::yield();
+            }
+
+            release_threads.store(true, std::memory_order_release);
+            low_thread.join();
+            high_thread.join();
+
+            Expect(low_exception == nullptr && high_exception == nullptr, "Concurrent Batman graphics apply threw an unexpected exception.");
+            Expect(low_result && high_result, "Concurrent Batman graphics apply did not complete both calls successfully.");
+
+            const std::string engine_text = ReadAllText(engine_ini_path);
+            const std::string user_text = ReadAsciiFromUtf16LittleEndianText(user_ini_path);
+            const bool engine_low = ContainsConcurrentBatmanGraphicsState(engine_text, false);
+            const bool engine_high = ContainsConcurrentBatmanGraphicsState(engine_text, true);
+            const bool user_low = ContainsConcurrentBatmanGraphicsState(user_text, false);
+            const bool user_high = ContainsConcurrentBatmanGraphicsState(user_text, true);
+            Expect(engine_low != engine_high, "Concurrent Batman publication left an incomplete generated state.");
+            Expect(user_low != user_high, "Concurrent Batman publication left an incomplete launcher state.");
+            Expect(engine_low == user_low && engine_high == user_high, "Concurrent Batman publication left the two INIs internally inconsistent.");
+            ExpectNoBatmanGraphicsTransactionArtifacts(engine_ini_path.parent_path());
+        }
+    }
 }
 
 /**
@@ -823,4 +968,6 @@ void RunCommandExecutorTests()
             "UserEngine.ini bytes changed after blocked publication.");
         ExpectNoBatmanGraphicsTransactionArtifacts(engine_ini_path.parent_path());
     }
+
+    RunConcurrentBatmanGraphicsApplyTest("concurrent-publication");
 }
