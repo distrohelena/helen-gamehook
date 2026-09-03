@@ -234,7 +234,12 @@ $ForbiddenTokens = @(
     'DraftVsync',
     '601',
     'Unsaved',
-    'RestartRequired'
+    'RestartRequired',
+    'GetInt',
+    'SetInt',
+    'RunCommand',
+    '_root.Prompt',
+    'PromptManager'
 )
 
 foreach ($ForbiddenToken in $ForbiddenTokens) {
@@ -321,6 +326,73 @@ function Get-ActionScriptNamedFunctionBody {
     }
 
     throw "$Context has an unterminated function: $FunctionToken"
+}
+
+function Get-ActionScriptControllerMethods {
+    param(
+        [string]$ScriptText,
+        [string]$Context
+    )
+
+    $ClassToken = 'class rs.ui.BatmanGraphicsOptionsController'
+    $ClassIndex = $ScriptText.IndexOf($ClassToken, [System.StringComparison]::Ordinal)
+    if ($ClassIndex -lt 0) {
+        throw "$Context is missing controller class: $ClassToken"
+    }
+
+    $ClassBodyStart = $ScriptText.IndexOf('{', $ClassIndex)
+    if ($ClassBodyStart -lt 0) {
+        throw "$Context controller class has no body."
+    }
+
+    $BraceDepth = 0
+    $ClassBodyEnd = -1
+    for ($Index = $ClassBodyStart; $Index -lt $ScriptText.Length; $Index++) {
+        if ($ScriptText[$Index] -eq '{') {
+            $BraceDepth++
+        } elseif ($ScriptText[$Index] -eq '}') {
+            $BraceDepth--
+            if ($BraceDepth -eq 0) {
+                $ClassBodyEnd = $Index
+                break
+            }
+        }
+    }
+    if ($ClassBodyEnd -lt 0) {
+        throw "$Context controller class has no closing brace."
+    }
+
+    $ClassBody = $ScriptText.Substring($ClassBodyStart + 1, $ClassBodyEnd - $ClassBodyStart - 1)
+    $MethodMatches = [regex]::Matches($ClassBody, 'function\s+([A-Za-z0-9_]+)\s*\(([^)]*)\)\s*\{')
+    $Methods = @()
+    foreach ($MethodMatch in $MethodMatches) {
+        $MethodBodyStart = $MethodMatch.Index + $MethodMatch.Length - 1
+        $MethodBraceDepth = 0
+        $MethodBodyEnd = -1
+        for ($Index = $MethodBodyStart; $Index -lt $ClassBody.Length; $Index++) {
+            if ($ClassBody[$Index] -eq '{') {
+                $MethodBraceDepth++
+            } elseif ($ClassBody[$Index] -eq '}') {
+                $MethodBraceDepth--
+                if ($MethodBraceDepth -eq 0) {
+                    $MethodBodyEnd = $Index
+                    break
+                }
+            }
+        }
+        if ($MethodBodyEnd -lt 0) {
+            throw "$Context method has no closing brace: $($MethodMatch.Groups[1].Value)"
+        }
+        $Methods += [pscustomobject]@{
+            Name = $MethodMatch.Groups[1].Value
+            Arguments = $MethodMatch.Groups[2].Value
+            Body = $ClassBody.Substring($MethodBodyStart + 1, $MethodBodyEnd - $MethodBodyStart - 1)
+        }
+    }
+    if ($Methods.Count -eq 0) {
+        throw "$Context controller class has no methods."
+    }
+    return $Methods
 }
 
 function Invoke-RequiredProcess {
@@ -675,7 +747,9 @@ foreach ($RequiredScreenToken in @(
     'this.RollbackSignalToggle = 0;',
     'this.UiStatus = "";',
     'this.RollbackLocked = false;',
+    'this.Screen.Tick = undefined;',
     'function BeginInitialization()',
+    'function IsDeadlineReached(deadline)',
     'this.InitializationDeadline = getTimer() + 10000;',
     'flash.external.ExternalInterface.call("FE_SetControlType",this.Settings[this.InitializationIndex].ReadRequest,"");',
     'var rawValue = int(flash.external.ExternalInterface.call("FE_GetControlType"));',
@@ -700,19 +774,24 @@ foreach ($RequiredScreenToken in @(
     'this.RollbackLocked = true;',
     'this.CopyDraftToInitial();',
     'this.Screen.BlockInput(true);',
-    'this.onEnterFrame = function()',
+    'this.Tick = function()',
+    'if(this.GraphicsOptionsController != undefined)',
     'this.AddItem(GraphicsRow15,13,0,-1,-1);',
     'GraphicsRow15._visible = true;',
     'this.GraphicsOptionsController.BeginInitialization();'
 )) {
     Assert-ContainsOrdinal -Text $ScreenFrame -Token $RequiredScreenToken -Context 'Graphics shell screen frame'
 }
+if ($ScreenFrame.IndexOf('this.GraphicsOptionsController.Destroy();', [System.StringComparison]::Ordinal) -ge 0 -and
+    $ScreenFrame.IndexOf('if(this.GraphicsOptionsController != undefined)', [System.StringComparison]::Ordinal) -lt 0) {
+    throw 'CancelScreen must guard an undefined graphics controller.'
+}
 
 $ExpectedSettingDefinitions = @(
     '{RowIndex:3,Name:"VSync",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4200,ReadResponseBase:4210,WriteRequestBase:4220,WriteAcknowledgementBase:4230,FailureResponse:4299,InitialIndex:-1,DraftIndex:-1}',
     '{RowIndex:4,Name:"MSAA",Values:new Array("Off","2x","4x","8x","16x"),ConfigValues:new Array(0,1,2,3,5),ReadRequest:4300,ReadResponseBase:4310,WriteRequestBase:4320,WriteAcknowledgementBase:4330,FailureResponse:4399,InitialIndex:-1,DraftIndex:-1}',
     '{RowIndex:13,Name:"PhysX",Values:new Array("Off","Normal","High"),ConfigValues:new Array(0,1,2),ReadRequest:4400,ReadResponseBase:4410,WriteRequestBase:4420,WriteAcknowledgementBase:4430,FailureResponse:4499,InitialIndex:-1,DraftIndex:-1}',
-    '{RowIndex:14,Name:"NVIDIA Stereo 3D",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4500,ReadResponseBase:4510,WriteRequestBase:4520,WriteAcknowledgementBase:4530,FailureResponse:4599,InitialIndex:-1,DraftIndex:-1}'
+    '{RowIndex:14,Name:"Stereo 3D",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4500,ReadResponseBase:4510,WriteRequestBase:4520,WriteAcknowledgementBase:4530,FailureResponse:4599,InitialIndex:-1,DraftIndex:-1}'
 )
 foreach ($ExpectedSettingDefinition in $ExpectedSettingDefinitions) {
     Assert-ContainsOrdinal -Text $ScreenFrame -Token $ExpectedSettingDefinition -Context 'Graphics declarative setting definition'
@@ -726,6 +805,12 @@ foreach ($ExpectedSettingRow in @(3, 4, 13, 14)) {
 if (([regex]::Matches($ScreenFrame, 'this.InitializationDeadline = getTimer\(\) \+ 10000;')).Count -ne 1) {
     throw 'Graphics initialization must have one overall 10-second deadline with no per-setting reset.'
 }
+if ($ScreenFrame.IndexOf('this.onEnterFrame = function()', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Graphics shell must preserve the inherited onEnterFrame lifecycle.'
+}
+if ($ScreenFrame.IndexOf('getTimer() >=', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Graphics deadlines must use the rollover-safe IsDeadlineReached method.'
+}
 if ($ScreenFrame.IndexOf('FE_SetControlType",4210+', [System.StringComparison]::Ordinal) -ge 0 -or
     $ScreenFrame.IndexOf('FE_SetControlType",4310+', [System.StringComparison]::Ordinal) -ge 0 -or
     $ScreenFrame.IndexOf('FE_SetControlType",4410+', [System.StringComparison]::Ordinal) -ge 0 -or
@@ -737,6 +822,11 @@ $SetDraftIndexBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame 
 Assert-ContainsOrdinal -Text $SetDraftIndexBody -Token 'setting.DraftIndex = index;' -Context 'Graphics settings edit controller'
 Assert-ContainsOrdinal -Text $SetDraftIndexBody -Token 'UI_FrontEndSFX.UI_Forward' -Context 'Graphics settings forward sound'
 Assert-ContainsOrdinal -Text $SetDraftIndexBody -Token 'UI_FrontEndSFX.UI_Back' -Context 'Graphics settings backward sound'
+$DeadlineBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'IsDeadlineReached' -Context 'Graphics deadline rollover controller'
+Assert-ContainsOrdinal -Text $DeadlineBody -Token 'this.NormalizeTimerValue(getTimer())' -Context 'Graphics deadline current timer normalization'
+Assert-ContainsOrdinal -Text $DeadlineBody -Token 'this.NormalizeTimerValue(deadline)' -Context 'Graphics deadline target normalization'
+Assert-ContainsOrdinal -Text $DeadlineBody -Token '4294967296' -Context 'Graphics AS2 timer rollover modulus'
+Assert-ContainsOrdinal -Text $DeadlineBody -Token '2147483648' -Context 'Graphics AS2 timer half-range'
 if ($SetDraftIndexBody.IndexOf('FE_SetControlType', [System.StringComparison]::Ordinal) -ge 0 -or
     $SetDraftIndexBody.IndexOf('FE_GetControlType', [System.StringComparison]::Ordinal) -ge 0) {
     throw 'Graphics setting edits must remain local drafts and must not use the frontend carrier.'
@@ -789,6 +879,11 @@ if ($FailRollbackBody.IndexOf('DraftIndex =', [System.StringComparison]::Ordinal
 foreach ($ForbiddenScreenToken in @('Helen_', 'GraphicsExitPrompt', 'YesNoPrompt', 'CaptureInitialState', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft', 'ApplyWasDispatched')) {
     if ($ScreenFrame.IndexOf($ForbiddenScreenToken, [System.StringComparison]::Ordinal) -ge 0) {
         throw "Graphics shell screen frame contains forbidden token: $ForbiddenScreenToken"
+    }
+}
+foreach ($ForbiddenBridgeCall in @('Helen_GetInt', 'Helen_SetInt', 'Helen_RunCommand', 'Helen_Log', 'GetInt', 'SetInt', 'RunCommand', 'ExternalInterface.call("Helen_', '_root.Prompt', 'GraphicsExitPrompt', 'YesNoPrompt', 'Unsaved', 'RestartRequired')) {
+    if ($ScreenFrame.IndexOf($ForbiddenBridgeCall, [System.StringComparison]::Ordinal) -ge 0) {
+        throw "Graphics shell screen frame contains forbidden bridge/prompt call: $ForbiddenBridgeCall"
     }
 }
 $RowClipActions = @($ReflectionContract.RowClipActions)
@@ -1108,7 +1203,7 @@ $ExpectedRows = @(
     @{ Label = 'Spherical Harmonic Lighting'; Value = 'Not active' },
     @{ Label = 'Ambient Occlusion'; Value = 'Not active' },
     @{ Label = 'PhysX'; Value = $null },
-    @{ Label = 'NVIDIA Stereo 3D'; Value = $null }
+    @{ Label = 'Stereo 3D'; Value = $null }
 )
 
 for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
@@ -1135,6 +1230,9 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.Default = -1;' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token $ActiveRowDefinition.Values -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token "this.RowIndex = $($ActiveRowDefinition.RowIndex);" -Context "$RowContext row binding"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'if(_parent.GraphicsOptionsController == undefined)' -Context "$RowContext controller-load guard"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.ItemText.text = "Loading...";' -Context "$RowContext controller-load guard"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'return undefined;' -Context "$RowContext controller-load guard"
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.ItemText.text = this.Names[this.State];' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = _parent.GraphicsOptionsController.GetDraftIndex(this.RowIndex);' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = _parent.GraphicsOptionsController.GetInitialIndex(this.RowIndex);' -Context $RowContext
@@ -1144,6 +1242,10 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
         Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsOptionsController.IncrementSetting(this.RowIndex);' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token '_parent.GraphicsOptionsController.DecrementSetting(this.RowIndex);' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token '"Unavailable" : "Loading..."' -Context "$RowContext unresolved state"
+        foreach ($ActiveFunctionName in @('RunAction', 'Increment', 'Decrement')) {
+            $ActiveFunctionBody = Get-ActionScriptFunctionBody -ScriptText $RowScript -FunctionName $ActiveFunctionName -Context "$RowContext $ActiveFunctionName"
+            Assert-ContainsOrdinal -Text $ActiveFunctionBody -Token 'if(_parent.GraphicsOptionsController != undefined)' -Context "$RowContext $ActiveFunctionName controller guard"
+        }
     } else {
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = 0;' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = 0;' -Context $RowContext
@@ -1170,6 +1272,11 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
             throw "$RowContext contains forbidden token: $ForbiddenToken"
         }
     }
+    if ($RowScript.IndexOf('FE_SetControlType', [System.StringComparison]::Ordinal) -ge 0 -or
+        $RowScript.IndexOf('FE_GetControlType', [System.StringComparison]::Ordinal) -ge 0 -or
+        $RowScript.IndexOf('onEnterFrame', [System.StringComparison]::Ordinal) -ge 0) {
+        throw "$RowContext contains a forbidden bridge call or lifecycle replacement."
+    }
 }
 
 $ApplyRowScript = [string]$RowClipActions[14]
@@ -1178,6 +1285,10 @@ Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this._visible = true;' -Con
 Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this.ItemText.text = _parent.GraphicsOptionsController.GetApplyStatusText();' -Context 'Graphics row action 15 status'
 Assert-ContainsOrdinal -Text $ApplyRowScript -Token '_parent.GraphicsOptionsController.ApplyChanges();' -Context 'Graphics row action 15'
 Assert-ContainsOrdinal -Text $ApplyRowScript -Token '_parent.GraphicsOptionsController.CanApply() ? 100 : 40' -Context 'Graphics row action 15 enabled state'
+Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'if(_parent.GraphicsOptionsController == undefined)' -Context 'Graphics row action 15 controller-load guard'
+Assert-ContainsOrdinal -Text $ApplyRowScript -Token 'this.ItemText.text = "";' -Context 'Graphics row action 15 controller-load guard'
+$ApplyRunActionBody = Get-ActionScriptFunctionBody -ScriptText $ApplyRowScript -FunctionName 'RunAction' -Context 'Graphics row action 15 RunAction'
+Assert-ContainsOrdinal -Text $ApplyRunActionBody -Token 'if(_parent.GraphicsOptionsController != undefined)' -Context 'Graphics row action 15 RunAction controller guard'
 Assert-NoOpActionScriptFunction -ScriptText $ApplyRowScript -FunctionName 'Increment' -Context 'Graphics row action 15'
 Assert-NoOpActionScriptFunction -ScriptText $ApplyRowScript -FunctionName 'Decrement' -Context 'Graphics row action 15'
 Assert-NoOpActionScriptFunction -ScriptText $ApplyRowScript -FunctionName 'ShowPrompt' -Context 'Graphics row action 15'
@@ -1190,6 +1301,366 @@ if ($ApplyDestroyBody.IndexOf('ExternalInterface', [System.StringComparison]::Or
 foreach ($ForbiddenToken in $ForbiddenTokens) {
     if ($ApplyRowScript.IndexOf($ForbiddenToken, [System.StringComparison]::Ordinal) -ge 0) {
         throw "Graphics row action 15 contains forbidden token: $ForbiddenToken"
+    }
+}
+if ($ApplyRowScript.IndexOf('FE_SetControlType', [System.StringComparison]::Ordinal) -ge 0 -or
+    $ApplyRowScript.IndexOf('FE_GetControlType', [System.StringComparison]::Ordinal) -ge 0 -or
+    $ApplyRowScript.IndexOf('onEnterFrame', [System.StringComparison]::Ordinal) -ge 0) {
+    throw 'Graphics row action 15 contains a forbidden bridge call or lifecycle replacement.'
+}
+
+$NodeCommand = Get-Command node -ErrorAction SilentlyContinue
+if ($null -eq $NodeCommand) {
+    throw 'Graphics shell state-machine contract requires the installed node executable.'
+}
+$ControllerMethods = @(Get-ActionScriptControllerMethods -ScriptText $ScreenFrame -Context 'Graphics shell state-machine harness')
+$ControllerSourceParts = @()
+foreach ($ControllerMethod in $ControllerMethods) {
+    if ($ControllerMethod.Name -eq 'BatmanGraphicsOptionsController') {
+        $ControllerSourceParts += "function BatmanGraphicsOptionsController($($ControllerMethod.Arguments)){`n$($ControllerMethod.Body)`n}"
+    } else {
+        $ControllerSourceParts += "BatmanGraphicsOptionsController.prototype.$($ControllerMethod.Name) = function($($ControllerMethod.Arguments)){`n$($ControllerMethod.Body)`n};"
+    }
+}
+$ControllerSource = $ControllerSourceParts -join "`n"
+$RowScriptsJson = ConvertTo-Json -InputObject $RowClipActions -Compress
+$CancelBodyJson = ConvertTo-Json -InputObject (Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'CancelScreen' -Context 'Graphics shell lifecycle harness') -Compress
+$TickBodyJson = ConvertTo-Json -InputObject (Get-ActionScriptFunctionBody -ScriptText $ScreenFrame -FunctionName 'Tick' -Context 'Graphics shell lifecycle harness') -Compress
+$HarnessSource = @'
+'use strict';
+const assert = require('assert');
+
+__CONTROLLER_SOURCE__
+const rowScripts = __ROW_SCRIPTS__;
+const cancelBody = __CANCEL_BODY__;
+const tickBody = __TICK_BODY__;
+let now = 0;
+let carrierResponses = [];
+let calls = [];
+
+global.getTimer = () => now;
+global.int = value => Number(value) || 0;
+global.flash = { external: { ExternalInterface: { call: (name, ...args) => {
+    calls.push({ name, args });
+    if (name === 'FE_GetControlType') {
+        return carrierResponses.length > 0 ? carrierResponses.shift() : 0;
+    }
+    return 0;
+} } } };
+
+function setNow(value) {
+    now = value;
+}
+
+function queueResponses(...values) {
+    carrierResponses.push(...values);
+}
+
+function clearCalls() {
+    calls = [];
+}
+
+function settingSignals() {
+    return calls.filter(call => call.name === 'FE_SetControlType').map(call => call.args[0]);
+}
+
+function makeScreen() {
+    const screen = {
+        blockStates: [],
+        rowUpdates: 0,
+        reUpdates: 0,
+        BlockInput(value) { this.blockStates.push(value); },
+        ReUpdate() { this.reUpdates += 1; }
+    };
+    for (let rowIndex = 1; rowIndex <= 15; rowIndex += 1) {
+        screen['GraphicsRow' + rowIndex] = { Update() { screen.rowUpdates += 1; } };
+    }
+    return screen;
+}
+
+function makeEnvironment() {
+    const screen = makeScreen();
+    const controller = new BatmanGraphicsOptionsController(screen);
+    screen.GraphicsOptionsController = controller;
+    return { screen, controller };
+}
+
+function initialize(controller, values) {
+    controller.BeginInitialization();
+    assert.deepStrictEqual(settingSignals(), [4200]);
+    const responses = [4210 + values[0], 4310 + values[1], 4410 + values[2], 4510 + values[3]];
+    for (const response of responses) {
+        queueResponses(response);
+        controller.Tick();
+    }
+    assert.strictEqual(controller.InitializationComplete, true);
+    assert.strictEqual(controller.CanApply(), false);
+}
+
+function loadRow(script, parent) {
+    const bodyStart = script.indexOf('{');
+    const bodyEnd = script.lastIndexOf('}');
+    const row = {
+        _parent: parent,
+        Label: { Label: { Text: { text: '' } } },
+        ItemText: { text: '', _alpha: 0 },
+        LeftClicker: { _visible: true },
+        RightClicker: { _visible: true }
+    };
+    global._parent = parent;
+    const load = new Function(script.slice(bodyStart + 1, bodyEnd));
+    load.call(row);
+    return row;
+}
+
+function expectNoThrow(action, message) {
+    assert.doesNotThrow(action, message);
+}
+
+setNow(0);
+clearCalls();
+let environment = makeEnvironment();
+let controller = environment.controller;
+controller.BeginInitialization();
+assert.deepStrictEqual(settingSignals(), [4200]);
+queueResponses(9999);
+controller.Tick();
+assert.deepStrictEqual(settingSignals(), [4200]);
+queueResponses(4211);
+controller.Tick();
+assert.deepStrictEqual(settingSignals(), [4200, 4300]);
+queueResponses(4314);
+controller.Tick();
+assert.deepStrictEqual(settingSignals(), [4200, 4300, 4400]);
+queueResponses(4412);
+controller.Tick();
+assert.deepStrictEqual(settingSignals(), [4200, 4300, 4400, 4500]);
+queueResponses(4511);
+controller.Tick();
+assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [1, 4, 2, 1]);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), [1, 4, 2, 1]);
+assert.strictEqual(controller.InitializationDeadline, 10000);
+assert.strictEqual(controller.CanApply(), false);
+
+setNow(0);
+environment = makeEnvironment();
+controller = environment.controller;
+controller.BeginInitialization();
+queueResponses(4299);
+controller.Tick();
+assert.strictEqual(controller.InitializationFailed, true);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [-1, -1, -1, -1]);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), [-1, -1, -1, -1]);
+assert.strictEqual(controller.CanApply(), false);
+assert.strictEqual(controller.CanEdit(3), false);
+
+setNow(5000);
+assert.strictEqual(controller.IsDeadlineReached(10000), false);
+setNow(10000);
+assert.strictEqual(controller.IsDeadlineReached(10000), true);
+setNow(2147483000);
+assert.strictEqual(controller.IsDeadlineReached(2147493000), false);
+setNow(-2147474296);
+assert.strictEqual(controller.IsDeadlineReached(2147493000), true);
+setNow(2147483000);
+environment = makeEnvironment();
+controller = environment.controller;
+controller.BeginInitialization();
+assert.strictEqual(controller.InitializationDeadline, 2147493000);
+setNow(-2147474296);
+controller.Tick();
+assert.strictEqual(controller.InitializationFailed, true);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), [-1, -1, -1, -1]);
+
+setNow(0);
+clearCalls();
+environment = makeEnvironment();
+controller = environment.controller;
+initialize(controller, [0, 0, 0, 0]);
+controller.IncrementSetting(3);
+assert.strictEqual(controller.Settings[0].DraftIndex, 1);
+assert.strictEqual(settingSignals().filter(value => value >= 4200 && value < 4600).length, 4);
+controller.DecrementSetting(3);
+controller.DecrementSetting(3);
+assert.strictEqual(controller.Settings[0].DraftIndex, 0);
+for (let index = 0; index < 5; index += 1) {
+    controller.ToggleSetting(4);
+}
+assert.strictEqual(controller.Settings[1].DraftIndex, 0);
+controller.ToggleSetting(4);
+controller.IncrementSetting(4);
+assert.strictEqual(controller.Settings[1].DraftIndex, 2);
+assert.strictEqual(controller.CanApply(), true);
+
+setNow(0);
+clearCalls();
+environment = makeEnvironment();
+controller = environment.controller;
+initialize(controller, [0, 0, 0, 0]);
+controller.ToggleSetting(14);
+controller.IncrementSetting(4);
+controller.IncrementSetting(4);
+controller.ToggleSetting(3);
+controller.ApplyChanges();
+assert.deepStrictEqual(settingSignals().slice(4), [4221]);
+queueResponses(4230);
+controller.Tick();
+assert.deepStrictEqual(settingSignals().slice(4), [4221]);
+queueResponses(4231);
+controller.Tick();
+assert.deepStrictEqual(settingSignals().slice(4), [4221, 4322]);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [0, 0, 0, 0]);
+queueResponses(4330);
+controller.Tick();
+assert.deepStrictEqual(settingSignals().slice(4), [4221, 4322]);
+queueResponses(4332);
+controller.Tick();
+assert.deepStrictEqual(settingSignals().slice(4), [4221, 4322, 4521]);
+queueResponses(4530);
+controller.Tick();
+assert.deepStrictEqual(settingSignals().slice(4), [4221, 4322, 4521]);
+queueResponses(4531);
+controller.Tick();
+const commitSignal = settingSignals()[settingSignals().length - 1];
+assert.ok(commitSignal === 4990 || commitSignal === 4991);
+assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [0, 0, 0, 0]);
+queueResponses(commitSignal === 4990 ? 4980 : 4981);
+controller.Tick();
+assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [1, 2, 0, 1]);
+assert.strictEqual(controller.GetApplyStatusText(), '');
+assert.strictEqual(controller.CanApply(), false);
+
+function applyAndReachSettingFailure(failureResponse) {
+    setNow(0);
+    clearCalls();
+    const failedEnvironment = makeEnvironment();
+    const failedController = failedEnvironment.controller;
+    initialize(failedController, [0, 0, 0, 0]);
+    failedController.ToggleSetting(3);
+    failedController.ApplyChanges();
+    queueResponses(failureResponse);
+    failedController.Tick();
+    const rollbackSignal = settingSignals()[settingSignals().length - 1];
+    assert.ok(rollbackSignal === 4970 || rollbackSignal === 4971);
+    return { controller: failedController, rollbackSignal };
+}
+
+let failureEnvironment = applyAndReachSettingFailure(4299);
+queueResponses(failureEnvironment.rollbackSignal === 4970 ? 4960 : 4961);
+failureEnvironment.controller.Tick();
+assert.strictEqual(failureEnvironment.controller.GetApplyStatusText(), 'Apply Failed');
+assert.strictEqual(failureEnvironment.controller.Settings[0].DraftIndex, 1);
+assert.strictEqual(failureEnvironment.controller.Settings[0].InitialIndex, 0);
+assert.strictEqual(failureEnvironment.controller.CanApply(), true);
+
+failureEnvironment = applyAndReachSettingFailure(4299);
+setNow(failureEnvironment.controller.CurrentPendingDeadline);
+failureEnvironment.controller.Tick();
+assert.strictEqual(settingSignals()[settingSignals().length - 1] === 4970 || settingSignals()[settingSignals().length - 1] === 4971, true);
+
+setNow(0);
+clearCalls();
+environment = makeEnvironment();
+controller = environment.controller;
+initialize(controller, [0, 0, 0, 0]);
+controller.ToggleSetting(3);
+controller.ApplyChanges();
+queueResponses(4231);
+controller.Tick();
+const commitFailureSignal = settingSignals()[settingSignals().length - 1];
+queueResponses(4989);
+controller.Tick();
+const commitRollbackSignal = settingSignals()[settingSignals().length - 1];
+assert.ok(commitRollbackSignal === 4970 || commitRollbackSignal === 4971);
+queueResponses(commitRollbackSignal === 4970 ? 4960 : 4961);
+controller.Tick();
+assert.strictEqual(controller.GetApplyStatusText(), 'Apply Failed');
+assert.strictEqual(controller.Settings[0].DraftIndex, 1);
+assert.strictEqual(controller.Settings[0].InitialIndex, 0);
+
+setNow(0);
+clearCalls();
+environment = makeEnvironment();
+controller = environment.controller;
+initialize(controller, [0, 0, 0, 0]);
+controller.ToggleSetting(3);
+controller.ApplyChanges();
+queueResponses(4231);
+controller.Tick();
+setNow(controller.CurrentPendingDeadline);
+controller.Tick();
+const timeoutRollbackSignal = settingSignals()[settingSignals().length - 1];
+assert.ok(timeoutRollbackSignal === 4970 || timeoutRollbackSignal === 4971);
+queueResponses(timeoutRollbackSignal === 4970 ? 4960 : 4961);
+controller.Tick();
+assert.strictEqual(controller.GetApplyStatusText(), 'Apply Failed');
+
+failureEnvironment = applyAndReachSettingFailure(4299);
+queueResponses(4969);
+failureEnvironment.controller.Tick();
+assert.strictEqual(failureEnvironment.controller.GetApplyStatusText(), 'Rollback Failed');
+assert.strictEqual(failureEnvironment.controller.RollbackLocked, true);
+assert.strictEqual(failureEnvironment.controller.CanApply(), false);
+assert.strictEqual(failureEnvironment.controller.CanEdit(3), false);
+
+failureEnvironment = applyAndReachSettingFailure(4299);
+setNow(failureEnvironment.controller.CurrentPendingDeadline);
+failureEnvironment.controller.Tick();
+assert.strictEqual(failureEnvironment.controller.GetApplyStatusText(), 'Rollback Failed');
+assert.strictEqual(failureEnvironment.controller.RollbackLocked, true);
+
+const lifecycleParent = { GraphicsOptionsController: undefined };
+const guardedActiveRow = loadRow(rowScripts[2], lifecycleParent);
+expectNoThrow(() => guardedActiveRow.Update(), 'active row update before controller assignment');
+expectNoThrow(() => guardedActiveRow.RunAction(), 'active row action before controller assignment');
+expectNoThrow(() => guardedActiveRow.Increment(), 'active row increment before controller assignment');
+expectNoThrow(() => guardedActiveRow.Decrement(), 'active row decrement before controller assignment');
+assert.strictEqual(guardedActiveRow.ItemText.text, 'Loading...');
+assert.strictEqual(guardedActiveRow.LeftClicker._visible, false);
+assert.strictEqual(guardedActiveRow.RightClicker._visible, false);
+const guardedApplyRow = loadRow(rowScripts[14], lifecycleParent);
+expectNoThrow(() => guardedApplyRow.Update(), 'apply row update before controller assignment');
+expectNoThrow(() => guardedApplyRow.RunAction(), 'apply row action before controller assignment');
+assert.strictEqual(guardedApplyRow.ItemText.text, '');
+assert.strictEqual(guardedApplyRow.ItemText._alpha, 40);
+assert.strictEqual(guardedApplyRow.Label._alpha, 40);
+const sparseActiveRow = { _parent: lifecycleParent };
+expectNoThrow(() => new Function(rowScripts[2].slice(rowScripts[2].indexOf('{') + 1, rowScripts[2].lastIndexOf('}'))).call(sparseActiveRow), 'sparse active row load before controller assignment');
+const sparseApplyRow = { _parent: lifecycleParent };
+expectNoThrow(() => new Function(rowScripts[14].slice(rowScripts[14].indexOf('{') + 1, rowScripts[14].lastIndexOf('}'))).call(sparseApplyRow), 'sparse apply row load before controller assignment');
+
+global.ReturnFromScreen = () => {};
+expectNoThrow(() => new Function(cancelBody).call(lifecycleParent), 'CancelScreen before controller assignment');
+const lifecycleEnvironment = makeEnvironment();
+lifecycleEnvironment.screen.Tick = () => {};
+expectNoThrow(() => new Function(cancelBody).call(lifecycleEnvironment.screen), 'CancelScreen with controller');
+assert.strictEqual(lifecycleEnvironment.screen.Tick, undefined);
+const tickHook = new Function('return function(){' + tickBody + '}')();
+const tickScreen = { GraphicsOptionsController: undefined };
+expectNoThrow(() => tickHook.call(tickScreen), 'Tick hook before controller assignment');
+tickScreen.GraphicsOptionsController = { Tick() { this.called = true; } };
+tickHook.call(tickScreen);
+assert.strictEqual(tickScreen.GraphicsOptionsController.called, true);
+
+console.log('STATE_MACHINE_PASS');
+'@
+$HarnessSource = $HarnessSource.Replace('__CONTROLLER_SOURCE__', $ControllerSource).Replace('__ROW_SCRIPTS__', $RowScriptsJson).Replace('__CANCEL_BODY__', $CancelBodyJson).Replace('__TICK_BODY__', $TickBodyJson)
+$HarnessRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('BatmanGraphicsShellStateMachine-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $HarnessRoot -Force | Out-Null
+try {
+    $HarnessPath = Join-Path $HarnessRoot 'state-machine.js'
+    Set-Content -LiteralPath $HarnessPath -Value $HarnessSource -Encoding UTF8
+    $HarnessOutput = @(& $NodeCommand.Source $HarnessPath 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Batman graphics shell state-machine harness failed (exit code $LASTEXITCODE):`n$($HarnessOutput -join [Environment]::NewLine)"
+    }
+    if (($HarnessOutput -join [Environment]::NewLine).IndexOf('STATE_MACHINE_PASS', [System.StringComparison]::Ordinal) -lt 0) {
+        throw "Batman graphics shell state-machine harness did not report STATE_MACHINE_PASS:`n$($HarnessOutput -join [Environment]::NewLine)"
+    }
+    Write-Output 'STATE_MACHINE_PASS'
+} finally {
+    if (Test-Path -LiteralPath $HarnessRoot) {
+        Remove-Item -LiteralPath $HarnessRoot -Recurse -Force
     }
 }
 

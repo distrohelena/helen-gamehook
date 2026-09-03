@@ -112,7 +112,7 @@ internal static class GraphicsOptionsShellScriptTemplates
                  {RowIndex:3,Name:"VSync",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4200,ReadResponseBase:4210,WriteRequestBase:4220,WriteAcknowledgementBase:4230,FailureResponse:4299,InitialIndex:-1,DraftIndex:-1},
                  {RowIndex:4,Name:"MSAA",Values:new Array("Off","2x","4x","8x","16x"),ConfigValues:new Array(0,1,2,3,5),ReadRequest:4300,ReadResponseBase:4310,WriteRequestBase:4320,WriteAcknowledgementBase:4330,FailureResponse:4399,InitialIndex:-1,DraftIndex:-1},
                  {RowIndex:13,Name:"PhysX",Values:new Array("Off","Normal","High"),ConfigValues:new Array(0,1,2),ReadRequest:4400,ReadResponseBase:4410,WriteRequestBase:4420,WriteAcknowledgementBase:4430,FailureResponse:4499,InitialIndex:-1,DraftIndex:-1},
-                 {RowIndex:14,Name:"NVIDIA Stereo 3D",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4500,ReadResponseBase:4510,WriteRequestBase:4520,WriteAcknowledgementBase:4530,FailureResponse:4599,InitialIndex:-1,DraftIndex:-1}
+                 {RowIndex:14,Name:"Stereo 3D",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4500,ReadResponseBase:4510,WriteRequestBase:4520,WriteAcknowledgementBase:4530,FailureResponse:4599,InitialIndex:-1,DraftIndex:-1}
               );
               this.ActiveSettingsByRow = new Object();
               var settingIndex = 0;
@@ -173,6 +173,24 @@ internal static class GraphicsOptionsShellScriptTemplates
            function CanApply()
            {
               return this.InitializationComplete && !this.InitializationFailed && !this.ApplyInProgress && !this.InteractionBlocked && !this.RollbackLocked && this.IsDirty();
+           }
+           function NormalizeTimerValue(value)
+           {
+              var normalizedValue = value % 4294967296;
+              if(normalizedValue < 0)
+              {
+                 normalizedValue = normalizedValue + 4294967296;
+              }
+              return normalizedValue;
+           }
+           function IsDeadlineReached(deadline)
+           {
+              var elapsed = this.NormalizeTimerValue(getTimer()) - this.NormalizeTimerValue(deadline);
+              if(elapsed < 0)
+              {
+                 elapsed = elapsed + 4294967296;
+              }
+              return elapsed < 2147483648;
            }
            function BeginInitialization()
            {
@@ -246,7 +264,7 @@ internal static class GraphicsOptionsShellScriptTemplates
            }
            function PollInitialization()
            {
-              if(getTimer() >= this.InitializationDeadline)
+              if(this.IsDeadlineReached(this.InitializationDeadline))
               {
                  this.FailInitialization();
                  return undefined;
@@ -383,7 +401,7 @@ internal static class GraphicsOptionsShellScriptTemplates
            }
            function PollTransaction()
            {
-              if(getTimer() >= this.CurrentPendingDeadline)
+              if(this.IsDeadlineReached(this.CurrentPendingDeadline))
               {
                  if(this.CurrentPendingOperation == "rollback")
                  {
@@ -510,12 +528,15 @@ internal static class GraphicsOptionsShellScriptTemplates
               this.CurrentPendingSetting = undefined;
               this.CurrentPendingCode = undefined;
               this.CurrentPendingDeadline = undefined;
-              this.Screen.onEnterFrame = undefined;
+              this.Screen.Tick = undefined;
            }
         }
         function CancelScreen()
         {
-           this.GraphicsOptionsController.Destroy();
+           if(this.GraphicsOptionsController != undefined)
+           {
+              this.GraphicsOptionsController.Destroy();
+           }
            ReturnFromScreen();
         }
         flash.external.ExternalInterface.call("FE_SetActiveScreenName","Graphics Options");
@@ -546,9 +567,12 @@ internal static class GraphicsOptionsShellScriptTemplates
         this.AddItem(GraphicsRow14,12,14,-1,-1);
         this.AddItem(GraphicsRow15,13,0,-1,-1);
         GraphicsRow15._visible = true;
-        this.onEnterFrame = function()
+        this.Tick = function()
         {
-           this.GraphicsOptionsController.Tick();
+           if(this.GraphicsOptionsController != undefined)
+           {
+              this.GraphicsOptionsController.Tick();
+           }
         };
         this.GraphicsOptionsController.BeginInitialization();
         _rotation = -2;
@@ -586,7 +610,7 @@ internal static class GraphicsOptionsShellScriptTemplates
             CreateRowClipAction("Spherical Harmonic Lighting", "Not active", true),
             CreateRowClipAction("Ambient Occlusion", "Not active", true),
             CreateActiveRowClipAction("PhysX", 13, ["Off", "Normal", "High"]),
-            CreateActiveRowClipAction("NVIDIA Stereo 3D", 14, ["Off", "On"]),
+            CreateActiveRowClipAction("Stereo 3D", 14, ["Off", "On"]),
             CreateApplyRowClipAction()
         ];
     }
@@ -620,6 +644,22 @@ internal static class GraphicsOptionsShellScriptTemplates
            this.Default = -1;
            this.Update = function()
            {
+              if(_parent.GraphicsOptionsController == undefined)
+              {
+                 if(this.ItemText != undefined)
+                 {
+                    this.ItemText.text = "Loading...";
+                 }
+                 if(this.LeftClicker != undefined)
+                 {
+                    this.LeftClicker._visible = false;
+                 }
+                 if(this.RightClicker != undefined)
+                 {
+                    this.RightClicker._visible = false;
+                 }
+                 return undefined;
+              }
               if(this.Label != undefined && this.Label.Label != undefined && this.Label.Label.Text != undefined)
               {
                  this.Label.Label.Text.text = "{{escapedLabel}}";
@@ -653,15 +693,24 @@ internal static class GraphicsOptionsShellScriptTemplates
            };
            this.RunAction = function()
            {
-              _parent.GraphicsOptionsController.ToggleSetting(this.RowIndex);
+              if(_parent.GraphicsOptionsController != undefined)
+              {
+                 _parent.GraphicsOptionsController.ToggleSetting(this.RowIndex);
+              }
            };
            this.Increment = function()
            {
-              _parent.GraphicsOptionsController.IncrementSetting(this.RowIndex);
+              if(_parent.GraphicsOptionsController != undefined)
+              {
+                 _parent.GraphicsOptionsController.IncrementSetting(this.RowIndex);
+              }
            };
            this.Decrement = function()
            {
-              _parent.GraphicsOptionsController.DecrementSetting(this.RowIndex);
+              if(_parent.GraphicsOptionsController != undefined)
+              {
+                 _parent.GraphicsOptionsController.DecrementSetting(this.RowIndex);
+              }
            };
            this.ShowPrompt = function()
            {
@@ -698,6 +747,28 @@ internal static class GraphicsOptionsShellScriptTemplates
            this.Default = 0;
            this.Update = function()
            {
+              if(_parent.GraphicsOptionsController == undefined)
+              {
+                 if(this.ItemText != undefined)
+                 {
+                    this.ItemText.text = "";
+                    this.ItemText._alpha = 40;
+                 }
+                 if(this.Label != undefined)
+                 {
+                    this.Label._alpha = 40;
+                 }
+                 if(this.LeftClicker != undefined)
+                 {
+                    this.LeftClicker._visible = false;
+                 }
+                 if(this.RightClicker != undefined)
+                 {
+                    this.RightClicker._visible = false;
+                 }
+                 this._visible = true;
+                 return undefined;
+              }
               if(this.Label != undefined && this.Label.Label != undefined && this.Label.Label.Text != undefined)
               {
                  this.Label.Label.Text.text = "Apply Changes";
@@ -725,7 +796,10 @@ internal static class GraphicsOptionsShellScriptTemplates
            };
            this.RunAction = function()
            {
-              _parent.GraphicsOptionsController.ApplyChanges();
+              if(_parent.GraphicsOptionsController != undefined)
+              {
+                 _parent.GraphicsOptionsController.ApplyChanges();
+              }
            };
            this.Increment = function()
            {
