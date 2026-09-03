@@ -1461,16 +1461,28 @@ function settingSignals() {
 function makeScreen() {
     const screen = {
         blockStates: [],
-        inputBlocked: false,
+        bBlockInput: false,
+        bLockInput: false,
         rowUpdates: 0,
         reUpdates: 0,
         BackScreen: 'OptionsMenu',
         BackScreenIndex: 1,
-        BackAvailable: true,
         outTransitionStarted: false,
         returnFromScreenCount: 0,
-        BlockInput(value) { this.blockStates.push(value); this.inputBlocked = value; },
+        BlockInput(value) {
+            this.blockStates.push(value);
+            this.bBlockInput = value;
+            this.bLockInput = value;
+        },
         ReUpdate() { this.reUpdates += 1; },
+        TryBack() {
+            if (this.bBlockInput || this.bLockInput || this.BackScreen === '') {
+                return false;
+            }
+            new Function(cancelBody).call(this);
+            return true;
+        },
+        onKeyDown() { return this.TryBack(); },
         onEnterFrame() { this.Tick(); }
     };
     for (let rowIndex = 1; rowIndex <= 15; rowIndex += 1) {
@@ -1502,16 +1514,16 @@ function initialize(controller, values) {
     assert.strictEqual(controller.CanApply(), false);
 }
 
-function loadRow(script, parent) {
+function loadRow(script, parent, children) {
     const bodyStart = script.indexOf('{');
     const bodyEnd = script.lastIndexOf('}');
-    const row = {
+    const row = Object.assign({
         _parent: parent,
         Label: { Label: { Text: { text: '' } } },
         ItemText: { text: '', _alpha: 0 },
         LeftClicker: { _visible: true },
         RightClicker: { _visible: true }
-    };
+    }, children || {});
     global._parent = parent;
     const load = new Function(script.slice(bodyStart + 1, bodyEnd));
     load.call(row);
@@ -1558,8 +1570,10 @@ assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex),
 assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), [-1, -1, -1, -1]);
 assert.strictEqual(controller.CanApply(), false);
 assert.strictEqual(controller.CanEdit(3), false);
-assert.strictEqual(environment.screen.inputBlocked, false);
-assert.strictEqual(environment.screen.BackAvailable, true);
+assert.strictEqual(environment.screen.bBlockInput, false);
+assert.strictEqual(environment.screen.bLockInput, false);
+assert.strictEqual(environment.screen.TryBack(), true);
+assert.strictEqual(environment.screen.returnFromScreenCount, 1);
 
 setNow(5000);
 assert.strictEqual(controller.IsDeadlineReached(10000), false);
@@ -1609,8 +1623,11 @@ controller.IncrementSetting(4);
 controller.IncrementSetting(4);
 controller.ToggleSetting(3);
 controller.ApplyChanges();
-assert.strictEqual(environment.screen.inputBlocked, true);
-assert.strictEqual(environment.screen.BackAvailable, true);
+assert.strictEqual(environment.screen.bBlockInput, true);
+assert.strictEqual(environment.screen.bLockInput, true);
+assert.deepStrictEqual(environment.screen.blockStates.slice(-1), [true]);
+assert.strictEqual(environment.screen.TryBack(), false);
+assert.strictEqual(environment.screen.returnFromScreenCount, 0);
 assert.deepStrictEqual(settingSignals().slice(4), [4221]);
 queueResponses(4230);
 controller.Tick();
@@ -1638,8 +1655,9 @@ controller.Tick();
 assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [1, 2, 0, 1]);
 assert.strictEqual(controller.GetApplyStatusText(), '');
 assert.strictEqual(controller.CanApply(), false);
-assert.strictEqual(environment.screen.inputBlocked, false);
-assert.strictEqual(environment.screen.BackAvailable, true);
+assert.strictEqual(environment.screen.bBlockInput, false);
+assert.strictEqual(environment.screen.bLockInput, false);
+assert.deepStrictEqual(environment.screen.blockStates.slice(-1), [false]);
 
 controller.ToggleSetting(3);
 controller.ApplyChanges();
@@ -1651,8 +1669,10 @@ assert.strictEqual(secondCommitSignal, 4990);
 queueResponses(4980);
 controller.Tick();
 assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), [0, 2, 0, 1]);
-assert.strictEqual(environment.screen.inputBlocked, false);
-assert.strictEqual(environment.screen.BackAvailable, true);
+assert.strictEqual(environment.screen.bBlockInput, false);
+assert.strictEqual(environment.screen.bLockInput, false);
+assert.strictEqual(environment.screen.onKeyDown(), true);
+assert.strictEqual(environment.screen.returnFromScreenCount, 1);
 
 function applyAndReachSettingFailure(failureResponse) {
     setNow(0);
@@ -1676,8 +1696,9 @@ assert.strictEqual(failureEnvironment.controller.GetApplyStatusText(), 'Apply Fa
 assert.strictEqual(failureEnvironment.controller.Settings[0].DraftIndex, 1);
 assert.strictEqual(failureEnvironment.controller.Settings[0].InitialIndex, 0);
 assert.strictEqual(failureEnvironment.controller.CanApply(), true);
-assert.strictEqual(failureEnvironment.screen.inputBlocked, false);
-assert.strictEqual(failureEnvironment.screen.BackAvailable, true);
+assert.strictEqual(failureEnvironment.screen.bBlockInput, false);
+assert.strictEqual(failureEnvironment.screen.bLockInput, false);
+assert.strictEqual(failureEnvironment.screen.TryBack(), true);
 
 setNow(0);
 clearCalls();
@@ -1703,8 +1724,9 @@ assert.strictEqual(settingSignals()[settingSignals().length - 1], 4970);
 queueResponses(4960);
 controller.Tick();
 assert.strictEqual(controller.GetApplyStatusText(), 'Apply Failed');
-assert.strictEqual(environment.screen.inputBlocked, false);
-assert.strictEqual(environment.screen.BackAvailable, true);
+assert.strictEqual(environment.screen.bBlockInput, false);
+assert.strictEqual(environment.screen.bLockInput, false);
+assert.strictEqual(environment.screen.TryBack(), true);
 
 failureEnvironment = applyAndReachSettingFailure(4299);
 setNow(failureEnvironment.controller.CurrentPendingDeadline);
@@ -1728,8 +1750,9 @@ assert.ok(commitRollbackSignal === 4970 || commitRollbackSignal === 4971);
 queueResponses(commitRollbackSignal === 4970 ? 4960 : 4961);
 controller.Tick();
 assert.strictEqual(controller.GetApplyStatusText(), 'Apply Failed');
-assert.strictEqual(environment.screen.inputBlocked, false);
-assert.strictEqual(environment.screen.BackAvailable, true);
+assert.strictEqual(environment.screen.bBlockInput, false);
+assert.strictEqual(environment.screen.bLockInput, false);
+assert.strictEqual(environment.screen.TryBack(), true);
 assert.strictEqual(controller.Settings[0].DraftIndex, 1);
 assert.strictEqual(controller.Settings[0].InitialIndex, 0);
 
@@ -1749,28 +1772,39 @@ assert.ok(timeoutRollbackSignal === 4970 || timeoutRollbackSignal === 4971);
 queueResponses(timeoutRollbackSignal === 4970 ? 4960 : 4961);
 controller.Tick();
 assert.strictEqual(controller.GetApplyStatusText(), 'Apply Failed');
-assert.strictEqual(environment.screen.inputBlocked, false);
-assert.strictEqual(environment.screen.BackAvailable, true);
+assert.strictEqual(environment.screen.bBlockInput, false);
+assert.strictEqual(environment.screen.bLockInput, false);
+assert.strictEqual(environment.screen.TryBack(), true);
 
 failureEnvironment = applyAndReachSettingFailure(4299);
+const rollbackFailureInitial = failureEnvironment.controller.Settings.map(setting => setting.InitialIndex);
+const rollbackFailureDraft = failureEnvironment.controller.Settings.map(setting => setting.DraftIndex);
 queueResponses(4969);
 failureEnvironment.controller.Tick();
 assert.strictEqual(failureEnvironment.controller.GetApplyStatusText(), 'Rollback Failed');
 assert.strictEqual(failureEnvironment.controller.RollbackLocked, true);
 assert.strictEqual(failureEnvironment.controller.CanApply(), false);
 assert.strictEqual(failureEnvironment.controller.CanEdit(3), false);
-assert.strictEqual(failureEnvironment.screen.inputBlocked, false);
-assert.strictEqual(failureEnvironment.screen.BackAvailable, true);
+assert.deepStrictEqual(failureEnvironment.controller.Settings.map(setting => setting.InitialIndex), rollbackFailureInitial);
+assert.deepStrictEqual(failureEnvironment.controller.Settings.map(setting => setting.DraftIndex), rollbackFailureDraft);
+assert.strictEqual(failureEnvironment.screen.bBlockInput, false);
+assert.strictEqual(failureEnvironment.screen.bLockInput, false);
+assert.strictEqual(failureEnvironment.screen.TryBack(), true);
 
 failureEnvironment = applyAndReachSettingFailure(4299);
+const rollbackTimeoutInitial = failureEnvironment.controller.Settings.map(setting => setting.InitialIndex);
+const rollbackTimeoutDraft = failureEnvironment.controller.Settings.map(setting => setting.DraftIndex);
 setNow(failureEnvironment.controller.CurrentPendingDeadline);
 failureEnvironment.controller.Tick();
 assert.strictEqual(failureEnvironment.controller.GetApplyStatusText(), 'Rollback Failed');
 assert.strictEqual(failureEnvironment.controller.RollbackLocked, true);
-assert.strictEqual(failureEnvironment.screen.inputBlocked, false);
-assert.strictEqual(failureEnvironment.screen.BackAvailable, true);
+assert.deepStrictEqual(failureEnvironment.controller.Settings.map(setting => setting.InitialIndex), rollbackTimeoutInitial);
+assert.deepStrictEqual(failureEnvironment.controller.Settings.map(setting => setting.DraftIndex), rollbackTimeoutDraft);
+assert.strictEqual(failureEnvironment.screen.bBlockInput, false);
+assert.strictEqual(failureEnvironment.screen.bLockInput, false);
+assert.strictEqual(failureEnvironment.screen.TryBack(), true);
 
-const lifecycleParent = { GraphicsOptionsController: undefined, BackAvailable: true, outTransitionStarted: false, returnFromScreenCount: 0 };
+const lifecycleParent = { GraphicsOptionsController: undefined, outTransitionStarted: false, returnFromScreenCount: 0 };
 const guardedActiveRow = loadRow(rowScripts[2], lifecycleParent);
 expectNoThrow(() => guardedActiveRow.Update(), 'active row update before controller assignment');
 expectNoThrow(() => guardedActiveRow.RunAction(), 'active row action before controller assignment');
@@ -1792,15 +1826,58 @@ const sparseApplyRow = { _parent: lifecycleParent };
 expectNoThrow(() => new Function(rowScripts[14].slice(rowScripts[14].indexOf('{') + 1, rowScripts[14].lastIndexOf('}'))).call(sparseApplyRow), 'sparse apply row load before controller assignment');
 
 const partialEnvironment = makeEnvironment();
+global._parent = partialEnvironment.screen;
 const partialActiveRow = { _parent: partialEnvironment.screen, ItemText: { text: '' } };
 const partialActiveLoad = new Function(rowScripts[2].slice(rowScripts[2].indexOf('{') + 1, rowScripts[2].lastIndexOf('}')));
 expectNoThrow(() => partialActiveLoad.call(partialActiveRow), 'partial active row load with controller initializing');
 const partialApplyRow = { _parent: partialEnvironment.screen, ItemText: { text: '', _alpha: 0 } };
 const partialApplyLoad = new Function(rowScripts[14].slice(rowScripts[14].indexOf('{') + 1, rowScripts[14].lastIndexOf('}')));
 expectNoThrow(() => partialApplyLoad.call(partialApplyRow), 'partial apply row load with controller initializing');
+const activeMissingItemText = loadRow(rowScripts[2], partialEnvironment.screen, { ItemText: undefined });
+const activeMissingLabel = loadRow(rowScripts[2], partialEnvironment.screen, { Label: undefined });
+const activeMissingLeftClicker = loadRow(rowScripts[2], partialEnvironment.screen, { LeftClicker: undefined });
+const activeMissingRightClicker = loadRow(rowScripts[2], partialEnvironment.screen, { RightClicker: undefined });
+const applyMissingItemText = loadRow(rowScripts[14], partialEnvironment.screen, { ItemText: undefined });
+const applyMissingLabel = loadRow(rowScripts[14], partialEnvironment.screen, { Label: undefined });
+const applyMissingLeftClicker = loadRow(rowScripts[14], partialEnvironment.screen, { LeftClicker: undefined });
+const applyMissingRightClicker = loadRow(rowScripts[14], partialEnvironment.screen, { RightClicker: undefined });
+assert.strictEqual(activeMissingItemText.LeftClicker._visible, false);
+assert.strictEqual(activeMissingItemText.RightClicker._visible, false);
+assert.strictEqual(activeMissingLabel.ItemText.text, 'Loading...');
+assert.strictEqual(activeMissingLabel.LeftClicker._visible, false);
+assert.strictEqual(activeMissingLabel.RightClicker._visible, false);
+assert.strictEqual(applyMissingItemText.Label._alpha, 40);
+assert.strictEqual(applyMissingLabel.ItemText.text, '');
+assert.strictEqual(applyMissingLabel.ItemText._alpha, 40);
 initialize(partialEnvironment.controller, [0, 0, 0, 0]);
 expectNoThrow(() => partialActiveRow.Update(), 'partial active row update after controller initialization');
 expectNoThrow(() => partialApplyRow.Update(), 'partial apply row update after controller initialization');
+expectNoThrow(() => activeMissingItemText.Update(), 'active row update without ItemText');
+expectNoThrow(() => activeMissingLabel.Update(), 'active row update without Label');
+expectNoThrow(() => activeMissingLeftClicker.Update(), 'active row update without LeftClicker');
+expectNoThrow(() => activeMissingRightClicker.Update(), 'active row update without RightClicker');
+expectNoThrow(() => applyMissingItemText.Update(), 'apply row update without ItemText');
+expectNoThrow(() => applyMissingLabel.Update(), 'apply row update without Label');
+expectNoThrow(() => applyMissingLeftClicker.Update(), 'apply row update without LeftClicker');
+expectNoThrow(() => applyMissingRightClicker.Update(), 'apply row update without RightClicker');
+assert.strictEqual(activeMissingItemText.Label.Label.Text.text, 'VSync');
+assert.strictEqual(activeMissingItemText.LeftClicker._visible, false);
+assert.strictEqual(activeMissingItemText.RightClicker._visible, true);
+assert.strictEqual(activeMissingLabel.ItemText.text, 'Off');
+assert.strictEqual(activeMissingLabel.LeftClicker._visible, false);
+assert.strictEqual(activeMissingLabel.RightClicker._visible, true);
+assert.strictEqual(activeMissingLeftClicker.ItemText.text, 'Off');
+assert.strictEqual(activeMissingLeftClicker.RightClicker._visible, true);
+assert.strictEqual(activeMissingRightClicker.ItemText.text, 'Off');
+assert.strictEqual(activeMissingRightClicker.LeftClicker._visible, false);
+assert.strictEqual(applyMissingItemText.Label.Label.Text.text, 'Apply Changes');
+assert.strictEqual(applyMissingItemText.Label._alpha, 40);
+assert.strictEqual(applyMissingLabel.ItemText.text, '');
+assert.strictEqual(applyMissingLabel.ItemText._alpha, 40);
+assert.strictEqual(applyMissingLeftClicker.ItemText.text, '');
+assert.strictEqual(applyMissingLeftClicker.Label._alpha, 40);
+assert.strictEqual(applyMissingRightClicker.ItemText.text, '');
+assert.strictEqual(applyMissingRightClicker.Label._alpha, 40);
 
 currentScreen = lifecycleParent;
 expectNoThrow(() => new Function(cancelBody).call(lifecycleParent), 'CancelScreen before controller assignment');
@@ -1808,11 +1885,14 @@ const lifecycleEnvironment = makeEnvironment();
 initialize(lifecycleEnvironment.controller, [0, 0, 0, 0]);
 lifecycleEnvironment.controller.ToggleSetting(3);
 lifecycleEnvironment.controller.ApplyChanges();
-assert.strictEqual(lifecycleEnvironment.screen.inputBlocked, true);
+assert.strictEqual(lifecycleEnvironment.screen.bBlockInput, true);
+assert.strictEqual(lifecycleEnvironment.screen.bLockInput, true);
+assert.strictEqual(lifecycleEnvironment.screen.TryBack(), false);
+assert.strictEqual(lifecycleEnvironment.screen.returnFromScreenCount, 0);
 const callsBeforeCancel = calls.length;
 expectNoThrow(() => new Function(cancelBody).call(lifecycleEnvironment.screen), 'CancelScreen with controller');
-assert.strictEqual(lifecycleEnvironment.screen.inputBlocked, false);
-assert.strictEqual(lifecycleEnvironment.screen.BackAvailable, true);
+assert.strictEqual(lifecycleEnvironment.screen.bBlockInput, false);
+assert.strictEqual(lifecycleEnvironment.screen.bLockInput, false);
 assert.strictEqual(lifecycleEnvironment.screen.outTransitionStarted, true);
 assert.strictEqual(lifecycleEnvironment.screen.returnFromScreenCount, 1);
 expectNoThrow(() => lifecycleEnvironment.screen.onEnterFrame(), 'inherited onEnterFrame during exit transition');
@@ -1824,6 +1904,13 @@ expectNoThrow(() => tickScreen.onEnterFrame(), 'Tick hook before controller assi
 tickScreen.GraphicsOptionsController = { Tick() { this.called = true; } };
 expectNoThrow(() => tickScreen.onEnterFrame(), 'Tick hook through inherited onEnterFrame');
 assert.strictEqual(tickScreen.GraphicsOptionsController.called, true);
+const lockedBackEnvironment = makeEnvironment();
+lockedBackEnvironment.screen.bLockInput = true;
+assert.strictEqual(lockedBackEnvironment.screen.TryBack(), false);
+assert.strictEqual(lockedBackEnvironment.screen.returnFromScreenCount, 0);
+lockedBackEnvironment.screen.bLockInput = false;
+assert.strictEqual(lockedBackEnvironment.screen.onKeyDown(), true);
+assert.strictEqual(lockedBackEnvironment.screen.returnFromScreenCount, 1);
 
 console.log('STATE_MACHINE_PASS');
 '@
