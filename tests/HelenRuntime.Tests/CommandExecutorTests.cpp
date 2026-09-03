@@ -278,15 +278,17 @@ namespace
 
     /**
      * @brief Builds a unique temporary `BmEngine.ini` path for the current test process.
+     * @param scenario_name Isolated child-directory name that keeps one fixture scenario separate from other scenarios.
      * @return Absolute temporary path that the current test may create and overwrite freely.
      */
-    std::filesystem::path CreateTemporaryBatmanGraphicsIniPath()
+    std::filesystem::path CreateTemporaryBatmanGraphicsIniPath(std::string_view scenario_name = "default")
     {
         const DWORD process_id = GetCurrentProcessId();
         const std::filesystem::path root =
             std::filesystem::temp_directory_path() /
             "HelenRuntimeTests" /
-            ("batman-graphics-" + std::to_string(process_id));
+            ("batman-graphics-" + std::to_string(process_id)) /
+            std::string(scenario_name);
         std::filesystem::create_directories(root);
         return root / "BmEngine.ini";
     }
@@ -336,6 +338,41 @@ namespace
             "DisableSphericalHarmonicLights=False\r\n"
             "AmbientOcclusion=True\r\n"
             "Stereo=False\r\n";
+    }
+
+    /**
+     * @brief Builds launcher-owned graphics text with deliberate Group 1 values that differ from generated `BmEngine.ini`.
+     * @param include_stereo True when the complete required draft should include the `Stereo` setting; false creates an incomplete fixture.
+     * @return UTF-8 fixture text whose values exercise launcher authority and complete-draft validation.
+     */
+    std::string CreateBatmanLauncherOwnedGraphicsIniText(bool include_stereo)
+    {
+        std::string text =
+            "[Engine.Engine]\r\n"
+            "PhysXLevel=1\r\n"
+            "\r\n"
+            "[SystemSettings]\r\n"
+            "Fullscreen=False\r\n"
+            "UseVsync=True\r\n"
+            "ResX=2560\r\n"
+            "ResY=1440\r\n"
+            "MaxMultisamples=8\r\n"
+            "DetailMode=2\r\n"
+            "Bloom=True\r\n"
+            "DynamicShadows=True\r\n"
+            "MotionBlur=True\r\n"
+            "Distortion=True\r\n"
+            "FogVolumes=True\r\n"
+            "DisableSphericalHarmonicLights=False\r\n"
+            "AmbientOcclusion=True\r\n";
+
+        if (include_stereo)
+        {
+            text += "Stereo=True\r\n";
+        }
+
+        text += "LauncherOwnedSentinel=PreserveMe\r\n";
+        return text;
     }
 
     /**
@@ -525,7 +562,7 @@ void RunCommandExecutorTests()
         const std::filesystem::path batman_ini_path = CreateTemporaryBatmanGraphicsIniPath();
         const std::filesystem::path batman_user_ini_path = GetSiblingBatmanUserEngineIniPath(batman_ini_path);
         WriteAllText(batman_ini_path, CreateBatmanGraphicsIniText());
-        WriteAsciiAsUtf16LittleEndianText(batman_user_ini_path, CreateBatmanGraphicsIniText() + "LauncherOwnedSentinel=PreserveMe\r\n");
+        WriteAsciiAsUtf16LittleEndianText(batman_user_ini_path, CreateBatmanLauncherOwnedGraphicsIniText(true));
 
         helen::CommandDispatcher batman_dispatcher;
         RegisterBatmanGraphicsConfigKeys(batman_dispatcher);
@@ -543,11 +580,12 @@ void RunCommandExecutorTests()
         Expect(batman_dispatcher.TryGetInt("fullscreen") == 0, "Batman graphics load read the wrong fullscreen state.");
         Expect(batman_dispatcher.TryGetInt("resolutionWidth") == 2560, "Batman graphics load read the wrong resolution width.");
         Expect(batman_dispatcher.TryGetInt("resolutionHeight") == 1440, "Batman graphics load read the wrong resolution height.");
-        Expect(batman_dispatcher.TryGetInt("vsync") == 0, "Batman graphics load read the wrong VSync state.");
-        Expect(batman_dispatcher.TryGetInt("msaa") == 2, "Batman graphics load read the wrong MSAA state.");
+        Expect(batman_dispatcher.TryGetInt("vsync") == 1, "Batman graphics load read the wrong VSync state.");
+        Expect(batman_dispatcher.TryGetInt("msaa") == 3, "Batman graphics load read the wrong MSAA state.");
         Expect(batman_dispatcher.TryGetInt("detailLevel") == 3, "Batman graphics load failed to derive the Very High detail preset.");
         Expect(batman_dispatcher.TryGetInt("ambientOcclusion") == 1, "Batman graphics load read the wrong ambient-occlusion state.");
-        Expect(batman_dispatcher.TryGetInt("physx") == 2, "Batman graphics load read the wrong PhysX state.");
+        Expect(batman_dispatcher.TryGetInt("physx") == 1, "Batman graphics load read the wrong PhysX state.");
+        Expect(batman_dispatcher.TryGetInt("stereo") == 1, "Batman graphics load read the wrong stereo state.");
 
         Expect(batman_dispatcher.TrySetInt("detailLevel", 1), "Failed to seed the Batman medium detail-level preset.");
         Expect(batman_executor.RunCommand("syncBatmanGraphicsPreset"), "Batman preset-sync command unexpectedly failed.");
@@ -591,5 +629,37 @@ void RunCommandExecutorTests()
         Expect(saved_ini_text.find("AmbientOcclusion=False") != std::string::npos, "Batman graphics apply did not persist ambient occlusion for Medium.");
         Expect(saved_ini_text.find("PhysXLevel=1") != std::string::npos, "Batman graphics apply did not persist PhysX.");
         Expect(saved_ini_text.find("Stereo=True") != std::string::npos, "Batman graphics apply did not persist stereo.");
+    }
+
+    {
+        const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath("missing-user-engine");
+        const std::filesystem::path user_ini_path = GetSiblingBatmanUserEngineIniPath(engine_ini_path);
+        WriteAllText(engine_ini_path, CreateBatmanGraphicsIniText());
+        std::error_code remove_error;
+        std::filesystem::remove(user_ini_path, remove_error);
+        Expect(!remove_error && !std::filesystem::exists(user_ini_path), "Missing UserEngine.ini fixture could not be isolated.");
+
+        helen::CommandDispatcher batman_dispatcher;
+        RegisterBatmanGraphicsConfigKeys(batman_dispatcher);
+        helen::RuntimeValueStore batman_runtime_values;
+        helen::BatmanGraphicsConfigService batman_graphics_config_service(engine_ini_path);
+        helen::CommandExecutor batman_executor(batman_dispatcher, batman_runtime_values, batman_graphics_config_service);
+        Expect(batman_executor.RegisterCommand(CreateLoadBatmanGraphicsDraftCommand()), "Failed to register the missing-launcher-INI load command.");
+        Expect(!batman_executor.RunCommand("loadBatmanGraphicsDraftIntoConfig"), "Batman graphics load unexpectedly fell back to BmEngine.ini when UserEngine.ini was missing.");
+    }
+
+    {
+        const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath("incomplete-user-engine");
+        const std::filesystem::path user_ini_path = GetSiblingBatmanUserEngineIniPath(engine_ini_path);
+        WriteAllText(engine_ini_path, CreateBatmanGraphicsIniText());
+        WriteAsciiAsUtf16LittleEndianText(user_ini_path, CreateBatmanLauncherOwnedGraphicsIniText(false));
+
+        helen::CommandDispatcher batman_dispatcher;
+        RegisterBatmanGraphicsConfigKeys(batman_dispatcher);
+        helen::RuntimeValueStore batman_runtime_values;
+        helen::BatmanGraphicsConfigService batman_graphics_config_service(engine_ini_path);
+        helen::CommandExecutor batman_executor(batman_dispatcher, batman_runtime_values, batman_graphics_config_service);
+        Expect(batman_executor.RegisterCommand(CreateLoadBatmanGraphicsDraftCommand()), "Failed to register the incomplete-launcher-INI load command.");
+        Expect(!batman_executor.RunCommand("loadBatmanGraphicsDraftIntoConfig"), "Batman graphics load unexpectedly fell back to BmEngine.ini when UserEngine.ini was incomplete.");
     }
 }

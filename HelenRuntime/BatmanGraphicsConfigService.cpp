@@ -1508,20 +1508,22 @@ namespace helen
     }
 
     /**
-     * @brief Reads the current Batman graphics settings from `BmEngine.ini` into registered config keys.
+     * @brief Reads the current Batman graphics settings from launcher-owned `UserEngine.ini` into registered config keys.
      * @param dispatcher Config dispatcher that receives the normalized graphics draft values.
-     * @return True when every required INI value is present and every config key updates successfully; otherwise false.
+     * @return True when the sibling launcher INI can be decoded, every required value is present, and every config key updates successfully; otherwise false.
      */
     bool BatmanGraphicsConfigService::LoadIntoDispatcher(CommandDispatcher& dispatcher) const
     {
-        const std::optional<std::vector<std::string>> lines = TryReadAllLines(ini_path_);
-        if (!lines.has_value())
+        const std::filesystem::path user_ini_path = ini_path_.parent_path() / "UserEngine.ini";
+        const std::optional<IniTextDocument> user_document = TryReadIniDocument(user_ini_path);
+        if (!user_document.has_value())
         {
+            Logf(L"[graphics] Load failed: unable to read launcher INI path=%ls.", user_ini_path.wstring().c_str());
             return false;
         }
 
         BatmanGraphicsDraftState state;
-        if (!TryReadDraftStateFromIniLines(*lines, state))
+        if (!TryReadDraftStateFromIniLines(user_document->Lines, state))
         {
             return false;
         }
