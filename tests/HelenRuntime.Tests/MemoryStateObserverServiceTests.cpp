@@ -227,13 +227,12 @@ namespace
 
     /**
      * @brief Builds the sorted raw-value union accepted by every member of the Batman frontend control group.
-     * @return Complete sorted 116-value protocol union for the eleven settings, legacy 4101-4106 state values, and apply/rollback signals.
+     * @return Complete sorted 110-value protocol union for the eleven settings and apply/rollback transaction signals.
      * @remarks Keeping this list explicit makes omissions or accidental protocol reuse fail in the grouped fixture rather than being hidden by per-observer mappings.
      */
     std::vector<int> CreateCompleteBatmanGroupedProtocolUnion()
     {
         return {
-            4101, 4102, 4103, 4104, 4105, 4106,
             4200, 4210, 4211, 4220, 4221, 4230, 4231, 4299,
             4300, 4310, 4311, 4312, 4313, 4314, 4320, 4321, 4322, 4323, 4324, 4330, 4331, 4332, 4333, 4334, 4399,
             4400, 4410, 4411, 4412, 4420, 4421, 4422, 4430, 4431, 4432, 4499,
@@ -1853,7 +1852,7 @@ namespace
         const std::uintptr_t carrier_a_address = page_address + 128;
         const std::uintptr_t carrier_b_address = page_address + 256;
         const std::vector<int> protocol_union = CreateCompleteBatmanGroupedProtocolUnion();
-        Expect(protocol_union.size() == 116, "The complete Batman graphics protocol union omitted one or more raw values.");
+        Expect(protocol_union.size() == 110, "The complete Batman graphics protocol union omitted one or more raw values.");
         Expect(std::is_sorted(protocol_union.begin(), protocol_union.end()), "The complete Batman graphics protocol union was not sorted.");
         const std::vector<BatmanGroupedObserverProtocol> protocols = {
             { "graphicsObserverVsync", "vsync", 4200, { 4210, 4211 }, { 4220, 4221 }, { 4230, 4231 }, 4299, nullptr },

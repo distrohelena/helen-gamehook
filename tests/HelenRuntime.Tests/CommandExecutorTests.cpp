@@ -1081,8 +1081,8 @@ void RunCommandExecutorTests()
 
         const std::string custom_engine_ini_text = ReadAllText(batman_ini_path);
         const std::string custom_user_ini_text = ReadAsciiFromUtf16LittleEndianText(batman_user_ini_path);
-        Expect(custom_engine_ini_text.find("DetailMode=2") != std::string::npos, "Custom Batman apply did not normalize DetailMode in BmEngine.ini.");
-        Expect(custom_user_ini_text.find("DetailMode=2") != std::string::npos, "Custom Batman apply did not normalize DetailMode in UserEngine.ini.");
+        ExpectBatmanIniValue(custom_engine_ini_text, "SystemSettings", "DetailMode", "2", "Custom Batman apply did not normalize DetailMode in BmEngine.ini.");
+        ExpectBatmanIniValue(custom_user_ini_text, "SystemSettings", "DetailMode", "2", "Custom Batman apply did not normalize DetailMode in UserEngine.ini.");
         ExpectBatmanPersistedQualityLeaves(custom_engine_ini_text, custom_leaves);
         ExpectBatmanPersistedQualityLeaves(custom_user_ini_text, custom_leaves);
         Expect(custom_engine_ini_text.find("DisableSphericalHarmonicLights=True") != std::string::npos, "Custom apply did not invert spherical harmonic lighting in BmEngine.ini.");
