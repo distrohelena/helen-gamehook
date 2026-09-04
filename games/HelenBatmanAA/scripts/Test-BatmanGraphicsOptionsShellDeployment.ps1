@@ -250,6 +250,22 @@ try {
     [IO.File]::WriteAllBytes($LiveTargetPath, [Text.Encoding]::ASCII.GetBytes('old-target'))
     Assert-BatmanGraphicsVsyncHooks -PackRoot $StagedPackRoot -Context 'Staged deployment fixture'
     Assert-BatmanGraphicsCommands -PackRoot $StagedPackRoot -Context 'Staged deployment fixture'
+    $validStagedHooksText = Get-Content -LiteralPath (Join-Path $StagedPackRoot 'builds\steam-goty-1.0\hooks.json') -Raw
+    $mutatedQualityHooksPath = Join-Path $StagedPackRoot 'builds\steam-goty-1.0\hooks.json'
+    $mutatedQualityHooks = $validStagedHooksText | ConvertFrom-Json
+    $mutatedQualityObserver = $mutatedQualityHooks.stateObservers[4]
+    $mutatedQualityObserver.responseRequestValue = 4698
+    $mutatedQualityObserver.responseMappings[0].match = 8
+    $mutatedQualityObserver.responseMappings[0].value = 4697
+    [IO.File]::WriteAllText($mutatedQualityHooksPath, ($mutatedQualityHooks | ConvertTo-Json -Depth 100), [Text.UTF8Encoding]::new($false))
+    $qualityResponseMutationRejected = $false
+    try {
+        Assert-BatmanGraphicsVsyncHooks -PackRoot $StagedPackRoot -Context 'Mutated quality response fixture'
+    } catch {
+        $qualityResponseMutationRejected = $true
+    }
+    if (-not $qualityResponseMutationRejected) { throw 'Deploy validator accepted a mutated quality observer response declaration.' }
+    [IO.File]::WriteAllText($mutatedQualityHooksPath, $validStagedHooksText, [Text.UTF8Encoding]::new($false))
     $ExpectedHelenGameHookHash = (Get-FileHash -LiteralPath $StagedHelenGameHookPath -Algorithm SHA256).Hash
     $ExpectedProxyHash = (Get-FileHash -LiteralPath $StagedProxyPath -Algorithm SHA256).Hash
 

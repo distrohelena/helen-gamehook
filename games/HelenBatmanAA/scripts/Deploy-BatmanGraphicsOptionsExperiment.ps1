@@ -356,9 +356,12 @@ function Assert-BatmanGraphicsVsyncHooks {
         Assert-BatmanGraphicsVsyncChecks -Observer $observer -Context "$Context $($observer.id)"
         Assert-BatmanGraphicsMappings -Observer $observer -ExpectedMatches $expected.Matches -ExpectedValues $expected.ConfigValues -Context "$Context $($observer.id)"
         Assert-BatmanGraphicsMappings -Observer ([pscustomobject]@{ mappings = $observer.acknowledgementMappings }) -ExpectedMatches $expected.Matches -ExpectedValues $expected.Acks -Context "$Context $($observer.id) acknowledgement"
-        if ($observerIndex -lt 4) {
+        if ($observerIndex -lt 11) {
             if ($observer.responseRequestValue -ne $expected.Read -or @($observer.responseMappings).Count -ne $expected.Responses.Count) { throw "$Context $($observer.id) response mapping drifted." }
             Assert-BatmanGraphicsMappings -Observer ([pscustomobject]@{ mappings = $observer.responseMappings }) -ExpectedMatches $expected.ConfigValues -ExpectedValues $expected.Responses -Context "$Context $($observer.id) response"
+            if ($observerIndex -ge 4 -and $observer.command -cne $expected.Command) {
+                throw "$Context $($observer.id) command drifted."
+            }
         } elseif ($observer.command -cne $expected.Command) {
             throw "$Context $($observer.id) command drifted."
         }
