@@ -257,11 +257,11 @@ namespace
      * @param section Section header that must contain the requested key.
      * @param key Exact key name whose value should be returned.
      * @return Owning value when the exact section/key assignment exists; otherwise no value.
-     * @remarks Parsing section and key boundaries prevents stale values, similarly named keys, or assignments in another section from satisfying persistence checks.
+     * @remarks Section state follows production parsing: a line beginning with '[' replaces the active section state, malformed headers clear it, and characters inside the brackets are significant. Key/value whitespace is normalized only after section selection.
      */
     std::optional<std::string> TryReadBatmanIniValue(std::string_view text, const char* section, const char* key)
     {
-        std::string_view current_section;
+        bool in_target_section = false;
         std::size_t line_start = 0;
         while (line_start <= text.size())
         {
@@ -269,11 +269,13 @@ namespace
             const std::size_t line_end = newline_position == std::string_view::npos ? text.size() : newline_position;
             std::string_view line = TrimBatmanIniToken(text.substr(line_start, line_end - line_start));
 
-            if (line.size() >= 2 && line.front() == '[' && line.back() == ']')
+            if (!line.empty() && line.front() == '[')
             {
-                current_section = TrimBatmanIniToken(line.substr(1, line.size() - 2));
+                in_target_section =
+                    line.size() >= 2 && line.back() == ']' && line.substr(1, line.size() - 2) == section;
             }
-            else if (current_section == section)
+
+            if (in_target_section)
             {
                 const std::size_t separator_position = line.find('=');
                 if (separator_position != std::string_view::npos &&
@@ -968,6 +970,20 @@ void RunCommandExecutorTests()
 
     Expect(!executor.RunCommand("missingCommand"), "Unknown command unexpectedly succeeded.");
 
+    const std::string malformed_section_fixture =
+        "[SystemSettings]\r\n"
+        "[Malformed\r\n"
+        "Bloom=True\r\n";
+    Expect(
+        !TryReadBatmanIniValue(malformed_section_fixture, "SystemSettings", "Bloom").has_value(),
+        "The Batman INI assertion parser attributed a key after a malformed section header to the prior section.");
+    const std::string padded_section_fixture =
+        "[ SystemSettings ]\r\n"
+        "Bloom=True\r\n";
+    Expect(
+        !TryReadBatmanIniValue(padded_section_fixture, "SystemSettings", "Bloom").has_value(),
+        "The Batman INI assertion parser trimmed section-header contents that production treats as significant.");
+
     {
         const std::filesystem::path batman_ini_path = CreateTemporaryBatmanGraphicsIniPath();
         const std::filesystem::path batman_user_ini_path = GetSiblingBatmanUserEngineIniPath(batman_ini_path);
@@ -1085,8 +1101,8 @@ void RunCommandExecutorTests()
         ExpectBatmanIniValue(custom_user_ini_text, "SystemSettings", "DetailMode", "2", "Custom Batman apply did not normalize DetailMode in UserEngine.ini.");
         ExpectBatmanPersistedQualityLeaves(custom_engine_ini_text, custom_leaves);
         ExpectBatmanPersistedQualityLeaves(custom_user_ini_text, custom_leaves);
-        Expect(custom_engine_ini_text.find("DisableSphericalHarmonicLights=True") != std::string::npos, "Custom apply did not invert spherical harmonic lighting in BmEngine.ini.");
-        Expect(custom_user_ini_text.find("DisableSphericalHarmonicLights=True") != std::string::npos, "Custom apply did not invert spherical harmonic lighting in UserEngine.ini.");
+        ExpectBatmanIniBoolean(custom_engine_ini_text, "DisableSphericalHarmonicLights", 1, "Custom apply did not invert spherical harmonic lighting in BmEngine.ini.");
+        ExpectBatmanIniBoolean(custom_user_ini_text, "DisableSphericalHarmonicLights", 1, "Custom apply did not invert spherical harmonic lighting in UserEngine.ini.");
 
         Expect(batman_dispatcher.TrySetInt("detailLevel", 1), "Failed to restore the Batman medium detail-level preset.");
         Expect(batman_executor.RunCommand("syncBatmanGraphicsPreset"), "Batman preset-sync failed during apply setup.");
@@ -1100,33 +1116,37 @@ void RunCommandExecutorTests()
 
         const std::string saved_ini_text = ReadAllText(batman_ini_path);
         const std::string saved_user_ini_text = ReadAsciiFromUtf16LittleEndianText(batman_user_ini_path);
-        Expect(saved_ini_text.find("UseVsync=True") != std::string::npos, "Batman graphics apply did not persist VSync.");
-        Expect(saved_user_ini_text.find("UseVsync=True") != std::string::npos, "Batman graphics apply did not persist VSync to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("Fullscreen=False") != std::string::npos, "Batman graphics apply did not persist fullscreen state to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("ResX=2560") != std::string::npos, "Batman graphics apply did not persist horizontal resolution to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("ResY=1440") != std::string::npos, "Batman graphics apply did not persist vertical resolution to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("DynamicShadows=True") != std::string::npos, "Batman graphics apply did not persist Dynamic Shadows for Medium to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("LauncherOwnedSentinel=PreserveMe") != std::string::npos, "Batman graphics apply did not preserve unrelated UserEngine.ini content.");
-        Expect(saved_user_ini_text.find("MaxMultisamples=1") != std::string::npos, "Batman graphics apply did not persist disabled MSAA to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("DetailMode=1") != std::string::npos, "Batman graphics apply did not persist the Medium detail mode to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("Bloom=True") != std::string::npos, "Batman graphics apply did not persist Bloom for Medium to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("MotionBlur=False") != std::string::npos, "Batman graphics apply did not persist Motion Blur for Medium to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("Distortion=False") != std::string::npos, "Batman graphics apply did not persist Distortion for Medium to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("FogVolumes=False") != std::string::npos, "Batman graphics apply did not persist Fog Volumes for Medium to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("DisableSphericalHarmonicLights=True") != std::string::npos, "Batman graphics apply did not persist spherical harmonic lighting for Medium to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("AmbientOcclusion=False") != std::string::npos, "Batman graphics apply did not persist ambient occlusion for Medium to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("PhysXLevel=1") != std::string::npos, "Batman graphics apply did not persist PhysX to launcher-owned UserEngine.ini.");
-        Expect(saved_user_ini_text.find("Stereo=True") != std::string::npos, "Batman graphics apply did not persist stereo to launcher-owned UserEngine.ini.");
-        Expect(saved_ini_text.find("MaxMultisamples=1") != std::string::npos, "Batman graphics apply did not persist disabled MSAA.");
-        Expect(saved_ini_text.find("DetailMode=1") != std::string::npos, "Batman graphics apply did not persist the Medium detail mode.");
-        Expect(saved_ini_text.find("Bloom=True") != std::string::npos, "Batman graphics apply did not persist Bloom for Medium.");
-        Expect(saved_ini_text.find("MotionBlur=False") != std::string::npos, "Batman graphics apply did not persist Motion Blur for Medium.");
-        Expect(saved_ini_text.find("Distortion=False") != std::string::npos, "Batman graphics apply did not persist Distortion for Medium.");
-        Expect(saved_ini_text.find("FogVolumes=False") != std::string::npos, "Batman graphics apply did not persist Fog Volumes for Medium.");
-        Expect(saved_ini_text.find("DisableSphericalHarmonicLights=True") != std::string::npos, "Batman graphics apply did not persist spherical harmonic lighting for Medium.");
-        Expect(saved_ini_text.find("AmbientOcclusion=False") != std::string::npos, "Batman graphics apply did not persist ambient occlusion for Medium.");
-        Expect(saved_ini_text.find("PhysXLevel=1") != std::string::npos, "Batman graphics apply did not persist PhysX.");
-        Expect(saved_ini_text.find("Stereo=True") != std::string::npos, "Batman graphics apply did not persist stereo.");
+        ExpectBatmanIniBoolean(saved_ini_text, "UseVsync", 1, "Batman graphics apply did not persist VSync in BmEngine.ini.");
+        ExpectBatmanIniBoolean(saved_user_ini_text, "UseVsync", 1, "Batman graphics apply did not persist VSync in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniBoolean(saved_ini_text, "Fullscreen", 0, "Batman graphics apply did not persist fullscreen state in BmEngine.ini.");
+        ExpectBatmanIniBoolean(saved_user_ini_text, "Fullscreen", 0, "Batman graphics apply did not persist fullscreen state in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniValue(saved_ini_text, "SystemSettings", "ResX", "2560", "Batman graphics apply did not persist horizontal resolution in BmEngine.ini.");
+        ExpectBatmanIniValue(saved_user_ini_text, "SystemSettings", "ResX", "2560", "Batman graphics apply did not persist horizontal resolution in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniValue(saved_ini_text, "SystemSettings", "ResY", "1440", "Batman graphics apply did not persist vertical resolution in BmEngine.ini.");
+        ExpectBatmanIniValue(saved_user_ini_text, "SystemSettings", "ResY", "1440", "Batman graphics apply did not persist vertical resolution in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniValue(saved_ini_text, "SystemSettings", "MaxMultisamples", "1", "Batman graphics apply did not persist disabled MSAA in BmEngine.ini.");
+        ExpectBatmanIniValue(saved_user_ini_text, "SystemSettings", "MaxMultisamples", "1", "Batman graphics apply did not persist disabled MSAA in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniValue(saved_ini_text, "SystemSettings", "DetailMode", "1", "Batman graphics apply did not persist the Medium detail mode in BmEngine.ini.");
+        ExpectBatmanIniValue(saved_user_ini_text, "SystemSettings", "DetailMode", "1", "Batman graphics apply did not persist the Medium detail mode in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniBoolean(saved_ini_text, "Bloom", 1, "Batman graphics apply did not persist Bloom for Medium in BmEngine.ini.");
+        ExpectBatmanIniBoolean(saved_user_ini_text, "Bloom", 1, "Batman graphics apply did not persist Bloom for Medium in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniBoolean(saved_ini_text, "DynamicShadows", 1, "Batman graphics apply did not persist Dynamic Shadows for Medium in BmEngine.ini.");
+        ExpectBatmanIniBoolean(saved_user_ini_text, "DynamicShadows", 1, "Batman graphics apply did not persist Dynamic Shadows for Medium in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniBoolean(saved_ini_text, "MotionBlur", 0, "Batman graphics apply did not persist Motion Blur for Medium in BmEngine.ini.");
+        ExpectBatmanIniBoolean(saved_user_ini_text, "MotionBlur", 0, "Batman graphics apply did not persist Motion Blur for Medium in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniBoolean(saved_ini_text, "Distortion", 0, "Batman graphics apply did not persist Distortion for Medium in BmEngine.ini.");
+        ExpectBatmanIniBoolean(saved_user_ini_text, "Distortion", 0, "Batman graphics apply did not persist Distortion for Medium in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniBoolean(saved_ini_text, "FogVolumes", 0, "Batman graphics apply did not persist Fog Volumes for Medium in BmEngine.ini.");
+        ExpectBatmanIniBoolean(saved_user_ini_text, "FogVolumes", 0, "Batman graphics apply did not persist Fog Volumes for Medium in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniBoolean(saved_ini_text, "DisableSphericalHarmonicLights", 1, "Batman graphics apply did not invert spherical harmonic lighting for Medium in BmEngine.ini.");
+        ExpectBatmanIniBoolean(saved_user_ini_text, "DisableSphericalHarmonicLights", 1, "Batman graphics apply did not invert spherical harmonic lighting for Medium in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniBoolean(saved_ini_text, "AmbientOcclusion", 0, "Batman graphics apply did not persist Ambient Occlusion for Medium in BmEngine.ini.");
+        ExpectBatmanIniBoolean(saved_user_ini_text, "AmbientOcclusion", 0, "Batman graphics apply did not persist Ambient Occlusion for Medium in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniValue(saved_ini_text, "Engine.Engine", "PhysXLevel", "1", "Batman graphics apply did not persist PhysX in BmEngine.ini.");
+        ExpectBatmanIniValue(saved_user_ini_text, "Engine.Engine", "PhysXLevel", "1", "Batman graphics apply did not persist PhysX in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniBoolean(saved_ini_text, "Stereo", 1, "Batman graphics apply did not persist stereo in BmEngine.ini.");
+        ExpectBatmanIniBoolean(saved_user_ini_text, "Stereo", 1, "Batman graphics apply did not persist stereo in launcher-owned UserEngine.ini.");
+        ExpectBatmanIniValue(saved_user_ini_text, "SystemSettings", "LauncherOwnedSentinel", "PreserveMe", "Batman graphics apply did not preserve unrelated UserEngine.ini content.");
     }
 
     {

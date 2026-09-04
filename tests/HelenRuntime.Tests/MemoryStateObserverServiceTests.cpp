@@ -1983,18 +1983,35 @@ namespace
                     ReadInt32(carrier_a_address + 12) == protocol.ResponseValues[read_config_value],
                     "A quality observer read response wrote the wrong protocol value.");
 
-                const std::size_t successful_update_count = updates.size();
+                const std::size_t enabled_update_count = updates.size();
                 WriteInt32(carrier_a_address + 12, protocol.WriteValues[1]);
                 Expect(service.PollOnce(), "A quality observer enabled write unexpectedly failed.");
-                Expect(updates.size() == successful_update_count + 1, "A quality observer enabled write did not emit exactly one update.");
-                const helen::MemoryStateObserverUpdate& successful_update = updates.back();
-                Expect(successful_update.ObserverId == protocol.Id, "A quality observer enabled update targeted the wrong observer.");
-                Expect(successful_update.ConfigKey == protocol.TargetConfigKey, "A quality observer enabled update targeted the wrong config key.");
-                Expect(successful_update.RawValue == protocol.WriteValues[1] && successful_update.MappedValue == 1, "A quality observer enabled update carried the wrong values.");
+                Expect(updates.size() == enabled_update_count + 1, "A quality observer enabled write did not emit exactly one update.");
+                const helen::MemoryStateObserverUpdate& enabled_update = updates.back();
+                Expect(enabled_update.ObserverId == protocol.Id, "A quality observer enabled update targeted the wrong observer.");
+                Expect(enabled_update.ConfigKey == protocol.TargetConfigKey, "A quality observer enabled update targeted the wrong config key.");
                 Expect(
-                    successful_update.CommandId.has_value() && *successful_update.CommandId == "syncBatmanGraphicsDetailLevel",
+                    enabled_update.RawValue == protocol.WriteValues[1] && enabled_update.MappedValue == protocol.ConfigValues[1],
+                    "A quality observer enabled update carried the wrong values.");
+                Expect(
+                    enabled_update.CommandId.has_value() && *enabled_update.CommandId == "syncBatmanGraphicsDetailLevel",
                     "A quality observer enabled update omitted the detail-level synchronization command.");
                 Expect(ReadInt32(carrier_a_address + 12) == protocol.AcknowledgementValues[1], "A quality observer enabled write did not receive its exact acknowledgement.");
+
+                const std::size_t disabled_update_count = updates.size();
+                WriteInt32(carrier_a_address + 12, protocol.WriteValues[0]);
+                Expect(service.PollOnce(), "A quality observer disabled write unexpectedly failed.");
+                Expect(updates.size() == disabled_update_count + 1, "A quality observer disabled write did not emit exactly one update.");
+                const helen::MemoryStateObserverUpdate& disabled_update = updates.back();
+                Expect(disabled_update.ObserverId == protocol.Id, "A quality observer disabled update targeted the wrong observer.");
+                Expect(disabled_update.ConfigKey == protocol.TargetConfigKey, "A quality observer disabled update targeted the wrong config key.");
+                Expect(
+                    disabled_update.RawValue == protocol.WriteValues[0] && disabled_update.MappedValue == protocol.ConfigValues[0],
+                    "A quality observer disabled update carried the wrong values.");
+                Expect(
+                    disabled_update.CommandId.has_value() && *disabled_update.CommandId == "syncBatmanGraphicsDetailLevel",
+                    "A quality observer disabled update omitted the detail-level synchronization command.");
+                Expect(ReadInt32(carrier_a_address + 12) == protocol.AcknowledgementValues[0], "A quality observer disabled write did not receive its exact acknowledgement.");
 
                 const std::size_t failed_update_count = updates.size();
                 failing_config_key = protocol.TargetConfigKey;
