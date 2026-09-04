@@ -1085,6 +1085,67 @@ namespace
     }
 
     /**
+     * @brief Parses the strict bounded scalar response contract nested in one state observer.
+     * @param value JSON object that should describe the dynamic response provider and bounds.
+     * @param address_match_values Raw values accepted as carrier-address matches for the observer.
+     * @param definition Receives the validated dynamic response contract on success.
+     * @return True when all required members are present, known, positive, unique, and bounded.
+     */
+    bool ParseStateObserverDynamicResponse(
+        const helen::JsonValue& value,
+        const std::vector<int>& address_match_values,
+        helen::MemoryStateObserverDefinition& definition)
+    {
+        const helen::JsonValue::Object* object = value.AsObject();
+        if (object == nullptr)
+        {
+            return false;
+        }
+
+        for (const auto& member : *object)
+        {
+            if (member.first != "provider" &&
+                member.first != "requests" &&
+                member.first != "minimumValue" &&
+                member.first != "maximumValue")
+            {
+                return false;
+            }
+        }
+
+        const std::optional<std::string> provider = TryGetString(FindObjectMember(value, "provider"));
+        const helen::JsonValue* requests_value = FindObjectMember(value, "requests");
+        const helen::JsonValue::Array* requests = requests_value != nullptr ? requests_value->AsArray() : nullptr;
+        const std::optional<int> minimum_value = TryGetInt(FindObjectMember(value, "minimumValue"));
+        const std::optional<int> maximum_value = TryGetInt(FindObjectMember(value, "maximumValue"));
+        if (!provider.has_value() || provider->empty() ||
+            requests == nullptr || requests->empty() ||
+            !minimum_value.has_value() || !maximum_value.has_value() ||
+            *minimum_value <= 0 || *maximum_value <= 0 || *minimum_value > *maximum_value)
+        {
+            return false;
+        }
+
+        std::set<int> declared_requests;
+        for (const helen::JsonValue& request_value : *requests)
+        {
+            const std::optional<int> request = TryGetInt(&request_value);
+            if (!request.has_value() || *request <= 0 || !declared_requests.emplace(*request).second ||
+                std::find(address_match_values.begin(), address_match_values.end(), *request) == address_match_values.end())
+            {
+                return false;
+            }
+
+            definition.DynamicResponseRequestValues.push_back(*request);
+        }
+
+        definition.DynamicResponseProviderId = *provider;
+        definition.DynamicResponseMinimumValue = *minimum_value;
+        definition.DynamicResponseMaximumValue = *maximum_value;
+        return true;
+    }
+
+    /**
      * @brief Parses one memory-state observer declaration from `hooks.json`.
      * @param value JSON object that should describe one state observer.
      * @param definition Receives the parsed observer definition on success.
@@ -1094,6 +1155,7 @@ namespace
     {
         definition.Id = TryGetString(FindObjectMember(value, "id")).value_or("");
         definition.TargetConfigKey = TryGetString(FindObjectMember(value, "targetConfigKey")).value_or("");
+        const helen::JsonValue* dynamic_response_value = FindObjectMember(value, "dynamicResponse");
         const helen::JsonValue* command_value = FindObjectMember(value, "command");
         if (command_value != nullptr)
         {
@@ -1121,7 +1183,6 @@ namespace
         const std::optional<int> value_offset = TryGetInt(FindObjectMember(value, "valueOffset"));
         const std::optional<int> poll_interval = TryGetInt(FindObjectMember(value, "pollIntervalMs"));
         if (definition.Id.empty() ||
-            definition.TargetConfigKey.empty() ||
             definition.ScanStartAddress == 0 ||
             definition.ScanEndAddress <= definition.ScanStartAddress ||
             !scan_stride.has_value() ||
@@ -1156,21 +1217,28 @@ namespace
         }
 
         const helen::JsonValue* mappings_value = FindObjectMember(value, "mappings");
-        const helen::JsonValue::Array* mappings = mappings_value != nullptr ? mappings_value->AsArray() : nullptr;
-        if (mappings == nullptr || mappings->empty())
+        if (dynamic_response_value == nullptr)
         {
-            return false;
-        }
-
-        for (const helen::JsonValue& mapping_value : *mappings)
-        {
-            helen::MemoryStateObserverMapEntryDefinition mapping;
-            if (!ParseStateObserverMapping(mapping_value, mapping))
+            const helen::JsonValue::Array* mappings = mappings_value != nullptr ? mappings_value->AsArray() : nullptr;
+            if (mappings == nullptr || mappings->empty())
             {
                 return false;
             }
 
-            definition.Mappings.push_back(std::move(mapping));
+            for (const helen::JsonValue& mapping_value : *mappings)
+            {
+                helen::MemoryStateObserverMapEntryDefinition mapping;
+                if (!ParseStateObserverMapping(mapping_value, mapping))
+                {
+                    return false;
+                }
+
+                definition.Mappings.push_back(std::move(mapping));
+            }
+        }
+        else if (mappings_value != nullptr)
+        {
+            return false;
         }
 
         const helen::JsonValue* address_match_values_value = FindObjectMember(value, "addressMatchValues");
@@ -1195,13 +1263,33 @@ namespace
         }
         else
         {
+            if (dynamic_response_value != nullptr)
+            {
+                return false;
+            }
+
             for (const helen::MemoryStateObserverMapEntryDefinition& mapping : definition.Mappings)
             {
                 definition.AddressMatchValues.push_back(mapping.Match);
             }
         }
 
+        if (dynamic_response_value != nullptr &&
+            !ParseStateObserverDynamicResponse(*dynamic_response_value, definition.AddressMatchValues, definition))
+        {
+            return false;
+        }
+
         const helen::JsonValue* response_request_value = FindObjectMember(value, "responseRequestValue");
+        const helen::JsonValue* acknowledgement_mappings_value = FindObjectMember(value, "acknowledgementMappings");
+        if (dynamic_response_value != nullptr &&
+            (response_request_value != nullptr ||
+             FindObjectMember(value, "responseMappings") != nullptr ||
+             acknowledgement_mappings_value != nullptr))
+        {
+            return false;
+        }
+
         if (response_request_value != nullptr)
         {
             definition.ResponseRequestValue = TryGetInt(response_request_value);
@@ -1241,9 +1329,15 @@ namespace
             return false;
         }
 
-        const helen::JsonValue* acknowledgement_mappings_value = FindObjectMember(value, "acknowledgementMappings");
+        if ((dynamic_response_value == nullptr && definition.TargetConfigKey.empty()) ||
+            (dynamic_response_value != nullptr && !definition.TargetConfigKey.empty()))
+        {
+            return false;
+        }
+
         const helen::JsonValue* failure_response_value = FindObjectMember(value, "failureResponseValue");
-        if ((acknowledgement_mappings_value == nullptr) != (failure_response_value == nullptr))
+        if ((dynamic_response_value == nullptr && (acknowledgement_mappings_value == nullptr) != (failure_response_value == nullptr)) ||
+            (dynamic_response_value != nullptr && failure_response_value == nullptr))
         {
             return false;
         }

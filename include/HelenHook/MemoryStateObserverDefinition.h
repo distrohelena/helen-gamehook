@@ -39,6 +39,14 @@ namespace helen
         std::optional<std::string> AddressGroup;
         /** @brief Raw values that identify this observer's carrier address; an empty list preserves legacy mapping-based recognition. */
         std::vector<int> AddressMatchValues;
+        /** @brief Provider identifier used by a response-only observer to obtain dynamic scalar responses. */
+        std::optional<std::string> DynamicResponseProviderId;
+        /** @brief Positive raw request values that a response-only observer may answer dynamically. */
+        std::vector<int> DynamicResponseRequestValues;
+        /** @brief Inclusive lower bound for scalar values returned by a response-only observer provider. */
+        int DynamicResponseMinimumValue = 0;
+        /** @brief Inclusive upper bound for scalar values returned by a response-only observer provider. */
+        int DynamicResponseMaximumValue = 0;
         /** @brief Raw-to-config mappings that translate observed state codes into Helen-owned config values. */
         std::vector<MemoryStateObserverMapEntryDefinition> Mappings;
         /** @brief Raw request-to-success-response mappings whose response is written only after the associated config update and optional follow-up command both succeed. */

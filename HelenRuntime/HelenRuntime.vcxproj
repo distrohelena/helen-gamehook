@@ -151,6 +151,7 @@
     <ClInclude Include="..\include\HelenHook\MemoryStateObserverCheckDefinition.h" />
     <ClInclude Include="..\include\HelenHook\MemoryStateObserverDebugView.h" />
     <ClInclude Include="..\include\HelenHook\MemoryStateObserverDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\MemoryStateObserverDynamicResponseCallback.h" />
     <ClInclude Include="..\include\HelenHook\MemoryStateObserverMapEntryDefinition.h" />
     <ClInclude Include="..\include\HelenHook\MemoryStateObserverService.h" />
     <ClInclude Include="..\include\HelenHook\MemoryStateObserverUpdate.h" />

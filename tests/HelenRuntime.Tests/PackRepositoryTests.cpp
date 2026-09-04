@@ -857,6 +857,272 @@ void RunPackRepositoryTests()
   ]
 })";
         const std::string observer_hash(64, 'a');
+
+        const std::string dynamic_response_observer_hooks = R"({
+  "stateObservers": [
+    {
+      "id": "batmanDisplayModeObserver",
+      "scanStartAddress": "0x10000000",
+      "scanEndAddress": "0x30000000",
+      "scanStride": 4,
+      "valueOffset": 12,
+      "pollIntervalMs": 50,
+      "checks": [
+        {
+          "comparison": "equals-constant",
+          "offset": 0,
+          "expectedValue": 4102
+        }
+      ],
+      "addressMatchValues": [
+        4700,
+        4701,
+        4702,
+        4799
+      ],
+      "dynamicResponse": {
+        "provider": "batmanDisplayModes",
+        "requests": [4700, 4701, 4702],
+        "minimumValue": 1,
+        "maximumValue": 32767
+      },
+      "failureResponseValue": 4799
+    }
+  ]
+})";
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-response-observer-pack",
+            "dynamic-response-observer-build",
+            "DynamicResponseObserverGame.exe",
+            5015,
+            observer_hash,
+            dynamic_response_observer_hooks);
+
+        const std::optional<helen::LoadedBuildPack> loaded_dynamic_response_pack = repository.LoadForExecutable(
+            packs_root,
+            "DynamicResponseObserverGame.exe",
+            5015,
+            observer_hash);
+        Expect(loaded_dynamic_response_pack.has_value(), "Pack repository rejected a valid dynamic response-only observer.");
+        Expect(loaded_dynamic_response_pack->Build.StateObservers.size() == 1, "Dynamic response observer count mismatch.");
+        const helen::MemoryStateObserverDefinition& dynamic_response_observer = loaded_dynamic_response_pack->Build.StateObservers[0];
+        Expect(dynamic_response_observer.Id == "batmanDisplayModeObserver", "Dynamic response observer identifier mismatch.");
+        Expect(dynamic_response_observer.TargetConfigKey.empty(), "Dynamic response-only observer unexpectedly declared a target config key.");
+        Expect(
+            dynamic_response_observer.DynamicResponseProviderId.has_value() &&
+                *dynamic_response_observer.DynamicResponseProviderId == "batmanDisplayModes",
+            "Dynamic response provider mismatch.");
+        const int expected_dynamic_requests[] = { 4700, 4701, 4702 };
+        Expect(
+            dynamic_response_observer.DynamicResponseRequestValues.size() == std::size(expected_dynamic_requests),
+            "Dynamic response request count mismatch.");
+        for (std::size_t index = 0; index < std::size(expected_dynamic_requests); ++index)
+        {
+            Expect(
+                dynamic_response_observer.DynamicResponseRequestValues[index] == expected_dynamic_requests[index],
+                "Dynamic response request value mismatch.");
+        }
+        Expect(dynamic_response_observer.DynamicResponseMinimumValue == 1, "Dynamic response minimum bound mismatch.");
+        Expect(dynamic_response_observer.DynamicResponseMaximumValue == 32767, "Dynamic response maximum bound mismatch.");
+        Expect(dynamic_response_observer.Mappings.empty(), "Dynamic response-only observer unexpectedly declared update mappings.");
+        Expect(!dynamic_response_observer.ResponseRequestValue.has_value(), "Dynamic response-only observer unexpectedly declared a static request value.");
+        Expect(dynamic_response_observer.ResponseMappings.empty(), "Dynamic response-only observer unexpectedly declared static response mappings.");
+        Expect(dynamic_response_observer.AcknowledgementMappings.empty(), "Dynamic response-only observer unexpectedly declared acknowledgement mappings.");
+        Expect(
+            dynamic_response_observer.FailureResponseValue.has_value() && *dynamic_response_observer.FailureResponseValue == 4799,
+            "Dynamic response failure response mismatch.");
+
+        const std::string dynamic_empty_provider_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "\"provider\": \"batmanDisplayModes\"",
+            "\"provider\": \"\"");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-empty-provider-pack",
+            "dynamic-empty-provider-build",
+            "DynamicEmptyProviderGame.exe",
+            5016,
+            observer_hash,
+            dynamic_empty_provider_hooks);
+
+        const std::string dynamic_empty_requests_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "\"requests\": [4700, 4701, 4702]",
+            "\"requests\": []");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-empty-requests-pack",
+            "dynamic-empty-requests-build",
+            "DynamicEmptyRequestsGame.exe",
+            5017,
+            observer_hash,
+            dynamic_empty_requests_hooks);
+
+        const std::string dynamic_duplicate_requests_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "\"requests\": [4700, 4701, 4702]",
+            "\"requests\": [4700, 4700, 4702]");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-duplicate-requests-pack",
+            "dynamic-duplicate-requests-build",
+            "DynamicDuplicateRequestsGame.exe",
+            5018,
+            observer_hash,
+            dynamic_duplicate_requests_hooks);
+
+        const std::string dynamic_nonpositive_bounds_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "\"minimumValue\": 1",
+            "\"minimumValue\": 0");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-nonpositive-bounds-pack",
+            "dynamic-nonpositive-bounds-build",
+            "DynamicNonpositiveBoundsGame.exe",
+            5019,
+            observer_hash,
+            dynamic_nonpositive_bounds_hooks);
+
+        const std::string dynamic_reversed_bounds_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "\"minimumValue\": 1",
+            "\"minimumValue\": 32768");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-reversed-bounds-pack",
+            "dynamic-reversed-bounds-build",
+            "DynamicReversedBoundsGame.exe",
+            5020,
+            observer_hash,
+            dynamic_reversed_bounds_hooks);
+
+        const std::string dynamic_request_absent_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "\"requests\": [4700, 4701, 4702]",
+            "\"requests\": [4700, 4701, 4800]");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-request-absent-pack",
+            "dynamic-request-absent-build",
+            "DynamicRequestAbsentGame.exe",
+            5021,
+            observer_hash,
+            dynamic_request_absent_hooks);
+
+        const std::string dynamic_static_response_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "      \"failureResponseValue\": 4799",
+            "      \"responseRequestValue\": 4700,\n"
+            "      \"responseMappings\": [\n"
+            "        {\n"
+            "          \"match\": 1,\n"
+            "          \"value\": 4701\n"
+            "        }\n"
+            "      ],\n"
+            "      \"failureResponseValue\": 4799");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-static-response-pack",
+            "dynamic-static-response-build",
+            "DynamicStaticResponseGame.exe",
+            5022,
+            observer_hash,
+            dynamic_static_response_hooks);
+
+        const std::string dynamic_update_mappings_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "      \"failureResponseValue\": 4799",
+            "      \"mappings\": [\n"
+            "        {\n"
+            "          \"match\": 4700,\n"
+            "          \"value\": 1\n"
+            "        }\n"
+            "      ],\n"
+            "      \"failureResponseValue\": 4799");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-update-mappings-pack",
+            "dynamic-update-mappings-build",
+            "DynamicUpdateMappingsGame.exe",
+            5023,
+            observer_hash,
+            dynamic_update_mappings_hooks);
+
+        const std::string dynamic_without_failure_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            ",\n      \"failureResponseValue\": 4799",
+            "");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-without-failure-pack",
+            "dynamic-without-failure-build",
+            "DynamicWithoutFailureGame.exe",
+            5024,
+            observer_hash,
+            dynamic_without_failure_hooks);
+
+        const std::string dynamic_unknown_member_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "\"maximumValue\": 32767",
+            "\"maximumValue\": 32767,\n"
+            "        \"unexpected\": 1");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-unknown-member-pack",
+            "dynamic-unknown-member-build",
+            "DynamicUnknownMemberGame.exe",
+            5025,
+            observer_hash,
+            dynamic_unknown_member_hooks);
+
+        const std::string_view rejected_dynamic_executable_names[] = {
+            "DynamicEmptyProviderGame.exe",
+            "DynamicEmptyRequestsGame.exe",
+            "DynamicDuplicateRequestsGame.exe",
+            "DynamicNonpositiveBoundsGame.exe",
+            "DynamicReversedBoundsGame.exe",
+            "DynamicRequestAbsentGame.exe",
+            "DynamicStaticResponseGame.exe",
+            "DynamicUpdateMappingsGame.exe",
+            "DynamicWithoutFailureGame.exe",
+            "DynamicUnknownMemberGame.exe"
+        };
+        const std::uintmax_t rejected_dynamic_file_sizes[] = {
+            5016,
+            5017,
+            5018,
+            5019,
+            5020,
+            5021,
+            5022,
+            5023,
+            5024,
+            5025
+        };
+        const char* rejected_dynamic_messages[] = {
+            "Pack repository accepted a dynamic observer with an empty provider.",
+            "Pack repository accepted a dynamic observer with empty requests.",
+            "Pack repository accepted duplicate dynamic observer requests.",
+            "Pack repository accepted nonpositive dynamic observer bounds.",
+            "Pack repository accepted dynamic observer bounds with minimum greater than maximum.",
+            "Pack repository accepted a dynamic request absent from address matches.",
+            "Pack repository accepted static response mappings on a dynamic observer.",
+            "Pack repository accepted update mappings on a dynamic observer.",
+            "Pack repository accepted a dynamic observer without a failure response.",
+            "Pack repository accepted an unknown dynamic response member."
+        };
+        for (std::size_t index = 0; index < std::size(rejected_dynamic_executable_names); ++index)
+        {
+            const std::optional<helen::LoadedBuildPack> rejected_dynamic_pack = repository.LoadForExecutable(
+                packs_root,
+                std::string(rejected_dynamic_executable_names[index]),
+                rejected_dynamic_file_sizes[index],
+                observer_hash);
+            Expect(!rejected_dynamic_pack.has_value(), rejected_dynamic_messages[index]);
+        }
+
         WriteObserverPackFixture(
             packs_root,
             "transactional-observer-pack",
