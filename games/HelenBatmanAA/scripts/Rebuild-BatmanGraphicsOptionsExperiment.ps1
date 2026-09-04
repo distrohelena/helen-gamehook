@@ -3,6 +3,7 @@ param(
     [string]$BatmanRoot,
     [string]$BuilderRoot,
     [string]$BatmanUserIniPath,
+    [string]$ProtocolManifestPath,
     [switch]$FunctionsOnly
 )
 
@@ -278,8 +279,8 @@ function New-GraphicsCarrierObserver {
         [AllowEmptyString()] [string]$Command = '',
         [AllowEmptyString()] [string]$DynamicResponseProvider = '',
         [AllowNull()] [object[]]$DynamicResponseRequests = @(),
-        [int]$DynamicResponseMinimumValue = 0,
-        [int]$DynamicResponseMaximumValue = 0
+        [object]$DynamicResponseMinimumValue = $null,
+        [object]$DynamicResponseMaximumValue = $null
     )
 
     $dynamicResponseSupplied = $PSBoundParameters.ContainsKey('DynamicResponseProvider')
@@ -291,7 +292,9 @@ function New-GraphicsCarrierObserver {
         if ([string]::IsNullOrWhiteSpace($DynamicResponseProvider) -or $null -eq $DynamicResponseRequests -or $DynamicResponseRequests.Count -eq 0) {
             throw "Graphics carrier observer '$Id' dynamic response must declare a provider and requests."
         }
-        if ($DynamicResponseMinimumValue -le 0 -or $DynamicResponseMaximumValue -lt $DynamicResponseMinimumValue) {
+        $dynamicMinimumValue = ConvertTo-StrictGraphicsIntegralValue -Value $DynamicResponseMinimumValue -Context "Graphics carrier observer '$Id' dynamic response minimumValue"
+        $dynamicMaximumValue = ConvertTo-StrictGraphicsIntegralValue -Value $DynamicResponseMaximumValue -Context "Graphics carrier observer '$Id' dynamic response maximumValue"
+        if ($dynamicMinimumValue -le 0 -or $dynamicMaximumValue -lt $dynamicMinimumValue -or $dynamicMaximumValue -gt 32767) {
             throw "Graphics carrier observer '$Id' dynamic response bounds are invalid."
         }
         if ($responseRequestSupplied -or $responseMappingsSupplied -or $acknowledgementMappingsSupplied -or $Mappings.Count -gt 0 -or -not [string]::IsNullOrWhiteSpace($TargetConfigKey)) {
@@ -345,8 +348,8 @@ function New-GraphicsCarrierObserver {
         $observer.dynamicResponse = [ordered]@{
             provider = $DynamicResponseProvider
             requests = $dynamicRequestValuesClone
-            minimumValue = [int]$DynamicResponseMinimumValue
-            maximumValue = [int]$DynamicResponseMaximumValue
+            minimumValue = [int]$dynamicMinimumValue
+            maximumValue = [int]$dynamicMaximumValue
         }
     }
     if ($responseRequestSupplied) {
@@ -623,6 +626,135 @@ function Invoke-AtomicGraphicsPublication {
     }
 }
 
+function New-GraphicsProtocolManifest {
+    <#
+    Build the authoritative config, command, and observer manifests from the protocol tables.
+    The normal rebuild and disposable parser integration both call this function so protocol
+    construction remains a single source of truth.
+    #>
+    $graphicsAddressMatchValues = [Collections.Generic.List[int]]::new()
+    foreach ($protocol in $graphicsProtocol) {
+        foreach ($addressValue in @($protocol.Read) + @($protocol.Responses) + @($protocol.Writes) + @($protocol.Acks) + @($protocol.Failure)) {
+            $graphicsAddressMatchValues.Add([int]$addressValue)
+        }
+    }
+    foreach ($addressValue in $dynamicCatalogRequests + @($dynamicCatalogFailure) + $resolutionWriteRequests + $resolutionAcknowledgementRequests + @($resolutionFailure) + $graphicsCommandValues) {
+        $graphicsAddressMatchValues.Add([int]$addressValue)
+    }
+    $graphicsAddressMatchSet = [Collections.Generic.HashSet[int]]::new()
+    foreach ($addressValue in $graphicsAddressMatchValues) {
+        if (-not $graphicsAddressMatchSet.Add([int]$addressValue)) {
+            throw "Batman graphics protocol contains duplicate positive carrier value $addressValue."
+        }
+    }
+    $graphicsAddressMatchValues = @($graphicsAddressMatchSet | Sort-Object | ForEach-Object { [int]$_ })
+    $configKeys = @(
+        'fullscreen', 'resolutionWidth', 'resolutionHeight', 'resolutionModeIndex', 'vsync', 'msaa',
+        'detailLevel', 'bloom', 'dynamicShadows', 'motionBlur', 'distortion', 'fogVolumes',
+        'sphericalHarmonicLighting', 'ambientOcclusion', 'physx', 'stereo', 'applySignal', 'rollbackSignal'
+    )
+    $config = @(
+        foreach ($configKey in $configKeys) {
+            [ordered]@{
+                key = $configKey
+                type = 'int'
+                defaultValue = if ($configKey -eq 'resolutionModeIndex') { [int]-1 } else { [int]0 }
+            }
+        }
+    )
+
+    $loadGraphicsDraftCommand = [ordered]@{
+        id = 'loadBatmanGraphicsDraftIntoConfig'
+        name = 'Load Batman Graphics Draft Into Config'
+        steps = @([ordered]@{ kind = 'load-batman-graphics-draft-into-config' })
+    }
+    $syncGraphicsDetailLevelCommand = [ordered]@{
+        id = 'syncBatmanGraphicsDetailLevel'
+        name = 'Sync Batman Graphics Detail Level'
+        steps = @([ordered]@{ kind = 'sync-batman-graphics-detail-level' })
+    }
+    $setGraphicsResolutionModeCommand = [ordered]@{
+        id = 'setBatmanGraphicsResolutionMode'
+        name = 'Set Batman Graphics Resolution Mode'
+        steps = @([ordered]@{ kind = 'set-batman-graphics-resolution-mode' })
+    }
+    $applyGraphicsDraftCommand = [ordered]@{
+        id = 'applyBatmanGraphicsDraft'
+        name = 'Apply Batman Graphics Draft'
+        steps = @(
+            [ordered]@{ kind = 'apply-batman-graphics-config' }
+            [ordered]@{ kind = 'load-batman-graphics-draft-into-config' }
+        )
+    }
+    $commands = [ordered]@{ commands = @($loadGraphicsDraftCommand, $syncGraphicsDetailLevelCommand, $setGraphicsResolutionModeCommand, $applyGraphicsDraftCommand) }
+
+    $finiteSettingObservers = @(
+        foreach ($protocol in $graphicsProtocol) {
+            $settingMappings = @(
+                for ($mappingIndex = 0; $mappingIndex -lt @($protocol.Writes).Count; $mappingIndex++) {
+                    [ordered]@{ match = [int]$protocol.Writes[$mappingIndex]; value = [int]$protocol.ConfigValues[$mappingIndex] }
+                }
+            )
+            $settingResponseMappings = @(
+                for ($mappingIndex = 0; $mappingIndex -lt @($protocol.ConfigValues).Count; $mappingIndex++) {
+                    [ordered]@{ match = [int]$protocol.ConfigValues[$mappingIndex]; value = [int]$protocol.Responses[$mappingIndex] }
+                }
+            )
+            $settingAcknowledgementMappings = @(
+                for ($mappingIndex = 0; $mappingIndex -lt @($protocol.Writes).Count; $mappingIndex++) {
+                    [ordered]@{ match = [int]$protocol.Writes[$mappingIndex]; value = [int]$protocol.Acks[$mappingIndex] }
+                }
+            )
+            New-GraphicsCarrierObserver -Id $protocol.Id -TargetConfigKey $protocol.Key -AddressMatchValues $graphicsAddressMatchValues -Mappings $settingMappings -ResponseRequestValue ([int]$protocol.Read) -ResponseMappings $settingResponseMappings -AcknowledgementMappings $settingAcknowledgementMappings -FailureResponseValue ([int]$protocol.Failure) -Command $protocol.Command
+        }
+    )
+    $dynamicCatalogObserver = New-GraphicsCarrierObserver -Id 'graphicsObserverDisplayModeCatalog' -AddressMatchValues $graphicsAddressMatchValues -DynamicResponseProvider 'batmanDisplayModes' -DynamicResponseRequests $dynamicCatalogRequests -DynamicResponseMinimumValue 1 -DynamicResponseMaximumValue 32767 -FailureResponseValue $dynamicCatalogFailure
+    $resolutionMappings = @(
+        for ($mappingIndex = 0; $mappingIndex -lt $resolutionWriteRequests.Count; $mappingIndex++) {
+            [ordered]@{ match = [int]$resolutionWriteRequests[$mappingIndex]; value = [int]$resolutionConfigValues[$mappingIndex] }
+        }
+    )
+    $resolutionAcknowledgementMappings = @(
+        for ($mappingIndex = 0; $mappingIndex -lt $resolutionWriteRequests.Count; $mappingIndex++) {
+            [ordered]@{ match = [int]$resolutionWriteRequests[$mappingIndex]; value = [int]$resolutionAcknowledgementRequests[$mappingIndex] }
+        }
+    )
+    $resolutionObserver = New-GraphicsCarrierObserver -Id 'graphicsObserverResolutionModeIndex' -TargetConfigKey 'resolutionModeIndex' -AddressMatchValues $graphicsAddressMatchValues -Mappings $resolutionMappings -AcknowledgementMappings $resolutionAcknowledgementMappings -FailureResponseValue $resolutionFailure -Command 'setBatmanGraphicsResolutionMode'
+    $applyObserver = New-GraphicsCarrierObserver -Id 'graphicsObserverApplySignal' -TargetConfigKey 'applySignal' -AddressMatchValues $graphicsAddressMatchValues -Mappings @(
+        [ordered]@{ match = 4990; value = 0 }
+        [ordered]@{ match = 4991; value = 1 }
+    ) -AcknowledgementMappings @(
+        [ordered]@{ match = 4990; value = 4980 }
+        [ordered]@{ match = 4991; value = 4981 }
+    ) -FailureResponseValue 4989 -Command 'applyBatmanGraphicsDraft'
+    $rollbackObserver = New-GraphicsCarrierObserver -Id 'graphicsObserverRollbackSignal' -TargetConfigKey 'rollbackSignal' -AddressMatchValues $graphicsAddressMatchValues -Mappings @(
+        [ordered]@{ match = 4970; value = 0 }
+        [ordered]@{ match = 4971; value = 1 }
+    ) -AcknowledgementMappings @(
+        [ordered]@{ match = 4970; value = 4960 }
+        [ordered]@{ match = 4971; value = 4961 }
+    ) -FailureResponseValue 4969 -Command 'loadBatmanGraphicsDraftIntoConfig'
+    $hooks = [ordered]@{
+        runtimeSlots = @()
+        stateObservers = @($finiteSettingObservers[0], $dynamicCatalogObserver, $resolutionObserver) + @($finiteSettingObservers[1..($finiteSettingObservers.Count - 1)]) + @($applyObserver, $rollbackObserver)
+        hooks = @()
+    }
+
+    return [ordered]@{ config = $config; commands = $commands; hooks = $hooks }
+}
+
+function Write-GraphicsProtocolManifest {
+    <# Writes the generated protocol manifests for disposable native parser integration tests. #>
+    param([Parameter(Mandatory = $true)] [string]$Path)
+    $protocolManifest = New-GraphicsProtocolManifest
+    $manifestRoot = [IO.Path]::GetFullPath($Path)
+    New-Item -ItemType Directory -Force -Path $manifestRoot | Out-Null
+    Write-Utf8TextFile -Path (Join-Path $manifestRoot 'config.json') -Contents ($protocolManifest.config | ConvertTo-Json -Depth 6)
+    Write-Utf8TextFile -Path (Join-Path $manifestRoot 'commands.json') -Contents ($protocolManifest.commands | ConvertTo-Json -Depth 6)
+    Write-Utf8TextFile -Path (Join-Path $manifestRoot 'hooks.json') -Contents ($protocolManifest.hooks | ConvertTo-Json -Depth 10)
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ProtocolManifestPath)) { Write-GraphicsProtocolManifest -Path ([IO.Path]::GetFullPath($ProtocolManifestPath)); return }
 if ($FunctionsOnly) { return }
 
 if ([string]::IsNullOrWhiteSpace($BatmanRoot)) { $BatmanRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path } else { $BatmanRoot = (Resolve-Path $BatmanRoot).Path }
@@ -721,149 +853,10 @@ try {
             }
         })
     }
-    $graphicsAddressMatchValues = [Collections.Generic.List[int]]::new()
-    foreach ($protocol in $graphicsProtocol) {
-        foreach ($addressValue in @($protocol.Read) + @($protocol.Responses) + @($protocol.Writes) + @($protocol.Acks) + @($protocol.Failure)) {
-            $graphicsAddressMatchValues.Add([int]$addressValue)
-        }
-    }
-    foreach ($addressValue in $dynamicCatalogRequests + @($dynamicCatalogFailure) + $resolutionWriteRequests + $resolutionAcknowledgementRequests + @($resolutionFailure)) {
-        $graphicsAddressMatchValues.Add([int]$addressValue)
-    }
-    foreach ($addressValue in $graphicsCommandValues) {
-        $graphicsAddressMatchValues.Add([int]$addressValue)
-    }
-    $graphicsAddressMatchSet = [Collections.Generic.HashSet[int]]::new()
-    foreach ($addressValue in $graphicsAddressMatchValues) {
-        if (-not $graphicsAddressMatchSet.Add([int]$addressValue)) {
-            throw "Batman graphics protocol contains duplicate positive carrier value $addressValue."
-        }
-    }
-    $graphicsAddressMatchValues = @($graphicsAddressMatchSet | Sort-Object | ForEach-Object { [int]$_ })
-    $configKeys = @(
-        'fullscreen',
-        'resolutionWidth',
-        'resolutionHeight',
-        'resolutionModeIndex',
-        'vsync',
-        'msaa',
-        'detailLevel',
-        'bloom',
-        'dynamicShadows',
-        'motionBlur',
-        'distortion',
-        'fogVolumes',
-        'sphericalHarmonicLighting',
-        'ambientOcclusion',
-        'physx',
-        'stereo',
-        'applySignal',
-        'rollbackSignal'
-    )
-    $config = @(
-        foreach ($configKey in $configKeys) {
-            [ordered]@{
-                key = $configKey
-                type = 'int'
-                defaultValue = if ($configKey -eq 'resolutionModeIndex') { [int]-1 } else { [int]0 }
-            }
-        }
-    )
-    $loadGraphicsDraftCommand = [ordered]@{
-        id = 'loadBatmanGraphicsDraftIntoConfig'
-        name = 'Load Batman Graphics Draft Into Config'
-        steps = @(
-            [ordered]@{
-                kind = 'load-batman-graphics-draft-into-config'
-            }
-        )
-    }
-    $applyGraphicsDraftCommand = [ordered]@{
-        id = 'applyBatmanGraphicsDraft'
-        name = 'Apply Batman Graphics Draft'
-        steps = @(
-            [ordered]@{
-                kind = 'apply-batman-graphics-config'
-            },
-            [ordered]@{
-                kind = 'load-batman-graphics-draft-into-config'
-            }
-        )
-    }
-    $syncGraphicsDetailLevelCommand = [ordered]@{
-        id = 'syncBatmanGraphicsDetailLevel'
-        name = 'Sync Batman Graphics Detail Level'
-        steps = @(
-            [ordered]@{
-                kind = 'sync-batman-graphics-detail-level'
-            }
-        )
-    }
-    $setGraphicsResolutionModeCommand = [ordered]@{
-        id = 'setBatmanGraphicsResolutionMode'
-        name = 'Set Batman Graphics Resolution Mode'
-        steps = @(
-            [ordered]@{
-                kind = 'set-batman-graphics-resolution-mode'
-            }
-        )
-    }
-    $commands = [ordered]@{
-        commands = @($loadGraphicsDraftCommand, $syncGraphicsDetailLevelCommand, $setGraphicsResolutionModeCommand, $applyGraphicsDraftCommand)
-    }
-    $finiteSettingObservers = @(
-        foreach ($protocol in $graphicsProtocol) {
-            $settingMappings = @(
-                for ($mappingIndex = 0; $mappingIndex -lt @($protocol.Writes).Count; $mappingIndex++) {
-                    [ordered]@{ match = [int]$protocol.Writes[$mappingIndex]; value = [int]$protocol.ConfigValues[$mappingIndex] }
-                }
-            )
-            $settingResponseMappings = @(
-                for ($mappingIndex = 0; $mappingIndex -lt @($protocol.ConfigValues).Count; $mappingIndex++) {
-                    [ordered]@{ match = [int]$protocol.ConfigValues[$mappingIndex]; value = [int]$protocol.Responses[$mappingIndex] }
-                }
-            )
-            $settingAcknowledgementMappings = @(
-                for ($mappingIndex = 0; $mappingIndex -lt @($protocol.Writes).Count; $mappingIndex++) {
-                    [ordered]@{ match = [int]$protocol.Writes[$mappingIndex]; value = [int]$protocol.Acks[$mappingIndex] }
-                }
-            )
-            New-GraphicsCarrierObserver -Id $protocol.Id -TargetConfigKey $protocol.Key -AddressMatchValues $graphicsAddressMatchValues -Mappings $settingMappings -ResponseRequestValue ([int]$protocol.Read) -ResponseMappings $settingResponseMappings -AcknowledgementMappings $settingAcknowledgementMappings -FailureResponseValue ([int]$protocol.Failure) -Command $protocol.Command
-        }
-    )
-    $dynamicCatalogObserver = New-GraphicsCarrierObserver -Id 'graphicsObserverDisplayModeCatalog' -AddressMatchValues $graphicsAddressMatchValues -DynamicResponseProvider 'batmanDisplayModes' -DynamicResponseRequests $dynamicCatalogRequests -DynamicResponseMinimumValue 1 -DynamicResponseMaximumValue 32767 -FailureResponseValue $dynamicCatalogFailure
-    $resolutionMappings = @(
-        for ($mappingIndex = 0; $mappingIndex -lt 98; $mappingIndex++) {
-            [ordered]@{ match = [int]$resolutionWriteRequests[$mappingIndex]; value = [int]$resolutionConfigValues[$mappingIndex] }
-        }
-    )
-    $resolutionAcknowledgementMappings = @(
-        for ($mappingIndex = 0; $mappingIndex -lt 98; $mappingIndex++) {
-            [ordered]@{ match = [int]$resolutionWriteRequests[$mappingIndex]; value = [int]$resolutionAcknowledgementRequests[$mappingIndex] }
-        }
-    )
-    $resolutionObserver = New-GraphicsCarrierObserver -Id 'graphicsObserverResolutionModeIndex' -TargetConfigKey 'resolutionModeIndex' -AddressMatchValues $graphicsAddressMatchValues -Mappings $resolutionMappings -AcknowledgementMappings $resolutionAcknowledgementMappings -FailureResponseValue $resolutionFailure -Command 'setBatmanGraphicsResolutionMode'
-    $applyAcknowledgementMappings = @(
-        [ordered]@{ match = [int]4990; value = [int]4980 },
-        [ordered]@{ match = [int]4991; value = [int]4981 }
-    )
-    $rollbackAcknowledgementMappings = @(
-        [ordered]@{ match = [int]4970; value = [int]4960 },
-        [ordered]@{ match = [int]4971; value = [int]4961 }
-    )
-    $applyObserver = New-GraphicsCarrierObserver -Id 'graphicsObserverApplySignal' -TargetConfigKey 'applySignal' -AddressMatchValues $graphicsAddressMatchValues -Mappings @(
-        [ordered]@{ match = [int]4990; value = [int]0 },
-        [ordered]@{ match = [int]4991; value = [int]1 }
-    ) -AcknowledgementMappings $applyAcknowledgementMappings -FailureResponseValue ([int]4989) -Command 'applyBatmanGraphicsDraft'
-    $rollbackObserver = New-GraphicsCarrierObserver -Id 'graphicsObserverRollbackSignal' -TargetConfigKey 'rollbackSignal' -AddressMatchValues $graphicsAddressMatchValues -Mappings @(
-        [ordered]@{ match = [int]4970; value = [int]0 },
-        [ordered]@{ match = [int]4971; value = [int]1 }
-    ) -AcknowledgementMappings $rollbackAcknowledgementMappings -FailureResponseValue ([int]4969) -Command 'loadBatmanGraphicsDraftIntoConfig'
-    $hooks = [ordered]@{
-        runtimeSlots = @()
-        stateObservers = @($finiteSettingObservers[0], $dynamicCatalogObserver, $resolutionObserver) + @($finiteSettingObservers[1..$($finiteSettingObservers.Count - 1)]) + @($applyObserver, $rollbackObserver)
-        hooks = @()
-    }
+    $protocolManifest = New-GraphicsProtocolManifest
+    $config = $protocolManifest.config
+    $commands = $protocolManifest.commands
+    $hooks = $protocolManifest.hooks
     $pack = [ordered]@{
         schemaVersion = 1
         id = 'batman-aa-graphics-options'

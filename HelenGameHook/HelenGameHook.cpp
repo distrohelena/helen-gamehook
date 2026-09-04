@@ -100,6 +100,35 @@ namespace
         "stereo"
     };
 
+    /**
+     * @brief Exact dynamic provider identifier declared by the Batman graphics package.
+     *
+     * Runtime callback dispatch is intentionally an exact ordinal string comparison so an
+     * unknown provider cannot accidentally query or mutate the Batman display catalog.
+     */
+    constexpr std::string_view BatmanDisplayModeProviderId = "batmanDisplayModes";
+    /**
+     * @brief Dynamic request that refreshes the display catalog and snapshots the current resolution pair.
+     *
+     * The callback stores the width/height pair only after both the config read and catalog refresh
+     * succeed, ensuring the two current-resolution responses describe one catalog generation.
+     */
+    constexpr int BatmanDisplayModeCatalogRequest = 4700;
+    /**
+     * @brief Dynamic request that returns the captured current resolution width.
+     *
+     * This request is valid only after BatmanDisplayModeCatalogRequest has produced a successful
+     * snapshot; it never falls back to a default or a newly-read config value.
+     */
+    constexpr int BatmanDisplayModeCurrentWidthRequest = 4897;
+    /**
+     * @brief Dynamic request that returns and consumes the captured current resolution height.
+     *
+     * Consuming the snapshot after height prevents an out-of-sequence later request from reusing
+     * an old width/height pair after the catalog response sequence has completed.
+     */
+    constexpr int BatmanDisplayModeCurrentHeightRequest = 4898;
+
     /** @brief Runtime config key that enables the main-module LoadLibrary routing hooks. */
     constexpr std::string_view ModuleLoadRoutingLoadLibraryHooksEnabledKey = "moduleLoadRouting.loadLibraryHooksEnabled";
 
@@ -806,12 +835,12 @@ namespace
                 const std::string& provider_id,
                 int raw_request) -> std::optional<int>
         {
-            if (provider_id != "batmanDisplayModes")
+            if (provider_id != BatmanDisplayModeProviderId)
             {
                 return std::nullopt;
             }
 
-            if (raw_request == 4700)
+            if (raw_request == BatmanDisplayModeCatalogRequest)
             {
                 display_catalog_current_pair->reset();
                 const std::optional<helen::CommandIntPair> current_pair = command_dispatcher.TryGetIntPair(
@@ -824,14 +853,14 @@ namespace
 
                 *display_catalog_current_pair = *current_pair;
             }
-            else if (raw_request == 4897 || raw_request == 4898)
+            else if (raw_request == BatmanDisplayModeCurrentWidthRequest || raw_request == BatmanDisplayModeCurrentHeightRequest)
             {
                 if (!display_catalog_current_pair->has_value())
                 {
                     return std::nullopt;
                 }
 
-                if (raw_request == 4897)
+                if (raw_request == BatmanDisplayModeCurrentWidthRequest)
                 {
                     return (*display_catalog_current_pair)->FirstValue;
                 }
@@ -841,7 +870,13 @@ namespace
                 return current_height;
             }
 
-            return display_mode_service.QueryCatalogScalar(raw_request);
+            const std::optional<int> catalog_value = display_mode_service.QueryCatalogScalar(raw_request);
+            if (!catalog_value.has_value())
+            {
+                display_catalog_current_pair->reset();
+            }
+
+            return catalog_value;
         };
         g_build_runtime_coordinator = std::make_unique<helen::BuildRuntimeCoordinator>(
             active_pack_set.StartupCommandIds,

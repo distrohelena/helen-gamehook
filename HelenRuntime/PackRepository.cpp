@@ -930,6 +930,11 @@ namespace
             return true;
         }
 
+        if (definition.Kind == "set-batman-graphics-resolution-mode")
+        {
+            return true;
+        }
+
         if (definition.Kind == "sync-batman-graphics-detail-preset")
         {
             return true;

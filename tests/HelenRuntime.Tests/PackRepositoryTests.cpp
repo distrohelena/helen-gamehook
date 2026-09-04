@@ -14,6 +14,8 @@
 #include <stdexcept>
 #include <string_view>
 #include <algorithm>
+#include <cstdlib>
+#include <iostream>
 #include <vector>
 
 namespace
@@ -49,6 +51,22 @@ namespace
         {
             throw std::runtime_error("Failed to write a pack repository test file.");
         }
+    }
+
+    /**
+     * @brief Reads one complete UTF-8 text manifest from a temporary generator output file.
+     * @param path Manifest file path that must be readable.
+     * @return Complete manifest text, including every generated protocol member.
+     */
+    std::string ReadAllText(const std::filesystem::path& path)
+    {
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream)
+        {
+            throw std::runtime_error("Failed to open a generated pack repository test file.");
+        }
+
+        return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
     }
 
     /**
@@ -112,6 +130,117 @@ namespace
             "}";
         WriteAllText(build_root / "build.json", build_json);
         WriteAllText(build_root / "hooks.json", hooks_json);
+    }
+
+    /**
+     * @brief Materializes a temporary split pack from the protocol files emitted by the real rebuild script.
+     * @param packs_root Root directory under which the generated protocol pack is created.
+     * @param protocol_root Directory containing config.json, commands.json, and hooks.json from the script.
+     *
+     * The pack/build identity is deliberately synthetic; config, commands, and observers are read verbatim
+     * from the generator output so this test cannot drift through a hand-maintained protocol fixture.
+     */
+    void WriteGeneratedProtocolPackFixture(
+        const std::filesystem::path& packs_root,
+        const std::filesystem::path& protocol_root)
+    {
+        const std::string config_json = ReadAllText(protocol_root / "config.json");
+        const std::string commands_json = ReadAllText(protocol_root / "commands.json");
+        const std::string hooks_json = ReadAllText(protocol_root / "hooks.json");
+        const std::filesystem::path build_root = packs_root / "batman-aa-generated-protocol" / "builds" / "generated-protocol";
+        std::filesystem::create_directories(build_root);
+
+        const std::string pack_json =
+            "{\n"
+            "  \"schemaVersion\": 1,\n"
+            "  \"id\": \"batman-aa-generated-protocol\",\n"
+            "  \"name\": \"Generated Batman Graphics Protocol\",\n"
+            "  \"targets\": [{\"executables\": [\"GeneratedBatmanProtocol.exe\"]}],\n"
+            "  \"config\": " + config_json + ",\n"
+            "  \"builds\": [\"generated-protocol\"]\n"
+            "}";
+        const std::string build_json =
+            "{\n"
+            "  \"id\": \"generated-protocol\",\n"
+            "  \"executable\": \"GeneratedBatmanProtocol.exe\",\n"
+            "  \"match\": {\"fileSize\": 123456, \"sha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n"
+            "}";
+        WriteAllText(build_root.parent_path().parent_path() / "pack.json", pack_json);
+        WriteAllText(build_root / "build.json", build_json);
+        WriteAllText(build_root / "commands.json", commands_json);
+        WriteAllText(build_root / "hooks.json", hooks_json);
+    }
+
+    /**
+     * @brief Runs the authoritative protocol-only generator and parses its output through PackRepository.
+     * @param test_root Disposable root owned by the PackRepository test case.
+     * @param repository Repository instance used to parse the generated split pack.
+     *
+     * This is intentionally an external console-only PowerShell invocation so native tests exercise the
+     * exact rebuild construction path without rebuilding or overwriting the checked-in seven-file package.
+     */
+    void VerifyGeneratedBatmanProtocolPack(
+        const std::filesystem::path& test_root,
+        helen::PackRepository& repository)
+    {
+        const std::filesystem::path protocol_root = test_root / "generated-batman-protocol";
+        const std::filesystem::path generated_packs_root = test_root / "generated-batman-packs";
+        std::filesystem::remove_all(protocol_root);
+        std::filesystem::remove_all(generated_packs_root);
+
+        const std::filesystem::path script_path =
+            std::filesystem::absolute(std::filesystem::path(__FILE__)).parent_path().parent_path().parent_path() / "games" / "HelenBatmanAA" / "scripts" / "Rebuild-BatmanGraphicsOptionsExperiment.ps1";
+        const std::string command =
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"" + script_path.string() +
+            "\" -ProtocolManifestPath \"" + protocol_root.string() + "\"";
+        const int process_result = std::system(command.c_str());
+        Expect(process_result == 0, "Protocol-only Batman graphics generator failed.");
+        Expect(std::filesystem::is_regular_file(protocol_root / "config.json"), "Protocol-only generator did not write config.json.");
+        Expect(std::filesystem::is_regular_file(protocol_root / "commands.json"), "Protocol-only generator did not write commands.json.");
+        Expect(std::filesystem::is_regular_file(protocol_root / "hooks.json"), "Protocol-only generator did not write hooks.json.");
+
+        const std::string hooks_json = ReadAllText(protocol_root / "hooks.json");
+        const std::string dynamic_marker = "graphicsObserverDisplayModeCatalog";
+        const std::size_t dynamic_start = hooks_json.find(dynamic_marker);
+        Expect(dynamic_start != std::string::npos, "Generated protocol hooks omitted the dynamic display catalog observer.");
+        const std::size_t next_observer = hooks_json.find("\"id\"", dynamic_start + dynamic_marker.size());
+        const std::string dynamic_json = hooks_json.substr(dynamic_start, next_observer - dynamic_start);
+        for (const std::string_view forbidden_member : {
+                 "\"targetConfigKey\"",
+                 "\"mappings\"",
+                 "\"responseRequestValue\"",
+                 "\"responseMappings\"",
+                 "\"acknowledgementMappings\"",
+                 "\"command\""})
+        {
+            Expect(dynamic_json.find(forbidden_member) == std::string::npos, "Generated dynamic observer contains a forbidden static-only member.");
+        }
+
+        WriteGeneratedProtocolPackFixture(generated_packs_root, protocol_root);
+        const std::optional<helen::LoadedBuildPack> generated_pack = repository.LoadForExecutable(
+            generated_packs_root,
+            "GeneratedBatmanProtocol.exe",
+            123456,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        Expect(generated_pack.has_value(), "PackRepository rejected the generated Batman graphics protocol pack.");
+        Expect(generated_pack->Pack.ConfigEntries.size() == 18, "Generated Batman protocol config count mismatch.");
+        Expect(generated_pack->Build.Commands.size() == 4, "Generated Batman protocol command count mismatch.");
+        Expect(generated_pack->Build.StateObservers.size() == 16, "Generated Batman protocol observer count mismatch.");
+        Expect(generated_pack->Build.StateObservers[0].Mappings.size() == 2, "Generated fullscreen observer mapping count mismatch.");
+        Expect(generated_pack->Build.StateObservers[2].Mappings.size() == 98, "Generated resolution observer mapping count mismatch.");
+        Expect(generated_pack->Build.StateObservers[2].AcknowledgementMappings.size() == 98, "Generated resolution acknowledgement mapping count mismatch.");
+        for (std::size_t observer_index = 3; observer_index < 14; ++observer_index)
+        {
+            Expect(!generated_pack->Build.StateObservers[observer_index].Mappings.empty(), "Generated finite graphics observer omitted its mappings.");
+        }
+        const helen::MemoryStateObserverDefinition& dynamic_observer = generated_pack->Build.StateObservers[1];
+        Expect(dynamic_observer.TargetConfigKey.empty(), "Generated dynamic observer unexpectedly has a target config key.");
+        Expect(dynamic_observer.Mappings.empty(), "Generated dynamic observer unexpectedly has static mappings.");
+        Expect(dynamic_observer.ResponseMappings.empty(), "Generated dynamic observer unexpectedly has response mappings.");
+        Expect(dynamic_observer.AcknowledgementMappings.empty(), "Generated dynamic observer unexpectedly has acknowledgement mappings.");
+        Expect(dynamic_observer.DynamicResponseProviderId.has_value() && *dynamic_observer.DynamicResponseProviderId == "batmanDisplayModes", "Generated dynamic observer provider mismatch.");
+        Expect(dynamic_observer.DynamicResponseRequestValues.size() == 199, "Generated dynamic observer request count mismatch.");
+        std::cout << "GENERATED_BATMAN_PROTOCOL_PASS\n";
     }
 
     /**
@@ -1619,6 +1748,8 @@ void RunPackRepositoryTests()
             1234,
             "abcdef");
         Expect(!malformed_pack.has_value(), "Pack repository unexpectedly loaded a build whose hooks.json was malformed.");
+
+        VerifyGeneratedBatmanProtocolPack(root, repository);
 
         const std::optional<helen::LoadedBuildPack> mode_mismatch_pack = repository.LoadForExecutable(
             packs_root,

@@ -400,8 +400,14 @@ function Assert-BatmanRuntimeDisplayProviderContract {
     $callbackMatch = [regex]::Match($source, '(?s)const\s+helen::MemoryStateObserverDynamicResponseCallback\s+dynamic_response_callback\s*=\s*(?<body>.*?);\s*g_build_runtime_coordinator\s*=')
     if (-not $callbackMatch.Success) { throw 'Batman runtime dynamic provider callback could not be isolated.' }
     $callback = $callbackMatch.Groups['body'].Value
-    foreach ($required in @('provider_id != "batmanDisplayModes"', 'raw_request == 4700', 'TryGetIntPair', 'display_mode_service.Refresh()', 'raw_request == 4897 || raw_request == 4898', 'QueryCatalogScalar')) {
+    foreach ($required in @('provider_id != BatmanDisplayModeProviderId', 'raw_request == BatmanDisplayModeCatalogRequest', 'TryGetIntPair', 'display_mode_service.Refresh()', 'raw_request == BatmanDisplayModeCurrentWidthRequest || raw_request == BatmanDisplayModeCurrentHeightRequest', 'raw_request == BatmanDisplayModeCurrentWidthRequest', 'QueryCatalogScalar')) {
         Assert-ContainsOrdinal -Text $callback -Token $required -Context "Batman runtime dynamic provider callback ($required)"
+    }
+    foreach ($required in @('const std::optional<int> catalog_value = display_mode_service.QueryCatalogScalar(raw_request)', 'if (!catalog_value.has_value())', 'display_catalog_current_pair->reset()')) {
+        Assert-ContainsOrdinal -Text $callback -Token $required -Context "Batman runtime dynamic provider failure cleanup ($required)"
+    }
+    foreach ($required in @('BatmanDisplayModeProviderId = "batmanDisplayModes"', 'BatmanDisplayModeCatalogRequest = 4700', 'BatmanDisplayModeCurrentWidthRequest = 4897', 'BatmanDisplayModeCurrentHeightRequest = 4898')) {
+        Assert-ContainsOrdinal -Text $source -Token $required -Context "Batman runtime display protocol constant ($required)"
     }
     if (([regex]::Matches($callback, 'display_catalog_current_pair->reset\(\)')).Count -lt 2 -or $source.IndexOf('std::make_shared<std::optional<helen::CommandIntPair>>()', [StringComparison]::Ordinal) -lt 0) { throw 'Batman runtime dynamic provider must clear the owned current-pair snapshot on refresh and after the height response.' }
     $coordinatorMatch = [regex]::Match($source, '(?s)g_build_runtime_coordinator\s*=\s*std::make_unique<helen::BuildRuntimeCoordinator>\(.*?\);')
@@ -413,6 +419,40 @@ function Assert-BatmanRuntimeDisplayProviderContract {
     $graphicsReset = $reset.IndexOf('g_batman_graphics_config_service.reset()', [StringComparison]::Ordinal)
     $displayReset = $reset.IndexOf('g_batman_display_mode_service.reset()', [StringComparison]::Ordinal)
     if ($coordinatorReset -lt 0 -or $graphicsReset -lt 0 -or $displayReset -lt 0 -or $coordinatorReset -ge $graphicsReset -or $graphicsReset -ge $displayReset) { throw 'Batman runtime reset must stop the coordinator before graphics and display services.' }
+}
+
+function Assert-GraphicsDynamicResponseParameterContract {
+    <# Exercise the generator's strict numeric boundary so PowerShell coercion cannot alter protocol bounds. #>
+    param([Parameter(Mandatory = $true)] [string]$RebuildPath)
+    . $RebuildPath -FunctionsOnly
+    $parameters = @{
+        Id = 'catalog'
+        AddressMatchValues = @(4700, 4899)
+        DynamicResponseProvider = 'batmanDisplayModes'
+        DynamicResponseRequests = @(4700, 4898)
+        DynamicResponseMinimumValue = 1
+        DynamicResponseMaximumValue = 32767
+        FailureResponseValue = 4899
+    }
+    $valid = New-GraphicsCarrierObserver @parameters
+    $validJson = $valid | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+    Assert-StrictJsonIntegerEquals -Value $validJson.dynamicResponse.minimumValue -Expected 1 -Context 'dynamic generator minimumValue'
+    Assert-StrictJsonIntegerEquals -Value $validJson.dynamicResponse.maximumValue -Expected 32767 -Context 'dynamic generator maximumValue'
+    foreach ($invalidBounds in @(
+        [pscustomobject]@{ Minimum = 1.5; Maximum = 32767 },
+        [pscustomobject]@{ Minimum = '1'; Maximum = 32767 },
+        [pscustomobject]@{ Minimum = $true; Maximum = 32767 },
+        [pscustomobject]@{ Minimum = $null; Maximum = 32767 },
+        [pscustomobject]@{ Minimum = 0; Maximum = 32767 },
+        [pscustomobject]@{ Minimum = 1; Maximum = 32768 }
+    )) {
+        $invalidParameters = $parameters.Clone()
+        $invalidParameters['DynamicResponseMinimumValue'] = $invalidBounds.Minimum
+        $invalidParameters['DynamicResponseMaximumValue'] = $invalidBounds.Maximum
+        $rejected = $false
+        try { $null = New-GraphicsCarrierObserver @invalidParameters } catch { $rejected = $true }
+        if (-not $rejected) { throw "Dynamic response bounds accepted invalid values '$($invalidBounds.Minimum)'/'$($invalidBounds.Maximum)'." }
+    }
 }
 
 function Get-HgdeltaFunctionBody {
@@ -795,6 +835,7 @@ foreach ($requiredPath in @($packJsonPath, $buildJsonPath, $bindingsJsonPath, $c
 $rebuildSourcePath = Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1'
 $runtimeSourcePath = Join-Path (Split-Path -Parent $PSScriptRoot | Split-Path -Parent | Split-Path -Parent) 'HelenGameHook\HelenGameHook.cpp'
 Assert-RebuildAtomicSourceContract -ScriptPath $rebuildSourcePath
+Assert-GraphicsDynamicResponseParameterContract -RebuildPath $rebuildSourcePath
 Assert-BatmanRuntimeDisplayProviderContract -RuntimeSourcePath $runtimeSourcePath
 Assert-CurrentGraphicsSourceProvenance -RebuildPath $rebuildSourcePath -ShellTemplatePath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsShellScriptTemplates.cs') -ShellBuilderPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsAssetBuilder.cs') -BuilderProgramPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\Program.cs') -XmlPatcherPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsXmlPatcher.cs')
 Assert-AtomicPublicationRegression
