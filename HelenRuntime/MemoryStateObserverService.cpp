@@ -271,6 +271,20 @@ namespace
     }
 
     /**
+     * @brief Returns whether a raw value is one of the explicitly declared dynamic response requests.
+     * @param definition Observer definition whose dynamic request list should be searched.
+     * @param raw_value Raw carrier value being classified.
+     * @return True when the raw value is a declared dynamic request; otherwise false.
+     */
+    bool IsDynamicResponseRequestValue(const helen::MemoryStateObserverDefinition& definition, int raw_value) noexcept
+    {
+        return std::find(
+            definition.DynamicResponseRequestValues.begin(),
+            definition.DynamicResponseRequestValues.end(),
+            raw_value) != definition.DynamicResponseRequestValues.end();
+    }
+
+    /**
      * @brief Returns the smallest positive poll interval declared by the active observer set.
      * @param definitions Observers whose timed poll intervals should be examined.
      * @return Smallest declared poll interval in milliseconds.
@@ -341,15 +355,19 @@ namespace helen
     MemoryStateObserverService::MemoryStateObserverService(
         std::vector<MemoryStateObserverDefinition> definitions,
         UpdateCallback update_callback,
-        ConfigValueCallback config_value_callback)
+        ConfigValueCallback config_value_callback,
+        MemoryStateObserverDynamicResponseCallback dynamic_response_callback)
         : definitions_(std::move(definitions)),
           update_callback_(std::move(update_callback)),
-          config_value_callback_(std::move(config_value_callback))
+          config_value_callback_(std::move(config_value_callback)),
+          dynamic_response_callback_(std::move(dynamic_response_callback))
     {
         debug_views_.reserve(definitions_.size());
         last_poll_ticks_.assign(definitions_.size(), 0);
         pending_transaction_requests_.assign(definitions_.size(), std::nullopt);
         pending_transaction_addresses_.assign(definitions_.size(), std::nullopt);
+        transient_dynamic_responses_.assign(definitions_.size(), std::nullopt);
+        transient_dynamic_addresses_.assign(definitions_.size(), std::nullopt);
 
         for (const MemoryStateObserverDefinition& definition : definitions_)
         {
@@ -417,6 +435,12 @@ namespace helen
         {
             worker_to_join.join();
         }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::fill(transient_dynamic_responses_.begin(), transient_dynamic_responses_.end(), std::nullopt);
+        std::fill(transient_dynamic_addresses_.begin(), transient_dynamic_addresses_.end(), std::nullopt);
+        grouped_transient_dynamic_responses_.clear();
+        grouped_transient_dynamic_addresses_.clear();
     }
 
     bool MemoryStateObserverService::PollOnce()
@@ -537,6 +561,8 @@ namespace helen
             {
                 pending_transaction_requests_[observer_index].reset();
                 pending_transaction_addresses_[observer_index].reset();
+                transient_dynamic_responses_[observer_index].reset();
+                transient_dynamic_addresses_[observer_index].reset();
             }
 
             debug_views_[observer_index].CachedAddress = address;
@@ -546,6 +572,8 @@ namespace helen
         const auto previous_grouped_address = grouped_addresses_.find(*address_group);
         if (previous_grouped_address != grouped_addresses_.end() && previous_grouped_address->second != address)
         {
+            grouped_transient_dynamic_responses_.erase(*address_group);
+            grouped_transient_dynamic_addresses_.erase(*address_group);
             for (std::size_t matching_index = 0; matching_index < definitions_.size(); ++matching_index)
             {
                 if (definitions_[matching_index].AddressGroup == address_group)
@@ -575,10 +603,14 @@ namespace helen
             debug_views_[observer_index].CachedAddress = 0;
             pending_transaction_requests_[observer_index].reset();
             pending_transaction_addresses_[observer_index].reset();
+            transient_dynamic_responses_[observer_index].reset();
+            transient_dynamic_addresses_[observer_index].reset();
             return;
         }
 
         grouped_addresses_.erase(*address_group);
+        grouped_transient_dynamic_responses_.erase(*address_group);
+        grouped_transient_dynamic_addresses_.erase(*address_group);
         for (std::size_t matching_index = 0; matching_index < definitions_.size(); ++matching_index)
         {
             if (definitions_[matching_index].AddressGroup == address_group)
@@ -675,6 +707,109 @@ namespace helen
         return true;
     }
 
+    bool MemoryStateObserverService::IsDynamicTransientResponse(
+        std::size_t observer_index,
+        std::uintptr_t address,
+        int raw_value) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const std::optional<std::string>& address_group = definitions_[observer_index].AddressGroup;
+        if (address_group.has_value())
+        {
+            const auto response = grouped_transient_dynamic_responses_.find(*address_group);
+            const auto response_address = grouped_transient_dynamic_addresses_.find(*address_group);
+            return response != grouped_transient_dynamic_responses_.end() &&
+                response_address != grouped_transient_dynamic_addresses_.end() &&
+                response->second == raw_value &&
+                response_address->second == address;
+        }
+
+        return transient_dynamic_responses_[observer_index].has_value() &&
+            transient_dynamic_addresses_[observer_index].has_value() &&
+            *transient_dynamic_responses_[observer_index] == raw_value &&
+            *transient_dynamic_addresses_[observer_index] == address;
+    }
+
+    void MemoryStateObserverService::ClearDynamicTransientResponse(std::size_t observer_index)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const std::optional<std::string>& address_group = definitions_[observer_index].AddressGroup;
+        if (address_group.has_value())
+        {
+            grouped_transient_dynamic_responses_.erase(*address_group);
+            grouped_transient_dynamic_addresses_.erase(*address_group);
+            return;
+        }
+
+        transient_dynamic_responses_[observer_index].reset();
+        transient_dynamic_addresses_[observer_index].reset();
+    }
+
+    void MemoryStateObserverService::RecordDynamicTransientResponse(
+        std::size_t observer_index,
+        std::uintptr_t address,
+        int response_value)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const std::optional<std::string>& address_group = definitions_[observer_index].AddressGroup;
+        if (address_group.has_value())
+        {
+            grouped_transient_dynamic_responses_[*address_group] = response_value;
+            grouped_transient_dynamic_addresses_[*address_group] = address;
+            return;
+        }
+
+        transient_dynamic_responses_[observer_index] = response_value;
+        transient_dynamic_addresses_[observer_index] = address;
+    }
+
+    bool MemoryStateObserverService::WriteDynamicFailureResponse(
+        std::size_t observer_index,
+        const MemoryStateObserverDefinition& definition,
+        std::uintptr_t resolved_address,
+        int raw_value,
+        const char* reason)
+    {
+        if (!definition.FailureResponseValue.has_value())
+        {
+            Logf(
+                L"[observer] dynamic response failed id=%hs raw=%d reason=%hs-failure-response-missing",
+                definition.Id.c_str(),
+                raw_value,
+                reason);
+            ClearDynamicTransientResponse(observer_index);
+            return false;
+        }
+
+        std::uintptr_t response_address = 0;
+        if (!TryApplyOffset(resolved_address, definition.ValueOffset, response_address) ||
+            !TryWriteInt32(response_address, *definition.FailureResponseValue))
+        {
+            Logf(
+                L"[observer] dynamic response failed id=%hs raw=%d response=%d reason=%hs-write-failed",
+                definition.Id.c_str(),
+                raw_value,
+                *definition.FailureResponseValue,
+                reason);
+            ClearDynamicTransientResponse(observer_index);
+            return false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            debug_views_[observer_index].LastRawValue = definition.FailureResponseValue;
+        }
+        ClearDynamicTransientResponse(observer_index);
+        Logf(
+            L"[observer] dynamic response failure handled id=%hs raw=%d response=%d address=0x%08llX reason=%hs",
+            definition.Id.c_str(),
+            raw_value,
+            *definition.FailureResponseValue,
+            static_cast<unsigned long long>(response_address),
+            reason);
+        return true;
+    }
+
     bool MemoryStateObserverService::PollObserver(
         std::size_t observer_index,
         std::unordered_set<std::string>& scanned_address_groups)
@@ -697,6 +832,7 @@ namespace helen
         std::optional<std::uintptr_t> resolved_address;
         std::optional<int> raw_value;
         std::optional<int> mapped_value;
+        bool dynamic_transient_response = false;
         bool scan_performed = false;
 
         if (cached_address != 0)
@@ -713,12 +849,18 @@ namespace helen
                 {
                     int cached_raw_value = 0;
                     if (TryReadInt32(value_address, cached_raw_value)
-                        && IsAddressMatchValue(definition, cached_raw_value)
-                        && MatchesObserverChecks(definition, cached_address))
+                        && MatchesObserverChecks(definition, cached_address)
+                        && (IsAddressMatchValue(definition, cached_raw_value) ||
+                            IsDynamicTransientResponse(observer_index, cached_address, cached_raw_value)))
                     {
                         resolved_address = cached_address;
                         raw_value = cached_raw_value;
                         mapped_value = TryMapObservedValue(definition, cached_raw_value);
+                        dynamic_transient_response = IsDynamicTransientResponse(observer_index, cached_address, cached_raw_value);
+                        if (dynamic_transient_response)
+                        {
+                            mapped_value = std::nullopt;
+                        }
                     }
                 }
             }
@@ -823,6 +965,100 @@ namespace helen
         }
 
         ReconcilePendingTransaction(observer_index, resolved_address, raw_value);
+
+        const bool is_dynamic_response_observer = definition.DynamicResponseProviderId.has_value();
+        if (is_dynamic_response_observer &&
+            resolved_address.has_value() &&
+            raw_value.has_value() &&
+            !dynamic_transient_response &&
+            IsDynamicResponseRequestValue(definition, *raw_value))
+        {
+            ClearDynamicTransientResponse(observer_index);
+            if (!dynamic_response_callback_)
+            {
+                const bool failure_written = WriteDynamicFailureResponse(
+                    observer_index,
+                    definition,
+                    *resolved_address,
+                    *raw_value,
+                    "callback-missing");
+                CacheResolvedAddress(observer_index, *resolved_address);
+                return failure_written;
+            }
+
+            std::optional<int> dynamic_value;
+            try
+            {
+                dynamic_value = dynamic_response_callback_(*definition.DynamicResponseProviderId, *raw_value);
+            }
+            catch (const std::exception& exception)
+            {
+                Logf(
+                    L"[observer] dynamic response failed id=%hs raw=%d reason=callback-exception message=%hs",
+                    definition.Id.c_str(),
+                    *raw_value,
+                    exception.what());
+                const bool failure_written = WriteDynamicFailureResponse(
+                    observer_index,
+                    definition,
+                    *resolved_address,
+                    *raw_value,
+                    "callback-exception");
+                CacheResolvedAddress(observer_index, *resolved_address);
+                return failure_written;
+            }
+            catch (...)
+            {
+                const bool failure_written = WriteDynamicFailureResponse(
+                    observer_index,
+                    definition,
+                    *resolved_address,
+                    *raw_value,
+                    "callback-exception-unknown");
+                CacheResolvedAddress(observer_index, *resolved_address);
+                return failure_written;
+            }
+
+            if (!dynamic_value.has_value() ||
+                *dynamic_value < 0 ||
+                *dynamic_value == (std::numeric_limits<int>::min)() ||
+                *dynamic_value < definition.DynamicResponseMinimumValue ||
+                *dynamic_value > definition.DynamicResponseMaximumValue)
+            {
+                const bool failure_written = WriteDynamicFailureResponse(
+                    observer_index,
+                    definition,
+                    *resolved_address,
+                    *raw_value,
+                    "provider-result-invalid");
+                CacheResolvedAddress(observer_index, *resolved_address);
+                return failure_written;
+            }
+
+            const int response_value = -*dynamic_value;
+            std::uintptr_t response_address = 0;
+            if (!TryApplyOffset(*resolved_address, definition.ValueOffset, response_address) ||
+                !TryWriteInt32(response_address, response_value))
+            {
+                ClearDynamicTransientResponse(observer_index);
+                return false;
+            }
+
+            RecordDynamicTransientResponse(observer_index, *resolved_address, response_value);
+            CacheResolvedAddress(observer_index, *resolved_address);
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                debug_views_[observer_index].LastRawValue = response_value;
+            }
+            Logf(
+                L"[observer] dynamic response id=%hs provider=%hs request=%d response=%d address=0x%08llX",
+                definition.Id.c_str(),
+                definition.DynamicResponseProviderId->c_str(),
+                *raw_value,
+                response_value,
+                static_cast<unsigned long long>(*resolved_address));
+            return true;
+        }
 
         bool response_written = false;
         if (resolved_address.has_value() &&

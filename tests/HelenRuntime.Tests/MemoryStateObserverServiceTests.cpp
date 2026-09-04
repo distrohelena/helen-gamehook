@@ -187,6 +187,217 @@ namespace
     }
 
     /**
+     * @brief Builds one response-only observer definition for scalar display-mode transport tests.
+     * @param scan_start Inclusive scan start address for the observer.
+     * @param scan_end Exclusive scan end address for the observer.
+     * @param address_group Optional shared address-group identifier for grouped transport tests.
+     * @return Fully populated dynamic response observer definition with static carrier sentinels.
+     */
+    helen::MemoryStateObserverDefinition CreateDynamicResponseObserverDefinition(
+        std::uintptr_t scan_start,
+        std::uintptr_t scan_end,
+        const std::optional<std::string>& address_group = std::nullopt)
+    {
+        helen::MemoryStateObserverDefinition definition;
+        definition.Id = "batmanDisplayModeObserver";
+        definition.ScanStartAddress = scan_start;
+        definition.ScanEndAddress = scan_end;
+        definition.ScanStride = 4;
+        definition.ValueOffset = 0;
+        definition.PollIntervalMs = 1;
+        definition.AddressGroup = address_group;
+        definition.AddressMatchValues = { 4700, 4701, 4702, 4899 };
+        definition.DynamicResponseProviderId = "batmanDisplayModes";
+        definition.DynamicResponseRequestValues = { 4700, 4701, 4702 };
+        definition.DynamicResponseMinimumValue = 1;
+        definition.DynamicResponseMaximumValue = 32767;
+        definition.FailureResponseValue = 4899;
+
+        helen::MemoryStateObserverCheckDefinition constant_check;
+        constant_check.Comparison = "equals-constant";
+        constant_check.Offset = -16;
+        constant_check.ExpectedValue = 50;
+        definition.Checks.push_back(constant_check);
+        return definition;
+    }
+
+    /**
+     * @brief Writes the static structural words required by one dynamic display-mode carrier.
+     * @param base_address Carrier base address whose words should be initialized.
+     * @param raw_value Static request or failure sentinel written at the value offset.
+     */
+    void ConfigureDynamicResponseCarrier(std::uintptr_t base_address, int raw_value)
+    {
+        WriteInt32(base_address - 16, 50);
+        WriteInt32(base_address, raw_value);
+    }
+
+    /**
+     * @brief Exercises dynamic scalar success transport and every declared provider failure mode.
+     * @remarks A dynamic response is written as the negative scalar response and never reaches the update callback.
+     */
+    void RunDynamicResponseTransportTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for dynamic observer transport tests.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 64;
+        std::vector<helen::MemoryStateObserverUpdate> updates;
+        std::vector<int> callback_requests;
+        helen::MemoryStateObserverService service(
+            { CreateDynamicResponseObserverDefinition(page_address, page_address + page_size) },
+            [&updates](const helen::MemoryStateObserverUpdate& update)
+            {
+                updates.push_back(update);
+                return true;
+            },
+            {},
+            [&callback_requests](const std::string& provider_id, int raw_request_value)
+            {
+                Expect(provider_id == "batmanDisplayModes", "Dynamic provider identifier mismatch.");
+                callback_requests.push_back(raw_request_value);
+                if (raw_request_value == 4700)
+                {
+                    return std::optional<int>(3);
+                }
+                if (raw_request_value == 4701)
+                {
+                    return std::optional<int>(1920);
+                }
+                return std::optional<int>(1080);
+            });
+
+        try
+        {
+            ConfigureDynamicResponseCarrier(candidate_address, -3);
+            Expect(service.PollOnce(), "Initial transient response scan unexpectedly failed.");
+            Expect(service.GetDebugViews()[0].CachedAddress == 0, "Initial discovery accepted a negative response without a pending dynamic request.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 4700);
+            WriteInt32(candidate_address - 16, 51);
+            Expect(service.PollOnce(), "Initial structural validation scan unexpectedly failed.");
+            Expect(service.GetDebugViews()[0].CachedAddress == 0, "Initial discovery accepted a request without structural checks.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 4700);
+            Expect(service.PollOnce(), "Initial dynamic response discovery unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == -3, "Dynamic request 4700 did not receive the encoded response.");
+            Expect(updates.empty(), "Dynamic response unexpectedly emitted a mapped observer update.");
+            Expect(callback_requests.size() == 1 && callback_requests[0] == 4700, "Dynamic request callback payload mismatch.");
+
+            Expect(service.PollOnce(), "Exact pending dynamic response unexpectedly invalidated the carrier.");
+            Expect(service.GetDebugViews()[0].CachedAddress == candidate_address, "Exact pending dynamic response did not preserve the cached carrier.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 4701);
+            Expect(service.PollOnce(), "Dynamic request 4701 unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == -1920, "Dynamic request 4701 did not receive the encoded response.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 4702);
+            Expect(service.PollOnce(), "Dynamic request 4702 unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == -1080, "Dynamic request 4702 did not receive the encoded response.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, -777);
+            Expect(service.PollOnce(), "Unrelated negative response poll unexpectedly failed.");
+            Expect(service.GetDebugViews()[0].CachedAddress == 0, "Unrelated negative response did not invalidate the cached carrier.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 4700);
+            Expect(service.PollOnce(), "Dynamic observer did not rediscover after unrelated invalidation.");
+            Expect(ReadInt32(candidate_address) == -3, "Dynamic observer did not answer the rediscovered request.");
+        }
+        catch (...)
+        {
+            service.Stop();
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+
+        service.Stop();
+        Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release dynamic observer transport allocation.");
+
+        const int invalid_results[] = { 0, 32768, -1 };
+        for (const int invalid_result : invalid_results)
+        {
+            void* const invalid_allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            Expect(invalid_allocation != nullptr, "Failed to allocate memory for dynamic provider bound test.");
+            const std::uintptr_t invalid_page_address = reinterpret_cast<std::uintptr_t>(invalid_allocation);
+            const std::uintptr_t invalid_candidate_address = invalid_page_address + 64;
+            ConfigureDynamicResponseCarrier(invalid_candidate_address, 4700);
+            helen::MemoryStateObserverService invalid_service(
+                { CreateDynamicResponseObserverDefinition(invalid_page_address, invalid_page_address + page_size) },
+                {},
+                {},
+                [invalid_result](const std::string&, int)
+                {
+                    return std::optional<int>(invalid_result);
+                });
+            Expect(invalid_service.PollOnce(), "Invalid dynamic provider result unexpectedly failed the poll.");
+            Expect(ReadInt32(invalid_candidate_address) == 4899, "Invalid dynamic provider result did not receive the failure response.");
+            invalid_service.Stop();
+            Expect(VirtualFree(invalid_allocation, 0, MEM_RELEASE) != FALSE, "Failed to release dynamic provider bound test allocation.");
+        }
+
+        void* const missing_callback_allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(missing_callback_allocation != nullptr, "Failed to allocate memory for missing dynamic callback test.");
+        const std::uintptr_t missing_callback_page_address = reinterpret_cast<std::uintptr_t>(missing_callback_allocation);
+        const std::uintptr_t missing_callback_candidate_address = missing_callback_page_address + 64;
+        ConfigureDynamicResponseCarrier(missing_callback_candidate_address, 4700);
+        helen::MemoryStateObserverService missing_callback_service(
+            { CreateDynamicResponseObserverDefinition(missing_callback_page_address, missing_callback_page_address + page_size) },
+            {});
+        Expect(missing_callback_service.PollOnce(), "Missing dynamic callback unexpectedly failed the poll.");
+        Expect(ReadInt32(missing_callback_candidate_address) == 4899, "Missing dynamic callback did not receive the failure response.");
+        missing_callback_service.Stop();
+        Expect(VirtualFree(missing_callback_allocation, 0, MEM_RELEASE) != FALSE, "Failed to release missing callback test allocation.");
+
+        void* const missing_result_allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(missing_result_allocation != nullptr, "Failed to allocate memory for missing dynamic result test.");
+        const std::uintptr_t missing_result_page_address = reinterpret_cast<std::uintptr_t>(missing_result_allocation);
+        const std::uintptr_t missing_result_candidate_address = missing_result_page_address + 64;
+        ConfigureDynamicResponseCarrier(missing_result_candidate_address, 4700);
+        helen::MemoryStateObserverService missing_result_service(
+            { CreateDynamicResponseObserverDefinition(missing_result_page_address, missing_result_page_address + page_size) },
+            {},
+            {},
+            [](const std::string&, int)
+            {
+                return std::optional<int>();
+            });
+        Expect(missing_result_service.PollOnce(), "Missing dynamic provider result unexpectedly failed the poll.");
+        Expect(ReadInt32(missing_result_candidate_address) == 4899, "Missing dynamic provider result did not receive the failure response.");
+        missing_result_service.Stop();
+        Expect(VirtualFree(missing_result_allocation, 0, MEM_RELEASE) != FALSE, "Failed to release missing result test allocation.");
+
+        void* const exception_allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(exception_allocation != nullptr, "Failed to allocate memory for dynamic callback exception test.");
+        const std::uintptr_t exception_page_address = reinterpret_cast<std::uintptr_t>(exception_allocation);
+        const std::uintptr_t exception_candidate_address = exception_page_address + 64;
+        ConfigureDynamicResponseCarrier(exception_candidate_address, 4700);
+        helen::MemoryStateObserverService exception_service(
+            { CreateDynamicResponseObserverDefinition(exception_page_address, exception_page_address + page_size) },
+            {},
+            {},
+            [](const std::string&, int) -> std::optional<int>
+            {
+                throw std::runtime_error("dynamic provider failure");
+            });
+        Expect(exception_service.PollOnce(), "Dynamic callback exception unexpectedly failed the poll.");
+        Expect(ReadInt32(exception_candidate_address) == 4899, "Dynamic callback exception did not receive the failure response.");
+        exception_service.Stop();
+        Expect(VirtualFree(exception_allocation, 0, MEM_RELEASE) != FALSE, "Failed to release callback exception test allocation.");
+    }
+
+    /**
      * @brief Describes one structural check used to construct a graphics carrier observer test definition.
      */
     struct GraphicsCarrierCheck
@@ -2240,6 +2451,80 @@ namespace
             throw;
         }
     }
+
+    /**
+     * @brief Verifies that one exact grouped transient dynamic response remains available to every grouped observer.
+     * @remarks The non-originating observer must preserve the shared cache without invoking a provider or emitting an update.
+     */
+    void RunGroupedDynamicResponseTransportTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for grouped dynamic response tests.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 64;
+        ConfigureDynamicResponseCarrier(candidate_address, 4700);
+        std::vector<int> callback_requests;
+        std::vector<helen::MemoryStateObserverUpdate> updates;
+        helen::MemoryStateObserverService service(
+            {
+                CreateDynamicResponseObserverDefinition(page_address, page_address + page_size, "displayModes"),
+                CreateDynamicResponseObserverDefinition(page_address, page_address + page_size, "displayModes")
+            },
+            [&updates](const helen::MemoryStateObserverUpdate& update)
+            {
+                updates.push_back(update);
+                return true;
+            },
+            {},
+            [&callback_requests](const std::string&, int raw_request_value)
+            {
+                callback_requests.push_back(raw_request_value);
+                return std::optional<int>(raw_request_value == 4700 ? 3 : 1920);
+            });
+
+        try
+        {
+            Expect(service.PollOnce(), "Grouped dynamic response discovery unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == -3, "Grouped dynamic response did not receive the origin response.");
+            Expect(callback_requests.size() == 1, "Grouped dynamic response was consumed by more than its origin observer.");
+            Expect(updates.empty(), "Grouped dynamic response emitted an observer update.");
+
+            const std::vector<helen::MemoryStateObserverDebugView> cached_views = service.GetDebugViews();
+            Expect(cached_views.size() == 2, "Grouped dynamic response debug view count mismatch.");
+            Expect(cached_views[0].CachedAddress == candidate_address && cached_views[1].CachedAddress == candidate_address, "Grouped transient response did not preserve every observer cache.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 4701);
+            Expect(service.PollOnce(), "Grouped dynamic request replacement unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == -1920, "Grouped dynamic request replacement did not receive its response.");
+            Expect(callback_requests.size() == 2, "Grouped dynamic request replacement did not clear the old transient response.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, -777);
+            Expect(service.PollOnce(), "Grouped unrelated negative response poll unexpectedly failed.");
+            const std::vector<helen::MemoryStateObserverDebugView> invalidated_views = service.GetDebugViews();
+            Expect(invalidated_views[0].CachedAddress == 0 && invalidated_views[1].CachedAddress == 0, "Grouped unrelated negative response did not invalidate every cache.");
+        }
+        catch (...)
+        {
+            service.Stop();
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+
+        service.Stop();
+        Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release grouped dynamic response allocation.");
+    }
 }
 
 /**
@@ -2266,6 +2551,8 @@ void RunMemoryStateObserverServiceTests()
     RunGroupedGraphicsCarrierObserverStaleCacheTest();
     RunGroupedBatmanGraphicsQualityCoverageTest();
     RunObserverPollPassSerializationTest();
+    RunDynamicResponseTransportTest();
+    RunGroupedDynamicResponseTransportTest();
 
     SYSTEM_INFO system_info{};
     GetSystemInfo(&system_info);

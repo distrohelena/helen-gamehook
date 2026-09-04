@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <HelenHook/MemoryStateObserverDebugView.h>
+#include <HelenHook/MemoryStateObserverDynamicResponseCallback.h>
 #include <HelenHook/MemoryStateObserverDefinition.h>
 #include <HelenHook/MemoryStateObserverUpdate.h>
 
@@ -41,11 +42,13 @@ namespace helen
          * @param definitions Declarative observers that should be evaluated by the service.
          * @param update_callback Callback invoked synchronously for each eligible mapped request or update; it applies the mapped update and reports whether all required native work succeeded, and it must not re-enter this service through PollOnce(), Start(), Stop(), or another observer lifecycle method.
          * @param config_value_callback Optional callback used synchronously by request-response observers to read current config; when supplied, it must not re-enter this service through PollOnce(), Start(), Stop(), or another observer lifecycle method.
+         * @param dynamic_response_callback Optional callback used synchronously by response-only observers to resolve a bounded scalar response; when supplied, it must not re-enter this service through PollOnce(), Start(), Stop(), or another observer lifecycle method.
          */
         MemoryStateObserverService(
             std::vector<MemoryStateObserverDefinition> definitions,
             UpdateCallback update_callback,
-            ConfigValueCallback config_value_callback = {});
+            ConfigValueCallback config_value_callback = {},
+            MemoryStateObserverDynamicResponseCallback dynamic_response_callback = {});
 
         /**
          * @brief Stops the background polling thread before the service is destroyed.
@@ -154,6 +157,52 @@ namespace helen
             int raw_value,
             const char* reason);
 
+        /**
+         * @brief Writes a dynamic observer failure response and clears its transient response state.
+         * @param observer_index Zero-based observer index whose debug and transient state should be updated.
+         * @param definition Observer definition declaring the failure response and value offset.
+         * @param resolved_address Structurally validated carrier base address receiving the failure response.
+         * @param raw_value Raw dynamic request that caused the provider failure.
+         * @param reason Stable diagnostic reason recorded in the handled-failure log.
+         * @return True only when the declared failure response was written successfully; otherwise false.
+         * @remarks The caller must not hold mutex_; grouped transient state is cleared for every observer sharing the address group.
+         */
+        bool WriteDynamicFailureResponse(
+            std::size_t observer_index,
+            const MemoryStateObserverDefinition& definition,
+            std::uintptr_t resolved_address,
+            int raw_value,
+            const char* reason);
+
+        /**
+         * @brief Returns whether a cached raw value is the exact transient response owned by the observer or its address group.
+         * @param observer_index Zero-based observer index whose transient state should be checked.
+         * @param address Cached carrier base address associated with the candidate raw value.
+         * @param raw_value Raw value read from the cached carrier.
+         * @return True when the response and address exactly match an outstanding dynamic response.
+         */
+        bool IsDynamicTransientResponse(
+            std::size_t observer_index,
+            std::uintptr_t address,
+            int raw_value) const;
+
+        /**
+         * @brief Clears the transient dynamic response owned by an observer or its address group.
+         * @param observer_index Zero-based observer index whose transient response should be cleared.
+         */
+        void ClearDynamicTransientResponse(std::size_t observer_index);
+
+        /**
+         * @brief Records one successfully written dynamic response for an observer or its address group.
+         * @param observer_index Zero-based observer index that originated the response.
+         * @param address Carrier base address receiving the response.
+         * @param response_value Negative raw response written to the carrier.
+         */
+        void RecordDynamicTransientResponse(
+            std::size_t observer_index,
+            std::uintptr_t address,
+            int response_value);
+
         /** @brief Declared observers evaluated by this service. */
         std::vector<MemoryStateObserverDefinition> definitions_;
         /** @brief Live debug state that mirrors the declared observer order. */
@@ -170,6 +219,16 @@ namespace helen
         UpdateCallback update_callback_;
         /** @brief Optional callback that supplies current config values for bidirectional carrier responses. */
         ConfigValueCallback config_value_callback_;
+        /** @brief Optional callback that resolves bounded scalar values for response-only observers. */
+        MemoryStateObserverDynamicResponseCallback dynamic_response_callback_;
+        /** @brief Exact negative response retained for each ungrouped observer until a new request or invalidation arrives. */
+        std::vector<std::optional<int>> transient_dynamic_responses_;
+        /** @brief Carrier address paired with each ungrouped transient dynamic response. */
+        std::vector<std::optional<std::uintptr_t>> transient_dynamic_addresses_;
+        /** @brief Exact negative response retained once for each grouped observer address group. */
+        std::unordered_map<std::string, int> grouped_transient_dynamic_responses_;
+        /** @brief Carrier address paired with each grouped transient dynamic response. */
+        std::unordered_map<std::string, std::uintptr_t> grouped_transient_dynamic_addresses_;
         /** @brief Protects debug views, cached addresses, and thread start-stop state. */
         mutable std::mutex mutex_;
         /** @brief Serializes complete observer poll passes so manual and worker polling cannot overlap state validation, responses, or callbacks; it remains held through both callback types and therefore requires callbacks to avoid re-entering this service. */
