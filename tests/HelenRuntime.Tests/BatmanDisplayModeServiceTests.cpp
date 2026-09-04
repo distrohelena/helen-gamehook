@@ -107,12 +107,15 @@ void RunBatmanDisplayModeServiceTests()
     }
 
     {
+        const std::vector<int> qualifying_process_window_candidates = { 1, 2 };
         helen::BatmanDisplayModeService service(
-            [](std::wstring&, std::vector<helen::BatmanDisplayMode>&)
+            [&qualifying_process_window_candidates](std::wstring&, std::vector<helen::BatmanDisplayMode>&)
             {
-                return false;
+                const std::size_t candidate_count = qualifying_process_window_candidates.size();
+                return candidate_count == 1;
             });
-        Expect(!service.Refresh(), "Expected an ambiguous process-window enumeration result to be rejected.");
+        Expect(qualifying_process_window_candidates.size() == 2, "Expected the ambiguity fixture to contain two qualifying process windows.");
+        Expect(!service.Refresh(), "Expected two qualifying process windows to be rejected as ambiguous.");
     }
 
     {
