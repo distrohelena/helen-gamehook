@@ -450,6 +450,15 @@ internal static class GraphicsOptionsShellScriptTemplates
               this.ResolutionDraftIndex = index;
               this.RefreshRows();
            }
+           function RestoreResolutionInitial()
+           {
+              if(!this.CanEditResolution() || this.ResolutionDraftIndex == this.ResolutionInitialIndex)
+              {
+                 return undefined;
+              }
+              this.ResolutionDraftIndex = this.ResolutionInitialIndex;
+              this.RefreshRows();
+           }
            function ToggleResolution()
            {
               if(!this.CanEditResolution())
@@ -1280,6 +1289,13 @@ internal static class GraphicsOptionsShellScriptTemplates
                  if(this.RightClicker != undefined) { this.RightClicker._visible = false; }
                  return undefined;
               }
+              this.Names = new Array();
+              var resolutionModeIndex = 0;
+              while(resolutionModeIndex < _parent.GraphicsOptionsController.ResolutionModes.length)
+              {
+                 this.Names.push(_parent.GraphicsOptionsController.ResolutionModes[resolutionModeIndex].Label);
+                 resolutionModeIndex = resolutionModeIndex + 1;
+              }
               this.State = _parent.GraphicsOptionsController.GetResolutionDraftIndex();
               this.Initial = _parent.GraphicsOptionsController.GetResolutionInitialIndex();
               this.Default = this.Initial;
@@ -1305,6 +1321,38 @@ internal static class GraphicsOptionsShellScriptTemplates
            this.Decrement = function()
            {
               if(_parent.GraphicsOptionsController != undefined) { _parent.GraphicsOptionsController.DecrementResolution(); }
+           };
+           this.HasChanged = function()
+           {
+              if(_parent.GraphicsOptionsController == undefined)
+              {
+                 return false;
+              }
+              return _parent.GraphicsOptionsController.GetResolutionDraftIndex() != _parent.GraphicsOptionsController.GetResolutionInitialIndex();
+           };
+           this.IsDefault = function()
+           {
+              if(_parent.GraphicsOptionsController == undefined)
+              {
+                 return false;
+              }
+              return _parent.GraphicsOptionsController.GetResolutionDraftIndex() == _parent.GraphicsOptionsController.GetResolutionInitialIndex();
+           };
+           this.RestoreInitialValue = function()
+           {
+              if(_parent.GraphicsOptionsController != undefined)
+              {
+                 _parent.GraphicsOptionsController.RestoreResolutionInitial();
+                 this.Update();
+              }
+           };
+           this.SetDefault = function()
+           {
+              if(_parent.GraphicsOptionsController != undefined)
+              {
+                 _parent.GraphicsOptionsController.RestoreResolutionInitial();
+                 this.Update();
+              }
            };
            this.ShowPrompt = function()
            {

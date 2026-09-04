@@ -1381,6 +1381,16 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
         Assert-ContainsOrdinal -Text $RowScript -Token 'ToggleResolution();' -Context "$RowContext activation"
         Assert-ContainsOrdinal -Text $RowScript -Token 'IncrementResolution();' -Context "$RowContext right action"
         Assert-ContainsOrdinal -Text $RowScript -Token 'DecrementResolution();' -Context "$RowContext left action"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.HasChanged = function()' -Context "$RowContext controller-backed HasChanged override"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.IsDefault = function()' -Context "$RowContext controller-backed IsDefault override"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.RestoreInitialValue = function()' -Context "$RowContext controller-backed RestoreInitialValue override"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.SetDefault = function()' -Context "$RowContext controller-backed SetDefault override"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'RestoreResolutionInitial();' -Context "$RowContext controller-backed default restore"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Names.push(_parent.GraphicsOptionsController.ResolutionModes[resolutionModeIndex].Label);' -Context "$RowContext catalog marker labels"
+        if ($RowScript.IndexOf('FE_Set?name?', [System.StringComparison]::Ordinal) -ge 0 -or
+            $RowScript.IndexOf('UpdateLRMarkers();', [System.StringComparison]::Ordinal) -ge 0) {
+            throw "$RowContext must not use inherited marker transport behavior."
+        }
     } elseif (@(1, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14) -contains ($RowIndex + 1)) {
         $ActiveRowDefinitions = @{
             1 = @{ Values = 'this.Names = new Array("Windowed","Fullscreen");'; RowIndex = 1 }
@@ -1630,7 +1640,16 @@ function makeScreen() {
             return true;
         },
         onKeyDown() { return this.TryBack(); },
-        onEnterFrame() { this.Tick(); }
+        onEnterFrame() { this.Tick(); },
+        SetDefaults() {
+            for (let rowIndex = 1; rowIndex <= 15; rowIndex += 1) {
+                const row = this['GraphicsRow' + rowIndex];
+                if (row !== undefined && typeof row.SetDefault === 'function') {
+                    row.SetDefault();
+                }
+            }
+        },
+        onPressY() { return this.SetDefaults(); }
     };
     for (let rowIndex = 1; rowIndex <= 15; rowIndex += 1) {
         screen['GraphicsRow' + rowIndex] = { Update() { screen.rowUpdates += 1; } };
@@ -1677,18 +1696,27 @@ function loadRow(script, parent, children) {
     const bodyEnd = script.lastIndexOf('}');
     const row = Object.assign({
         _parent: parent,
+        GameVariable: '?name?',
         Label: { Label: { Text: { text: '' } } },
         ItemText: { text: '', _alpha: 0 },
         LeftClicker: { _visible: true, _x: 100 },
         RightClicker: { _visible: true, _x: 200 }
     }, children || {});
     row.HasChanged = function() { return this.State != this.Initial; };
+    row.UpdateLRMarkers = function() {
+        flash.external.ExternalInterface.call('FE_Set?name?', this.State, this.Names[this.State]);
+    };
     row.RestoreInitialValue = function() {
         if (this.HasChanged()) {
             this.State = this.Initial;
+            this.UpdateLRMarkers();
         }
     };
     row.IsDefault = function() { return this.State == this.Default; };
+    row.SetDefault = function() {
+        this.State = this.Default;
+        this.UpdateLRMarkers();
+    };
     global._parent = parent;
     const load = new Function(script.slice(bodyStart + 1, bodyEnd));
     load.call(row);
@@ -1981,15 +2009,42 @@ assert.strictEqual(resolutionRow.Initial, 1);
 assert.strictEqual(resolutionRow.HasChanged(), true);
 assert.strictEqual(resolutionRow.IsDefault(), false);
 resolutionRow.RestoreInitialValue();
+assert.strictEqual(controller.ResolutionDraftIndex, 1, 'resolution RestoreInitialValue must delegate to the controller');
 assert.strictEqual(resolutionRow.State, 1);
-resolutionRow.Update();
-assert.strictEqual(resolutionRow.State, 0, 'controller draft remains authoritative after inherited RestoreInitialValue');
+assert.strictEqual(resolutionRow.HasChanged(), false);
+controller.DecrementResolution();
+assert.strictEqual(controller.ResolutionDraftIndex, 0);
 controller.IncrementResolution();
 assert.strictEqual(controller.InitializationDeadline, 10000);
 assert.strictEqual(controller.GetDetailLevelInitialIndex(), 0);
 assert.strictEqual(controller.GetDetailLevelDraftIndex(), 0);
 assert.strictEqual(controller.CanEditDetailLevel(), true);
 assert.strictEqual(controller.CanApply(), false);
+
+setNow(0);
+clearCalls();
+const defaultsEnvironment = makeEnvironment();
+const defaultsController = defaultsEnvironment.controller;
+initialize(defaultsController, Array(12).fill(0));
+const defaultsResolutionRow = loadRow(rowScripts[1], defaultsEnvironment.screen);
+defaultsEnvironment.screen.GraphicsRow2 = defaultsResolutionRow;
+defaultsResolutionRow.Update();
+defaultsController.DecrementResolution();
+assert.strictEqual(defaultsController.ResolutionDraftIndex, 0);
+assert.strictEqual(defaultsResolutionRow.HasChanged(), true);
+clearCalls();
+defaultsEnvironment.screen.onPressY();
+assert.strictEqual(defaultsController.ResolutionDraftIndex, defaultsController.ResolutionInitialIndex, 'Screen onPressY defaults must restore the saved resolution index');
+assert.strictEqual(defaultsResolutionRow.State, defaultsController.ResolutionInitialIndex, 'Screen defaults must refresh the resolution row state');
+assert.strictEqual(defaultsResolutionRow.HasChanged(), false, 'Screen defaults must clear resolution HasChanged');
+assert.strictEqual(defaultsResolutionRow.IsDefault(), true, 'Screen defaults must make the resolution row default');
+assert.strictEqual(calls.some(call => call.name === 'FE_Set?name?'), false, 'resolution defaults must not issue an invalid FE_Set?name? call');
+defaultsController.ApplyChanges();
+assert.deepStrictEqual(settingSignals(), [], 'Apply after Screen defaults must not queue a hidden resolution write');
+defaultsController.DecrementResolution();
+clearCalls();
+defaultsController.ApplyChanges();
+assert.strictEqual(settingSignals()[settingSignals().length - 1], 5000, 'a normal changed resolution must still queue its explicit write');
 
 setNow(0);
 clearCalls();
