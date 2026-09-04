@@ -7,6 +7,11 @@
 void RunActivePackSetBuilderTests();
 
 /**
+ * @brief Runs the Batman supported display-mode catalog coverage.
+ */
+void RunBatmanDisplayModeServiceTests();
+
+/**
  * @brief Runs the build runtime coordinator coverage for startup commands and state-observer driven command dispatch.
  */
 void RunBuildRuntimeCoordinatorTests();
@@ -159,6 +164,7 @@ int main()
     try
     {
         RunActivePackSetBuilderTests();
+        RunBatmanDisplayModeServiceTests();
         RunBuildHookInstallerTests();
         RunRuntimeLayoutTests();
         RunJsonConfigStoreTests();

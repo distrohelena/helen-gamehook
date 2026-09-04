@@ -77,6 +77,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ActivePackSetBuilderTests.cpp" />
+    <ClCompile Include="BatmanDisplayModeServiceTests.cpp" />
     <ClCompile Include="BuildHookInstallerTests.cpp" />
     <ClCompile Include="BuildRuntimeCoordinatorTests.cpp" />
     <ClCompile Include="CommandExecutorTests.cpp" />
