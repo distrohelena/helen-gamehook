@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include <HelenHook/MemoryStateObserverDynamicResponseCallback.h>
 #include <HelenHook/MemoryStateObserverDefinition.h>
 #include <HelenHook/MemoryStateObserverUpdate.h>
 
@@ -30,12 +31,14 @@ namespace helen
          * @param state_observers Declarative live-state observers that should mirror game state into Helen config.
          * @param command_dispatcher Registered config dispatcher updated by observer emissions.
          * @param command_executor Declarative command executor used for startup commands and observer follow-up commands.
+         * @param dynamic_response_callback Optional provider callback forwarded to response-only observers without coordinator-specific interpretation.
          */
         BuildRuntimeCoordinator(
             std::vector<std::string> startup_command_ids,
             std::vector<MemoryStateObserverDefinition> state_observers,
             CommandDispatcher& command_dispatcher,
-            CommandExecutor& command_executor);
+            CommandExecutor& command_executor,
+            MemoryStateObserverDynamicResponseCallback dynamic_response_callback = {});
 
         /**
          * @brief Stops any live observer thread before the coordinator is destroyed.

@@ -12,7 +12,8 @@ namespace helen
         std::vector<std::string> startup_command_ids,
         std::vector<MemoryStateObserverDefinition> state_observers,
         CommandDispatcher& command_dispatcher,
-        CommandExecutor& command_executor)
+        CommandExecutor& command_executor,
+        MemoryStateObserverDynamicResponseCallback dynamic_response_callback)
         : startup_command_ids_(std::move(startup_command_ids))
         , command_dispatcher_(command_dispatcher)
         , command_executor_(command_executor)
@@ -28,7 +29,8 @@ namespace helen
                 [this](const std::string& config_key)
                 {
                     return command_dispatcher_.TryGetInt(config_key);
-                });
+                },
+                std::move(dynamic_response_callback));
         }
     }
 

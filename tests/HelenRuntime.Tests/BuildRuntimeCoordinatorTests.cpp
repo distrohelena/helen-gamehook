@@ -64,6 +64,18 @@ namespace
     }
 
     /**
+     * @brief Reads one signed 32-bit integer from a writable observer test carrier.
+     * @param address Address containing the integer to read.
+     * @return Integer value currently stored at the supplied address.
+     */
+    int ReadInt32(std::uintptr_t address)
+    {
+        int value = 0;
+        std::memcpy(&value, reinterpret_cast<const void*>(address), sizeof(value));
+        return value;
+    }
+
+    /**
      * @brief Configures one Batman-style subtitle-size state block around the supplied base address.
      * @param base_address Candidate observer base address that should satisfy the configured checks.
      * @param raw_value Raw subtitle-size state code written at the observer value offset.
@@ -399,6 +411,197 @@ namespace
             std::rethrow_exception(original_exception);
         }
     }
+
+    /**
+     * @brief Builds a response-only dynamic observer fixture for coordinator provider-forwarding coverage.
+     * @param scan_start Inclusive scan start address used by the bounded observer search.
+     * @param scan_end Exclusive scan end address used by the bounded observer search.
+     * @return Dynamic observer that recognizes the display-mode catalog request and validates its carrier shape.
+     */
+    helen::MemoryStateObserverDefinition CreateCoordinatorDynamicObserver(
+        std::uintptr_t scan_start,
+        std::uintptr_t scan_end)
+    {
+        helen::MemoryStateObserverDefinition definition;
+        definition.Id = "coordinatorDynamicDisplayObserver";
+        definition.ScanStartAddress = scan_start;
+        definition.ScanEndAddress = scan_end;
+        definition.ScanStride = 4;
+        definition.ValueOffset = 0;
+        definition.PollIntervalMs = 1;
+        definition.AddressMatchValues = { 4700, 4701, 4702, 4899 };
+        definition.DynamicResponseProviderId = "batmanDisplayModes";
+        definition.DynamicResponseRequestValues = { 4700, 4701, 4702 };
+        definition.DynamicResponseMinimumValue = 1;
+        definition.DynamicResponseMaximumValue = 32767;
+        definition.FailureResponseValue = 4899;
+
+        helen::MemoryStateObserverCheckDefinition constant_check;
+        constant_check.Comparison = "equals-constant";
+        constant_check.Offset = -16;
+        constant_check.ExpectedValue = 50;
+        definition.Checks.push_back(constant_check);
+        return definition;
+    }
+
+    /**
+     * @brief Writes one dynamic observer carrier request and its structural sentinel into the test allocation.
+     * @param candidate_address Carrier base address that should receive the request.
+     * @param request_value Raw dynamic request value to write at the carrier value offset.
+     */
+    void ConfigureCoordinatorDynamicCarrier(std::uintptr_t candidate_address, int request_value)
+    {
+        WriteInt32(candidate_address - 16, 50);
+        WriteInt32(candidate_address, request_value);
+    }
+
+    /**
+     * @brief Verifies that the build coordinator forwards dynamic provider queries without treating them as updates.
+     * @remarks The callback must receive exactly one provider/request pair, while the response carrier receives the
+     * negative scalar transport value and the dispatcher remains unchanged.
+     */
+    void RunBuildRuntimeCoordinatorDynamicForwardingTests()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for coordinator dynamic forwarding tests.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 64;
+        ConfigureCoordinatorDynamicCarrier(candidate_address, 4700);
+
+        helen::CommandDispatcher dispatcher;
+        dispatcher.RegisterConfigInt("dynamic.result", 17);
+        dispatcher.RegisterConfigInt("ui.subtitleSize", 2);
+
+        helen::RuntimeValueStore runtime_values;
+        Expect(runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the coordinator command sentinel slot.");
+        helen::BatmanGraphicsConfigService graphics_config_service(
+            std::filesystem::temp_directory_path() / "HelenRuntimeTests" / "CoordinatorDynamic" / "BmEngine.ini");
+        helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
+        Expect(executor.RegisterCommand(CreateApplySubtitleSizeCommand("mustNotRun")), "Failed to register the coordinator command sentinel.");
+
+        helen::MemoryStateObserverDefinition observer_definition =
+            CreateCoordinatorDynamicObserver(page_address, page_address + page_size);
+        observer_definition.TargetConfigKey = "dynamic.result";
+        observer_definition.CommandId = "mustNotRun";
+
+        std::vector<std::string> callback_provider_ids;
+        std::vector<int> callback_requests;
+        helen::BuildRuntimeCoordinator coordinator(
+            {},
+            { observer_definition },
+            dispatcher,
+            executor,
+            [&callback_provider_ids, &callback_requests](const std::string& provider_id, int raw_request_value)
+            {
+                callback_provider_ids.push_back(provider_id);
+                callback_requests.push_back(raw_request_value);
+                return std::optional<int>(3);
+            });
+
+        try
+        {
+            Expect(coordinator.PollStateObserversOnce(), "Coordinator dynamic provider poll unexpectedly failed.");
+            Expect(callback_provider_ids.size() == 1, "Coordinator invoked the dynamic provider more than once.");
+            Expect(callback_provider_ids[0] == "batmanDisplayModes", "Coordinator forwarded the wrong dynamic provider.");
+            Expect(callback_requests.size() == 1 && callback_requests[0] == 4700, "Coordinator forwarded the wrong dynamic request.");
+            Expect(ReadInt32(candidate_address) == -3, "Coordinator did not preserve negative dynamic response transport.");
+
+            const std::optional<int> dispatcher_value = dispatcher.TryGetInt("dynamic.result");
+            Expect(dispatcher_value.has_value() && *dispatcher_value == 17, "Dynamic response unexpectedly mutated a dispatcher key.");
+            const std::optional<double> command_sentinel_value = runtime_values.TryGetDouble("subtitle.scale");
+            Expect(command_sentinel_value.has_value() && std::fabs(*command_sentinel_value - 1.5) < 0.001, "Dynamic response unexpectedly executed a command.");
+
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release coordinator dynamic forwarding allocation.");
+        }
+        catch (...)
+        {
+            MEMORY_BASIC_INFORMATION memory_info{};
+            if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+            {
+                VirtualFree(allocation, 0, MEM_RELEASE);
+            }
+            throw;
+        }
+    }
+
+    /**
+     * @brief Verifies that missing and throwing coordinator provider callbacks write the observer failure response.
+     * @remarks Provider failures are handled by the observer transport and never become config updates or commands.
+     */
+    void RunBuildRuntimeCoordinatorDynamicFailureTests()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for coordinator dynamic failure tests.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 64;
+        helen::CommandDispatcher dispatcher;
+        dispatcher.RegisterConfigInt("dynamic.result", 17);
+        helen::RuntimeValueStore runtime_values;
+        helen::BatmanGraphicsConfigService graphics_config_service(
+            std::filesystem::temp_directory_path() / "HelenRuntimeTests" / "CoordinatorDynamicFailure" / "BmEngine.ini");
+        helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
+
+        try
+        {
+            ConfigureCoordinatorDynamicCarrier(candidate_address, 4700);
+            helen::BuildRuntimeCoordinator missing_provider_coordinator(
+                {},
+                { CreateCoordinatorDynamicObserver(page_address, page_address + page_size) },
+                dispatcher,
+                executor,
+                {});
+            Expect(missing_provider_coordinator.PollStateObserversOnce(), "Missing coordinator provider poll unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == 4899, "Missing coordinator provider did not write the observer failure response.");
+
+            ConfigureCoordinatorDynamicCarrier(candidate_address, 4700);
+            helen::BuildRuntimeCoordinator absent_result_coordinator(
+                {},
+                { CreateCoordinatorDynamicObserver(page_address, page_address + page_size) },
+                dispatcher,
+                executor,
+                [](const std::string&, int) -> std::optional<int>
+                {
+                    return std::nullopt;
+                });
+            Expect(absent_result_coordinator.PollStateObserversOnce(), "Absent coordinator provider result poll unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == 4899, "Absent coordinator provider result did not write the observer failure response.");
+
+            ConfigureCoordinatorDynamicCarrier(candidate_address, 4700);
+            helen::BuildRuntimeCoordinator throwing_provider_coordinator(
+                {},
+                { CreateCoordinatorDynamicObserver(page_address, page_address + page_size) },
+                dispatcher,
+                executor,
+                [](const std::string&, int) -> std::optional<int>
+                {
+                    throw std::runtime_error("dynamic provider callback failure");
+                });
+            Expect(throwing_provider_coordinator.PollStateObserversOnce(), "Throwing coordinator provider poll unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == 4899, "Throwing coordinator provider did not write the observer failure response.");
+
+            const std::optional<int> dispatcher_value = dispatcher.TryGetInt("dynamic.result");
+            Expect(dispatcher_value.has_value() && *dispatcher_value == 17, "Dynamic provider failure unexpectedly mutated a dispatcher key.");
+
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release coordinator dynamic failure allocation.");
+        }
+        catch (...)
+        {
+            MEMORY_BASIC_INFORMATION memory_info{};
+            if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+            {
+                VirtualFree(allocation, 0, MEM_RELEASE);
+            }
+            throw;
+        }
+    }
 }
 
 /**
@@ -406,6 +609,8 @@ namespace
  */
 void RunBuildRuntimeCoordinatorTests()
 {
+    RunBuildRuntimeCoordinatorDynamicForwardingTests();
+    RunBuildRuntimeCoordinatorDynamicFailureTests();
     RunBuildRuntimeCoordinatorTransactionTests();
     SYSTEM_INFO system_info{};
     GetSystemInfo(&system_info);
