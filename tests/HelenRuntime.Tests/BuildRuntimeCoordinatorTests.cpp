@@ -1,4 +1,5 @@
 #include <HelenHook/BatmanGraphicsConfigService.h>
+#include <HelenHook/BatmanDisplayModeService.h>
 #include <HelenHook/BuildRuntimeCoordinator.h>
 #include <HelenHook/CommandDefinition.h>
 #include <HelenHook/CommandDispatcher.h>
@@ -318,7 +319,8 @@ namespace
         const std::filesystem::path graphics_ini_path =
             CreateTemporaryBatmanGraphicsIniPath().parent_path() / "Task3Transactions" / "BmEngine.ini";
         const std::filesystem::path graphics_test_directory = graphics_ini_path.parent_path();
-        helen::BatmanGraphicsConfigService graphics_config_service(graphics_ini_path);
+        helen::BatmanDisplayModeService display_mode_service;
+        helen::BatmanGraphicsConfigService graphics_config_service(graphics_ini_path, display_mode_service);
         helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
         Expect(executor.RegisterCommand(CreateApplySubtitleSizeCommand("applySubtitleSize")), "Failed to register the successful observer command.");
         Expect(executor.RegisterCommand(CreateFailingObserverCommand()), "Failed to register the failing observer command.");
@@ -478,8 +480,10 @@ namespace
 
         helen::RuntimeValueStore runtime_values;
         Expect(runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the coordinator command sentinel slot.");
+        helen::BatmanDisplayModeService display_mode_service;
         helen::BatmanGraphicsConfigService graphics_config_service(
-            std::filesystem::temp_directory_path() / "HelenRuntimeTests" / "CoordinatorDynamic" / "BmEngine.ini");
+            std::filesystem::temp_directory_path() / "HelenRuntimeTests" / "CoordinatorDynamic" / "BmEngine.ini",
+            display_mode_service);
         helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
         Expect(executor.RegisterCommand(CreateApplySubtitleSizeCommand("mustNotRun")), "Failed to register the coordinator command sentinel.");
 
@@ -545,8 +549,10 @@ namespace
         helen::CommandDispatcher dispatcher;
         dispatcher.RegisterConfigInt("dynamic.result", 17);
         helen::RuntimeValueStore runtime_values;
+        helen::BatmanDisplayModeService display_mode_service;
         helen::BatmanGraphicsConfigService graphics_config_service(
-            std::filesystem::temp_directory_path() / "HelenRuntimeTests" / "CoordinatorDynamicFailure" / "BmEngine.ini");
+            std::filesystem::temp_directory_path() / "HelenRuntimeTests" / "CoordinatorDynamicFailure" / "BmEngine.ini",
+            display_mode_service);
         helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
 
         try
@@ -634,7 +640,8 @@ void RunBuildRuntimeCoordinatorTests()
     WriteAllText(batman_engine_ini_path, "[SystemSettings]\r\nFullscreen=False\r\n");
     WriteAllText(batman_game_ini_path, "[Engine.HUD]\r\nConsoleFontSize=9\r\n");
 
-    helen::BatmanGraphicsConfigService graphics_config_service(batman_engine_ini_path);
+    helen::BatmanDisplayModeService display_mode_service;
+    helen::BatmanGraphicsConfigService graphics_config_service(batman_engine_ini_path, display_mode_service);
     helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
     Expect(executor.RegisterCommand(CreateApplySubtitleSizeCommand("applySubtitleSize")), "Failed to register applySubtitleSize.");
     Expect(executor.RegisterCommand(CreateApplySavedSubtitleSizeCommand()), "Failed to register applySavedSubtitleSize.");

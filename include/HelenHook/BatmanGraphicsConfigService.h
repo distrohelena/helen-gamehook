@@ -4,6 +4,7 @@
 
 namespace helen
 {
+    class BatmanDisplayModeService;
     class CommandDispatcher;
 
     /**
@@ -19,9 +20,10 @@ namespace helen
         /**
          * @brief Binds the service to the Batman user `BmEngine.ini` anchor path.
          * @param ini_path Absolute or relative path to the Batman user engine INI file.
+         * @param display_mode_service Required service that owns the current Batman display-mode catalog and revalidation.
          * @throws std::invalid_argument Thrown when `ini_path` is empty.
          */
-        explicit BatmanGraphicsConfigService(std::filesystem::path ini_path);
+        BatmanGraphicsConfigService(std::filesystem::path ini_path, BatmanDisplayModeService& display_mode_service);
 
         /**
          * @brief Reads the current Batman graphics settings from the authoritative launcher-owned sibling `UserEngine.ini` into registered config keys.
@@ -66,6 +68,13 @@ namespace helen
         bool ApplySelectedDetailLevelToDispatcher(CommandDispatcher& dispatcher) const;
 
         /**
+         * @brief Revalidates the selected display mode and atomically writes its exact dimensions into the graphics draft.
+         * @param dispatcher Dispatcher containing resolutionModeIndex, resolutionWidth, and resolutionHeight.
+         * @return True when the selected index remains supported and both draft dimensions update together; otherwise false with the prior pair retained.
+         */
+        bool ApplySelectedResolutionModeToDispatcher(CommandDispatcher& dispatcher);
+
+        /**
          * @brief Returns the base `BmEngine.ini` anchor path used by this service.
          * @return Bound `BmEngine.ini` anchor path.
          */
@@ -74,5 +83,7 @@ namespace helen
     private:
         /** @brief Bound generated `BmEngine.ini` anchor path used to locate both generated and launcher-owned graphics INI files. */
         std::filesystem::path ini_path_;
+        /** @brief Required display-mode catalog service used to revalidate selected resolution pairs at apply time. */
+        BatmanDisplayModeService& display_mode_service_;
     };
 }

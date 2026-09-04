@@ -1,4 +1,5 @@
 #include <HelenHook/BatmanGraphicsConfigService.h>
+#include <HelenHook/BatmanDisplayModeService.h>
 
 #include <HelenHook/Log.h>
 #include <HelenHook/CommandDispatcher.h>
@@ -2037,10 +2038,14 @@ namespace helen
     /**
      * @brief Binds the service to one concrete `BmEngine.ini` anchor path.
      * @param ini_path Absolute or relative path to the Batman user engine INI file.
+     * @param display_mode_service Required service that owns the current Batman display-mode catalog and revalidation.
      * @throws std::invalid_argument Thrown when `ini_path` is empty.
      */
-    BatmanGraphicsConfigService::BatmanGraphicsConfigService(std::filesystem::path ini_path)
-        : ini_path_(std::move(ini_path))
+    BatmanGraphicsConfigService::BatmanGraphicsConfigService(
+        std::filesystem::path ini_path,
+        BatmanDisplayModeService& display_mode_service)
+        : ini_path_(std::move(ini_path)),
+          display_mode_service_(display_mode_service)
     {
         if (ini_path_.empty())
         {
@@ -2257,6 +2262,33 @@ namespace helen
             TryWriteDispatcherValue(dispatcher, "fogVolumes", state.FogVolumes) &&
             TryWriteDispatcherValue(dispatcher, "sphericalHarmonicLighting", state.SphericalHarmonicLighting) &&
             TryWriteDispatcherValue(dispatcher, "ambientOcclusion", state.AmbientOcclusion);
+    }
+
+    /**
+     * @brief Revalidates the selected display mode and atomically writes its exact dimensions into the graphics draft.
+     * @param dispatcher Dispatcher containing resolutionModeIndex, resolutionWidth, and resolutionHeight.
+     * @return True when the selected index remains supported and both draft dimensions update together; otherwise false with the prior pair retained.
+     */
+    bool BatmanGraphicsConfigService::ApplySelectedResolutionModeToDispatcher(CommandDispatcher& dispatcher)
+    {
+        const std::optional<int> index_value = dispatcher.TryGetInt("resolutionModeIndex");
+        if (!index_value.has_value() || *index_value < 0)
+        {
+            return false;
+        }
+
+        const std::optional<BatmanDisplayMode> selected_mode = display_mode_service_.RevalidateMode(
+            static_cast<std::size_t>(*index_value));
+        if (!selected_mode.has_value())
+        {
+            return false;
+        }
+
+        return dispatcher.TrySetIntPair(
+            "resolutionWidth",
+            selected_mode->GetWidth(),
+            "resolutionHeight",
+            selected_mode->GetHeight());
     }
 
     /**

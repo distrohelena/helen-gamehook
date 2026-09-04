@@ -1,4 +1,5 @@
 #include <HelenHook/BatmanGraphicsConfigService.h>
+#include <HelenHook/BatmanDisplayModeService.h>
 #include <HelenHook/CommandDefinition.h>
 #include <HelenHook/CommandDispatcher.h>
 #include <HelenHook/CommandExecutor.h>
@@ -166,7 +167,8 @@ void RunExternalBindingServiceTests()
     Expect(runtime_values.RegisterSlot(CreatePrimarySubtitleScaleSlot()), "Failed to register the primary runtime slot.");
     Expect(runtime_values.RegisterSlot(CreateAlternateSubtitleScaleSlot()), "Failed to register the alternate runtime slot.");
     const std::filesystem::path unused_batman_ini_path = CreateTemporaryBatmanGraphicsIniPath();
-    helen::BatmanGraphicsConfigService graphics_config_service(unused_batman_ini_path);
+    helen::BatmanDisplayModeService display_mode_service;
+    helen::BatmanGraphicsConfigService graphics_config_service(unused_batman_ini_path, display_mode_service);
     helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
     Expect(executor.RegisterCommand(CreateApplySubtitleSizeCommand()), "Failed to register the primary subtitle-size command.");
     Expect(executor.RegisterCommand(CreateApplyAlternateSubtitleSizeCommand()), "Failed to register the alternate subtitle-size command.");

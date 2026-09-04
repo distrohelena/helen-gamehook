@@ -1,5 +1,6 @@
 #include <HelenHook/ActivePackSet.h>
 #include <HelenHook/ActivePackSetBuilder.h>
+#include <HelenHook/BatmanDisplayModeService.h>
 #include <HelenHook/BatmanGraphicsConfigService.h>
 #include <HelenHook/BuildRuntimeCoordinator.h>
 #include <HelenHook/BuildHookInstaller.h>
@@ -56,6 +57,8 @@ namespace
     std::unique_ptr<helen::RuntimeValueStore> g_runtime_values;
     /** @brief Batman-specific graphics config bridge bound to the user `BmEngine.ini` file. */
     std::unique_ptr<helen::BatmanGraphicsConfigService> g_batman_graphics_config_service;
+    /** @brief Batman display-mode catalog service shared by graphics draft validation and dynamic observers. */
+    std::unique_ptr<helen::BatmanDisplayModeService> g_batman_display_mode_service;
     /** @brief Declarative command executor for the active build declarations. */
     std::unique_ptr<helen::CommandExecutor> g_command_executor;
     /** @brief Generic coordinator that runs build startup commands and hosts declared live state observers. */
@@ -700,7 +703,10 @@ namespace
             return false;
         }
 
-        g_batman_graphics_config_service = std::make_unique<helen::BatmanGraphicsConfigService>(*batman_engine_ini_path);
+        g_batman_display_mode_service = std::make_unique<helen::BatmanDisplayModeService>();
+        g_batman_graphics_config_service = std::make_unique<helen::BatmanGraphicsConfigService>(
+            *batman_engine_ini_path,
+            *g_batman_display_mode_service);
         helen::Logf(L"[runtime] active-pack init batman ini=%ls", batman_engine_ini_path->c_str());
         g_command_executor = std::make_unique<helen::CommandExecutor>(
             *g_command_dispatcher,
@@ -824,6 +830,7 @@ namespace
         g_external_bindings.reset();
         g_command_executor.reset();
         g_batman_graphics_config_service.reset();
+        g_batman_display_mode_service.reset();
         g_runtime_values.reset();
     }
 

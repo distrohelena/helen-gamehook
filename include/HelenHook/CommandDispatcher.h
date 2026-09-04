@@ -44,6 +44,20 @@ namespace helen
         bool TrySetInt(const std::string& key, int value);
 
         /**
+         * @brief Updates two distinct registered integer config keys as one dispatcher operation.
+         * @param first_key Registered key receiving the first value.
+         * @param first_value Integer value assigned to the first key.
+         * @param second_key Registered key receiving the second value.
+         * @param second_value Integer value assigned to the second key.
+         * @return True when both keys are registered and the pair is persisted successfully; otherwise false with both prior values retained.
+         */
+        bool TrySetIntPair(
+            const std::string& first_key,
+            int first_value,
+            const std::string& second_key,
+            int second_value);
+
+        /**
          * @brief Returns the current value for a registered integer config key.
          * @param key Registered config key to query.
          * @return Stored value when the key exists; otherwise no value.

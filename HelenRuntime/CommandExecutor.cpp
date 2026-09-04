@@ -298,6 +298,11 @@ namespace helen
             return graphics_config_service_.ApplySelectedDetailLevelToDispatcher(dispatcher_);
         }
 
+        if (step.Kind == "set-batman-graphics-resolution-mode")
+        {
+            return graphics_config_service_.ApplySelectedResolutionModeToDispatcher(dispatcher_);
+        }
+
         return false;
     }
 }

@@ -1,4 +1,5 @@
 #include <HelenHook/BatmanGraphicsConfigService.h>
+#include <HelenHook/BatmanDisplayModeService.h>
 #include <HelenHook/CommandDefinition.h>
 #include <HelenHook/CommandDispatcher.h>
 #include <HelenHook/CommandExecutor.h>
@@ -19,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 #include <windows.h>
 
 namespace
@@ -34,6 +36,16 @@ namespace
         {
             throw std::runtime_error(message);
         }
+    }
+
+    /**
+     * @brief Returns a process-lifetime display-mode service for graphics tests that do not exercise mode selection.
+     * @return Required display-mode service dependency shared by legacy graphics command fixtures.
+     */
+    helen::BatmanDisplayModeService& GetGraphicsTestDisplayModeService()
+    {
+        static helen::BatmanDisplayModeService service;
+        return service;
     }
 
     /**
@@ -100,6 +112,102 @@ namespace
         command.Steps.push_back(set_live_step);
 
         return command;
+    }
+
+    /**
+     * @brief Builds the native command step that applies one selected Batman display-mode index.
+     * @return Command definition containing the selected-resolution operation.
+     */
+    helen::CommandDefinition CreateSetBatmanGraphicsResolutionModeCommand()
+    {
+        helen::CommandDefinition command;
+        command.Id = "setBatmanGraphicsResolutionMode";
+        command.Name = "Set Batman Graphics Resolution Mode";
+
+        helen::CommandStepDefinition step;
+        step.Kind = "set-batman-graphics-resolution-mode";
+        command.Steps.push_back(step);
+        return command;
+    }
+
+    /**
+     * @brief Verifies selected Batman resolution application against a revalidated supported-mode catalog.
+     *
+     * The command must write the exact selected pair, reject a mode removed between catalog capture and
+     * application, and reject invalid or absent selection keys without disturbing the existing pair.
+     */
+    void RunBatmanResolutionModeCommandTest()
+    {
+        std::vector<helen::BatmanDisplayMode> current_modes = {
+            helen::BatmanDisplayMode(1280, 720),
+            helen::BatmanDisplayMode(1920, 1080),
+            helen::BatmanDisplayMode(3440, 1440)
+        };
+        const helen::BatmanDisplayModeService::EnumerationCallback enumeration_callback =
+            [&current_modes](std::wstring& display_device_name, std::vector<helen::BatmanDisplayMode>& modes)
+            {
+                display_device_name = L"DISPLAY1";
+                modes = current_modes;
+                return true;
+            };
+        helen::BatmanDisplayModeService display_mode_service(enumeration_callback);
+        Expect(display_mode_service.Refresh(), "Resolution test display catalog did not refresh.");
+
+        helen::CommandDispatcher dispatcher;
+        dispatcher.RegisterConfigInt("resolutionModeIndex", 0);
+        dispatcher.RegisterConfigInt("resolutionWidth", 1024);
+        dispatcher.RegisterConfigInt("resolutionHeight", 768);
+        Expect(dispatcher.TrySetInt("resolutionModeIndex", 1), "Failed to select the 1920x1080 resolution mode.");
+
+        helen::BatmanGraphicsConfigService graphics_config_service(
+            std::filesystem::path("resolution-mode-command-test.ini"),
+            display_mode_service);
+        helen::RuntimeValueStore runtime_values;
+        helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
+        Expect(
+            executor.RegisterCommand(CreateSetBatmanGraphicsResolutionModeCommand()),
+            "Failed to register the selected-resolution command.");
+        Expect(executor.RunCommand("setBatmanGraphicsResolutionMode"), "Selected-resolution command failed.");
+        Expect(dispatcher.TryGetInt("resolutionWidth") == 1920, "Selected resolution width was not applied exactly.");
+        Expect(dispatcher.TryGetInt("resolutionHeight") == 1080, "Selected resolution height was not applied exactly.");
+
+        current_modes = {
+            helen::BatmanDisplayMode(1280, 720),
+            helen::BatmanDisplayMode(3440, 1440)
+        };
+        Expect(
+            !executor.RunCommand("setBatmanGraphicsResolutionMode"),
+            "Selected-resolution command accepted a mode removed from the display.");
+        Expect(dispatcher.TryGetInt("resolutionWidth") == 1920, "Stale-catalog failure changed the resolution width.");
+        Expect(dispatcher.TryGetInt("resolutionHeight") == 1080, "Stale-catalog failure changed the resolution height.");
+
+        Expect(dispatcher.TrySetInt("resolutionModeIndex", 99), "Failed to seed an out-of-range resolution index.");
+        Expect(!executor.RunCommand("setBatmanGraphicsResolutionMode"), "Out-of-range resolution index unexpectedly succeeded.");
+        Expect(dispatcher.TryGetInt("resolutionWidth") == 1920, "Out-of-range failure changed the resolution width.");
+        Expect(dispatcher.TryGetInt("resolutionHeight") == 1080, "Out-of-range failure changed the resolution height.");
+
+        helen::CommandDispatcher missing_index_dispatcher;
+        missing_index_dispatcher.RegisterConfigInt("resolutionWidth", 1600);
+        missing_index_dispatcher.RegisterConfigInt("resolutionHeight", 900);
+        helen::BatmanGraphicsConfigService missing_index_graphics_service(
+            std::filesystem::path("missing-resolution-index-test.ini"),
+            display_mode_service);
+        helen::CommandExecutor missing_index_executor(
+            missing_index_dispatcher,
+            runtime_values,
+            missing_index_graphics_service);
+        Expect(
+            missing_index_executor.RegisterCommand(CreateSetBatmanGraphicsResolutionModeCommand()),
+            "Failed to register the missing-index resolution command.");
+        Expect(
+            !missing_index_executor.RunCommand("setBatmanGraphicsResolutionMode"),
+            "Missing resolution index unexpectedly succeeded.");
+        Expect(
+            missing_index_dispatcher.TryGetInt("resolutionWidth") == 1600,
+            "Missing-index failure changed the resolution width.");
+        Expect(
+            missing_index_dispatcher.TryGetInt("resolutionHeight") == 900,
+            "Missing-index failure changed the resolution height.");
     }
 
     /**
@@ -786,8 +894,8 @@ namespace
             SeedConcurrentBatmanGraphicsState(low_dispatcher, false);
             SeedConcurrentBatmanGraphicsState(high_dispatcher, true);
 
-            helen::BatmanGraphicsConfigService low_service(engine_ini_path);
-            helen::BatmanGraphicsConfigService high_service(engine_ini_path);
+            helen::BatmanGraphicsConfigService low_service(engine_ini_path, GetGraphicsTestDisplayModeService());
+            helen::BatmanGraphicsConfigService high_service(engine_ini_path, GetGraphicsTestDisplayModeService());
             std::atomic<int> ready_count{ 0 };
             std::atomic<bool> release_threads{ false };
             bool low_result = false;
@@ -867,7 +975,7 @@ void RunCommandExecutorTests()
     Expect(runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the live subtitle scale slot.");
 
     const std::filesystem::path unused_batman_ini_path = CreateTemporaryBatmanGraphicsIniPath();
-    helen::BatmanGraphicsConfigService graphics_config_service(unused_batman_ini_path);
+    helen::BatmanGraphicsConfigService graphics_config_service(unused_batman_ini_path, GetGraphicsTestDisplayModeService());
     helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
     Expect(executor.RegisterCommand(CreateApplySubtitleSizeCommand("applySubtitleSize")), "Failed to register the happy-path subtitle command.");
     Expect(!executor.RegisterCommand(CreateApplySubtitleSizeCommand("applySubtitleSize")), "Duplicate command registration unexpectedly succeeded.");
@@ -887,7 +995,7 @@ void RunCommandExecutorTests()
         helen::RuntimeValueStore subtitle_runtime_values;
         Expect(subtitle_runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the subtitle test runtime slot.");
 
-        helen::BatmanGraphicsConfigService subtitle_graphics_config_service(subtitle_ini_path);
+        helen::BatmanGraphicsConfigService subtitle_graphics_config_service(subtitle_ini_path, GetGraphicsTestDisplayModeService());
         helen::CommandExecutor subtitle_executor(subtitle_dispatcher, subtitle_runtime_values, subtitle_graphics_config_service);
         Expect(subtitle_dispatcher.TrySetInt("ui.subtitleSize", 4), "Failed to seed the subtitle size config for the persistence command test.");
         Expect(subtitle_executor.RegisterCommand(CreateApplySubtitleSizePersistCommand("applySubtitleSizeWithPersistence")), "Failed to register the subtitle persistence command.");
@@ -905,7 +1013,7 @@ void RunCommandExecutorTests()
             helen::RuntimeValueStore subtitle_runtime_values;
             Expect(subtitle_runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the subtitle upsert runtime slot.");
 
-            helen::BatmanGraphicsConfigService subtitle_graphics_config_service(subtitle_ini_path);
+            helen::BatmanGraphicsConfigService subtitle_graphics_config_service(subtitle_ini_path, GetGraphicsTestDisplayModeService());
             helen::CommandExecutor subtitle_executor(subtitle_dispatcher, subtitle_runtime_values, subtitle_graphics_config_service);
             Expect(subtitle_dispatcher.TrySetInt("ui.subtitleSize", 2), "Failed to seed the subtitle size config for the insert test.");
             Expect(subtitle_executor.RegisterCommand(CreateApplySubtitleSizePersistCommand("applySubtitleSizeWithUpsert")), "Failed to register the subtitle upsert command.");
@@ -928,7 +1036,7 @@ void RunCommandExecutorTests()
             helen::RuntimeValueStore subtitle_runtime_values;
             Expect(subtitle_runtime_values.RegisterSlot(CreateSubtitleScaleSlot()), "Failed to register the subtitle sibling-path runtime slot.");
 
-            helen::BatmanGraphicsConfigService subtitle_graphics_config_service(engine_ini_path);
+            helen::BatmanGraphicsConfigService subtitle_graphics_config_service(engine_ini_path, GetGraphicsTestDisplayModeService());
             helen::CommandExecutor subtitle_executor(subtitle_dispatcher, subtitle_runtime_values, subtitle_graphics_config_service);
             Expect(subtitle_executor.RegisterCommand(CreateApplySubtitleSizePersistCommand("applySubtitleSizeWithSiblingBmGame")), "Failed to register the subtitle sibling-path persist command.");
 
@@ -1018,7 +1126,7 @@ void RunCommandExecutorTests()
         RegisterBatmanGraphicsConfigKeys(batman_dispatcher);
 
         helen::RuntimeValueStore batman_runtime_values;
-        helen::BatmanGraphicsConfigService batman_graphics_config_service(batman_ini_path);
+        helen::BatmanGraphicsConfigService batman_graphics_config_service(batman_ini_path, GetGraphicsTestDisplayModeService());
         helen::CommandExecutor batman_executor(batman_dispatcher, batman_runtime_values, batman_graphics_config_service);
 
         Expect(batman_executor.RegisterCommand(CreateLoadBatmanGraphicsDraftCommand()), "Failed to register the Batman graphics load command.");
@@ -1160,7 +1268,7 @@ void RunCommandExecutorTests()
         helen::CommandDispatcher batman_dispatcher;
         RegisterBatmanGraphicsConfigKeys(batman_dispatcher);
         helen::RuntimeValueStore batman_runtime_values;
-        helen::BatmanGraphicsConfigService batman_graphics_config_service(engine_ini_path);
+        helen::BatmanGraphicsConfigService batman_graphics_config_service(engine_ini_path, GetGraphicsTestDisplayModeService());
         helen::CommandExecutor batman_executor(batman_dispatcher, batman_runtime_values, batman_graphics_config_service);
         Expect(batman_executor.RegisterCommand(CreateLoadBatmanGraphicsDraftCommand()), "Failed to register the missing-launcher-INI load command.");
         Expect(!batman_executor.RunCommand("loadBatmanGraphicsDraftIntoConfig"), "Batman graphics load unexpectedly fell back to BmEngine.ini when UserEngine.ini was missing.");
@@ -1175,7 +1283,7 @@ void RunCommandExecutorTests()
         helen::CommandDispatcher batman_dispatcher;
         RegisterBatmanGraphicsConfigKeys(batman_dispatcher);
         helen::RuntimeValueStore batman_runtime_values;
-        helen::BatmanGraphicsConfigService batman_graphics_config_service(engine_ini_path);
+        helen::BatmanGraphicsConfigService batman_graphics_config_service(engine_ini_path, GetGraphicsTestDisplayModeService());
         helen::CommandExecutor batman_executor(batman_dispatcher, batman_runtime_values, batman_graphics_config_service);
         Expect(batman_executor.RegisterCommand(CreateLoadBatmanGraphicsDraftCommand()), "Failed to register the incomplete-launcher-INI load command.");
         Expect(!batman_executor.RunCommand("loadBatmanGraphicsDraftIntoConfig"), "Batman graphics load unexpectedly fell back to BmEngine.ini when UserEngine.ini was incomplete.");
@@ -1192,7 +1300,7 @@ void RunCommandExecutorTests()
 
         helen::CommandDispatcher batman_dispatcher;
         RegisterBatmanGraphicsConfigKeys(batman_dispatcher);
-        helen::BatmanGraphicsConfigService batman_graphics_config_service(engine_ini_path);
+        helen::BatmanGraphicsConfigService batman_graphics_config_service(engine_ini_path, GetGraphicsTestDisplayModeService());
         const HANDLE blocked_engine_handle = OpenBatmanIniDenyingWriteDeleteSharing(engine_ini_path);
         const bool apply_result = batman_graphics_config_service.ApplyFromDispatcher(batman_dispatcher);
         const BOOL close_result = CloseHandle(blocked_engine_handle);
@@ -1223,7 +1331,7 @@ void RunCommandExecutorTests()
 
         helen::CommandDispatcher batman_dispatcher;
         RegisterBatmanGraphicsConfigKeys(batman_dispatcher);
-        helen::BatmanGraphicsConfigService batman_graphics_config_service(engine_ini_path);
+        helen::BatmanGraphicsConfigService batman_graphics_config_service(engine_ini_path, GetGraphicsTestDisplayModeService());
         const HANDLE blocked_user_handle = OpenBatmanIniDenyingWriteDeleteSharing(user_ini_path);
         const bool apply_result = batman_graphics_config_service.ApplyFromDispatcher(batman_dispatcher);
         const BOOL close_result = CloseHandle(blocked_user_handle);
@@ -1244,4 +1352,5 @@ void RunCommandExecutorTests()
     }
 
     RunConcurrentBatmanGraphicsApplyTest("concurrent-publication");
+    RunBatmanResolutionModeCommandTest();
 }
