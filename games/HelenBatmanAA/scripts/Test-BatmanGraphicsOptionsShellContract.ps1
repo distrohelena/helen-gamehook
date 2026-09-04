@@ -1636,6 +1636,15 @@ for (const rowIndex of [0, 1, 14]) {
     assert.strictEqual(row.RightClicker._x, 200, `arrowless row ${rowIndex + 1} keeps the right clicker unshifted`);
 }
 
+const unpositionedEditableRow = loadRow(rowScripts[2], geometryParent, {
+    LeftClicker: { _visible: true },
+    RightClicker: { _visible: true }
+});
+assert.strictEqual(unpositionedEditableRow.LeftClicker._x, undefined, 'editable row leaves an unpositioned left clicker unchanged');
+assert.strictEqual(unpositionedEditableRow.RightClicker._x, undefined, 'editable row leaves an unpositioned right clicker unchanged');
+assert.strictEqual(Number.isNaN(unpositionedEditableRow.LeftClicker._x), false, 'editable row does not create NaN for an unpositioned left clicker');
+assert.strictEqual(Number.isNaN(unpositionedEditableRow.RightClicker._x), false, 'editable row does not create NaN for an unpositioned right clicker');
+
 setNow(0);
 clearCalls();
 let environment = makeEnvironment();

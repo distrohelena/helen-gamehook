@@ -960,11 +960,11 @@ internal static class GraphicsOptionsShellScriptTemplates
     private static string CreateEditableRowArrowAlignmentAction()
     {
         return """
-           if(this.LeftClicker != undefined)
+           if(this.LeftClicker != undefined && this.LeftClicker._x != undefined)
            {
               this.LeftClicker._x = this.LeftClicker._x - 12;
            }
-           if(this.RightClicker != undefined)
+           if(this.RightClicker != undefined && this.RightClicker._x != undefined)
            {
               this.RightClicker._x = this.RightClicker._x + 12;
            }
