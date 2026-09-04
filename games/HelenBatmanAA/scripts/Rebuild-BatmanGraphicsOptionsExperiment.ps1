@@ -297,8 +297,8 @@ function New-GraphicsCarrierObserver {
         if ($dynamicMinimumValue -le 0 -or $dynamicMaximumValue -lt $dynamicMinimumValue -or $dynamicMaximumValue -gt 32767) {
             throw "Graphics carrier observer '$Id' dynamic response bounds are invalid."
         }
-        if ($responseRequestSupplied -or $responseMappingsSupplied -or $acknowledgementMappingsSupplied -or $Mappings.Count -gt 0 -or -not [string]::IsNullOrWhiteSpace($TargetConfigKey)) {
-            throw "Graphics carrier observer '$Id' dynamic response cannot include static mappings or a target key."
+        if ($responseRequestSupplied -or $responseMappingsSupplied -or $acknowledgementMappingsSupplied -or $Mappings.Count -gt 0 -or -not [string]::IsNullOrWhiteSpace($TargetConfigKey) -or -not [string]::IsNullOrWhiteSpace($Command)) {
+            throw "Graphics carrier observer '$Id' dynamic response cannot include static mappings, a target key, or a command."
         }
         $dynamicRequestValuesClone = @(ConvertTo-StrictGraphicsIntegerArray -Values $DynamicResponseRequests -Context "Graphics carrier observer '$Id' dynamic response requests")
         $dynamicRequestSet = [Collections.Generic.HashSet[int]]::new()

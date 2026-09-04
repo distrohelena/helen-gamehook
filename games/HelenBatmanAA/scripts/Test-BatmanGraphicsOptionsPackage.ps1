@@ -453,6 +453,11 @@ function Assert-GraphicsDynamicResponseParameterContract {
         try { $null = New-GraphicsCarrierObserver @invalidParameters } catch { $rejected = $true }
         if (-not $rejected) { throw "Dynamic response bounds accepted invalid values '$($invalidBounds.Minimum)'/'$($invalidBounds.Maximum)'." }
     }
+    $commandParameters = $parameters.Clone()
+    $commandParameters['Command'] = 'setBatmanGraphicsResolutionMode'
+    $commandRejected = $false
+    try { $null = New-GraphicsCarrierObserver @commandParameters } catch { $commandRejected = $true }
+    if (-not $commandRejected) { throw 'Dynamic response observer accepted a non-empty command even though response-only observers cannot declare commands.' }
 }
 
 function Get-HgdeltaFunctionBody {
