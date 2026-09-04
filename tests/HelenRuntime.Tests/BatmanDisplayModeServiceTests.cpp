@@ -76,6 +76,23 @@ void RunBatmanDisplayModeServiceTests()
             [](std::wstring& device_name, std::vector<helen::BatmanDisplayMode>& modes)
             {
                 device_name = L"DISPLAY1";
+                modes = {
+                    helen::BatmanDisplayMode(1600, 640),
+                    helen::BatmanDisplayMode(1280, 800)
+                };
+                return true;
+            });
+
+        Expect(service.Refresh(), "Expected equal-area display modes to refresh successfully.");
+        ExpectMode(service.GetMode(0), 1280, 800, "Expected equal-area modes to sort by width first.");
+        ExpectMode(service.GetMode(1), 1600, 640, "Expected equal-area modes to sort by width before height.");
+    }
+
+    {
+        helen::BatmanDisplayModeService service(
+            [](std::wstring& device_name, std::vector<helen::BatmanDisplayMode>& modes)
+            {
+                device_name = L"DISPLAY1";
                 modes.emplace_back(0, 1080);
                 return true;
             });
@@ -146,5 +163,21 @@ void RunBatmanDisplayModeServiceTests()
         Expect(!removed_mode.has_value(), "Expected a selected pair removed by re-enumeration to fail revalidation.");
         Expect(service.GetModeCount() == 2, "Expected revalidation to preserve the original catalog semantics.");
         ExpectMode(service.GetMode(1), 1920, 1080, "Expected revalidation not to reinterpret the selected index against a reordered catalog.");
+    }
+
+    {
+        int enumeration_count = 0;
+        helen::BatmanDisplayModeService service(
+            [&enumeration_count](std::wstring& device_name, std::vector<helen::BatmanDisplayMode>& modes)
+            {
+                ++enumeration_count;
+                device_name = enumeration_count == 1 ? L"DISPLAY1" : L"DISPLAY2";
+                modes.emplace_back(1920, 1080);
+                return true;
+            });
+
+        Expect(service.Refresh(), "Expected the initial display identity enumeration to succeed.");
+        const std::optional<helen::BatmanDisplayMode> revalidated_mode = service.RevalidateMode(0);
+        Expect(!revalidated_mode.has_value(), "Expected a matching pair on a different display device to fail revalidation.");
     }
 }
