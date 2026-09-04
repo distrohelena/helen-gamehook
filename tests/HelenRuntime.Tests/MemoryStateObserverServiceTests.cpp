@@ -565,9 +565,12 @@ namespace
             ConfigureDynamicResponseCarrier(candidate_address, -3);
             Expect(service.PollOnce(), "Dynamic stale-response reset poll unexpectedly failed.");
             Expect(service.GetDebugViews()[0].CachedAddress == 0, "Stop did not clear the dynamic transient response.");
+            const std::uint64_t rescan_count_before_restart = service.GetDebugViews()[0].RescanCount;
 
             Expect(service.Start(), "Dynamic observer worker failed to restart after Stop.");
-            Expect(WaitForObserverRescanCount(service, 0, 2, std::chrono::seconds(2)), "Restarted worker did not rescan stale negative memory.");
+            Expect(
+                WaitForObserverRescanCount(service, 0, rescan_count_before_restart + 1, std::chrono::seconds(2)),
+                "Restarted worker did not perform a new poll after Stop/Start.");
             service.Stop();
             ConfigureDynamicResponseCarrier(candidate_address, 4700);
             Expect(service.PollOnce(), "Dynamic request after Stop/Start reset unexpectedly failed.");
