@@ -2,7 +2,7 @@ namespace SubtitleSizeModBuilder;
 
 /// <summary>
 /// Produces the selective ActionScript shell used to expose the retail graphics-options screen.
-/// Eleven declaratively described settings are connected to the frontend carrier, while Detail Level
+/// Twelve declaratively described settings are connected to the frontend carrier, while Detail Level
 /// is a shell-local derived preset over seven quality leaves and the stock layout remains stable.
 /// </summary>
 internal static class GraphicsOptionsShellScriptTemplates
@@ -111,6 +111,7 @@ internal static class GraphicsOptionsShellScriptTemplates
            function CreateSettings()
            {
               this.Settings = new Array(
+                 {RowIndex:1,Name:"Fullscreen",Values:new Array("Windowed","Fullscreen"),ConfigValues:new Array(0,1),ReadRequest:4670,ReadResponseBase:4671,WriteRequestBase:4673,WriteAcknowledgementBase:4675,FailureResponse:4679,InitialIndex:-1,DraftIndex:-1},
                  {RowIndex:3,Name:"VSync",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4200,ReadResponseBase:4210,WriteRequestBase:4220,WriteAcknowledgementBase:4230,FailureResponse:4299,InitialIndex:-1,DraftIndex:-1},
                  {RowIndex:4,Name:"MSAA",Values:new Array("Off","2x","4x","8x","16x"),ConfigValues:new Array(0,1,2,3,5),ReadRequest:4300,ReadResponseBase:4310,WriteRequestBase:4320,WriteAcknowledgementBase:4330,FailureResponse:4399,InitialIndex:-1,DraftIndex:-1},
                  {RowIndex:6,Name:"Bloom",Values:new Array("Off","On"),ConfigValues:new Array(0,1),ReadRequest:4600,ReadResponseBase:4601,WriteRequestBase:4603,WriteAcknowledgementBase:4605,FailureResponse:4609,InitialIndex:-1,DraftIndex:-1},
@@ -808,7 +809,7 @@ internal static class GraphicsOptionsShellScriptTemplates
     """;
 
     /// <summary>
-    /// Creates all fifteen row scripts in visual and navigation order, injecting eleven transmitted
+    /// Creates all fifteen row scripts in visual and navigation order, injecting twelve transmitted
     /// settings plus the derived Detail Level controller while retaining fixed inactive rows.
     /// </summary>
     /// <param name="snapshot">The normalized user graphics snapshot retained by the builder contract.</param>
@@ -818,7 +819,7 @@ internal static class GraphicsOptionsShellScriptTemplates
         ArgumentNullException.ThrowIfNull(snapshot);
         return
         [
-            CreateRowClipAction("Fullscreen", "Not active", true),
+            CreateActiveRowClipAction("Fullscreen", 1, ["Windowed", "Fullscreen"]),
             CreateRowClipAction("Resolution", "Not active", true),
             CreateActiveRowClipAction("VSync", 3, ["Off", "On"]),
             CreateActiveRowClipAction("MSAA", 4, ["Off", "2x", "4x", "8x", "16x"]),
