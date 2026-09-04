@@ -1020,8 +1020,8 @@ namespace helen
             }
 
             if (!dynamic_value.has_value() ||
-                *dynamic_value < 0 ||
                 *dynamic_value == (std::numeric_limits<int>::min)() ||
+                *dynamic_value < 0 ||
                 *dynamic_value < definition.DynamicResponseMinimumValue ||
                 *dynamic_value > definition.DynamicResponseMaximumValue)
             {
@@ -1041,6 +1041,7 @@ namespace helen
                 !TryWriteInt32(response_address, response_value))
             {
                 ClearDynamicTransientResponse(observer_index);
+                ClearCachedAddress(observer_index);
                 return false;
             }
 

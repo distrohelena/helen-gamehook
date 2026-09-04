@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <optional>
@@ -191,19 +192,21 @@ namespace
      * @param scan_start Inclusive scan start address for the observer.
      * @param scan_end Exclusive scan end address for the observer.
      * @param address_group Optional shared address-group identifier for grouped transport tests.
+     * @param value_offset Signed byte offset containing the dynamic request and response value.
      * @return Fully populated dynamic response observer definition with static carrier sentinels.
      */
     helen::MemoryStateObserverDefinition CreateDynamicResponseObserverDefinition(
         std::uintptr_t scan_start,
         std::uintptr_t scan_end,
-        const std::optional<std::string>& address_group = std::nullopt)
+        const std::optional<std::string>& address_group = std::nullopt,
+        int value_offset = 0)
     {
         helen::MemoryStateObserverDefinition definition;
         definition.Id = "batmanDisplayModeObserver";
         definition.ScanStartAddress = scan_start;
         definition.ScanEndAddress = scan_end;
         definition.ScanStride = 4;
-        definition.ValueOffset = 0;
+        definition.ValueOffset = value_offset;
         definition.PollIntervalMs = 1;
         definition.AddressGroup = address_group;
         definition.AddressMatchValues = { 4700, 4701, 4702, 4899 };
@@ -225,11 +228,12 @@ namespace
      * @brief Writes the static structural words required by one dynamic display-mode carrier.
      * @param base_address Carrier base address whose words should be initialized.
      * @param raw_value Static request or failure sentinel written at the value offset.
+     * @param value_offset Signed byte offset containing the raw request or response.
      */
-    void ConfigureDynamicResponseCarrier(std::uintptr_t base_address, int raw_value)
+    void ConfigureDynamicResponseCarrier(std::uintptr_t base_address, int raw_value, int value_offset = 0)
     {
         WriteInt32(base_address - 16, 50);
-        WriteInt32(base_address, raw_value);
+        WriteInt32(base_address + value_offset, raw_value);
     }
 
     /**
@@ -248,6 +252,7 @@ namespace
         const std::uintptr_t candidate_address = page_address + 64;
         std::vector<helen::MemoryStateObserverUpdate> updates;
         std::vector<int> callback_requests;
+        bool fail_next_request = false;
         helen::MemoryStateObserverService service(
             { CreateDynamicResponseObserverDefinition(page_address, page_address + page_size) },
             [&updates](const helen::MemoryStateObserverUpdate& update)
@@ -256,10 +261,15 @@ namespace
                 return true;
             },
             {},
-            [&callback_requests](const std::string& provider_id, int raw_request_value)
+            [&callback_requests, &fail_next_request](const std::string& provider_id, int raw_request_value)
             {
                 Expect(provider_id == "batmanDisplayModes", "Dynamic provider identifier mismatch.");
                 callback_requests.push_back(raw_request_value);
+                if (fail_next_request)
+                {
+                    fail_next_request = false;
+                    return std::optional<int>();
+                }
                 if (raw_request_value == 4700)
                 {
                     return std::optional<int>(3);
@@ -290,6 +300,18 @@ namespace
 
             Expect(service.PollOnce(), "Exact pending dynamic response unexpectedly invalidated the carrier.");
             Expect(service.GetDebugViews()[0].CachedAddress == candidate_address, "Exact pending dynamic response did not preserve the cached carrier.");
+
+            fail_next_request = true;
+            ConfigureDynamicResponseCarrier(candidate_address, 4701);
+            Expect(service.PollOnce(), "Dynamic request failure response unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == 4899, "Dynamic request failure did not receive the failure response.");
+            ConfigureDynamicResponseCarrier(candidate_address, -3);
+            Expect(service.PollOnce(), "Cleared dynamic transient validation unexpectedly failed.");
+            Expect(service.GetDebugViews()[0].CachedAddress == 0, "Failed dynamic request retained the old transient response.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 4700);
+            Expect(service.PollOnce(), "Dynamic observer did not recover through static discovery after failure.");
+            Expect(ReadInt32(candidate_address) == -3, "Dynamic observer recovery did not answer the static request.");
 
             ConfigureDynamicResponseCarrier(candidate_address, 4701);
             Expect(service.PollOnce(), "Dynamic request 4701 unexpectedly failed.");
@@ -325,7 +347,7 @@ namespace
         service.Stop();
         Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release dynamic observer transport allocation.");
 
-        const int invalid_results[] = { 0, 32768, -1 };
+        const int invalid_results[] = { 0, 32768, -1, (std::numeric_limits<int>::min)() };
         for (const int invalid_result : invalid_results)
         {
             void* const invalid_allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
@@ -395,6 +417,179 @@ namespace
         Expect(ReadInt32(exception_candidate_address) == 4899, "Dynamic callback exception did not receive the failure response.");
         exception_service.Stop();
         Expect(VirtualFree(exception_allocation, 0, MEM_RELEASE) != FALSE, "Failed to release callback exception test allocation.");
+    }
+
+    /**
+     * @brief Verifies dynamic responses write at nonzero value offsets and accept both inclusive scalar bounds.
+     */
+    void RunDynamicResponseOffsetAndBoundsTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate memory for dynamic offset and bounds tests.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 64;
+        ConfigureDynamicResponseCarrier(candidate_address, 4700, 12);
+        helen::MemoryStateObserverService service(
+            { CreateDynamicResponseObserverDefinition(page_address, page_address + page_size, std::nullopt, 12) },
+            {},
+            {},
+            [](const std::string&, int raw_request_value)
+            {
+                return std::optional<int>(raw_request_value == 4700 ? 1 : 32767);
+            });
+
+        try
+        {
+            Expect(service.PollOnce(), "Dynamic nonzero-offset minimum-bound request unexpectedly failed.");
+            Expect(ReadInt32(candidate_address + 12) == -1, "Dynamic minimum-bound response was not written at ValueOffset.");
+            Expect(ReadInt32(candidate_address) == 0, "Dynamic nonzero-offset transport overwrote the carrier base.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 4701, 12);
+            Expect(service.PollOnce(), "Dynamic maximum-bound request unexpectedly failed.");
+            Expect(ReadInt32(candidate_address + 12) == -32767, "Dynamic maximum-bound response was not encoded at ValueOffset.");
+        }
+        catch (...)
+        {
+            service.Stop();
+            if (allocation != nullptr)
+            {
+                VirtualFree(allocation, 0, MEM_RELEASE);
+            }
+
+            throw;
+        }
+
+        service.Stop();
+        Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release dynamic offset and bounds allocation.");
+    }
+
+    /**
+     * @brief Verifies a failed dynamic response write clears transient state and requires static rediscovery for recovery.
+     * @remarks PAGE_READONLY keeps the carrier readable while making the response write fail inside the guarded native write helper.
+     */
+    void RunDynamicResponseWriteFailureCleanupTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate memory for dynamic write failure cleanup tests.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 64;
+        ConfigureDynamicResponseCarrier(candidate_address, 4700);
+        std::vector<int> callback_requests;
+        helen::MemoryStateObserverService service(
+            { CreateDynamicResponseObserverDefinition(page_address, page_address + page_size) },
+            {},
+            {},
+            [&callback_requests](const std::string&, int raw_request_value)
+            {
+                callback_requests.push_back(raw_request_value);
+                return std::optional<int>(raw_request_value == 4700 ? 3 : 1920);
+            });
+
+        DWORD old_protection = 0;
+        try
+        {
+            Expect(service.PollOnce(), "Dynamic write failure setup request unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == -3, "Dynamic write failure setup did not create a transient response.");
+            ConfigureDynamicResponseCarrier(candidate_address, 4701);
+            Expect(VirtualProtect(allocation, page_size, PAGE_READONLY, &old_protection) != FALSE, "Failed to protect dynamic carrier for write failure test.");
+            Expect(!service.PollOnce(), "Dynamic read-only carrier write unexpectedly succeeded.");
+            const std::vector<helen::MemoryStateObserverDebugView> failed_views = service.GetDebugViews();
+            Expect(failed_views[0].CachedAddress == 0, "Dynamic write failure retained a stale cached address.");
+
+            DWORD restored_protection = 0;
+            Expect(VirtualProtect(allocation, page_size, old_protection, &restored_protection) != FALSE, "Failed to restore dynamic carrier write protection.");
+            ConfigureDynamicResponseCarrier(candidate_address, 4700);
+            Expect(service.PollOnce(), "Dynamic recovery after write failure unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == -3, "Dynamic recovery after write failure did not answer the static request.");
+            Expect(callback_requests.size() == 3, "Dynamic recovery did not perform a fresh provider request after write failure.");
+            Expect(failed_views[0].RescanCount < service.GetDebugViews()[0].RescanCount, "Dynamic recovery did not require static rediscovery after write failure.");
+
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to free dynamic carrier for invalid-address cleanup test.");
+            Expect(service.PollOnce(), "Dynamic invalid-address cleanup poll unexpectedly failed.");
+            Expect(service.GetDebugViews()[0].CachedAddress == 0, "Dynamic invalid-address cleanup retained a stale transient cache.");
+        }
+        catch (...)
+        {
+            service.Stop();
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+
+        service.Stop();
+    }
+
+    /**
+     * @brief Verifies stopping and restarting the worker clears a negative transient before the next polling pass.
+     */
+    void RunDynamicResponseStopResetTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate memory for dynamic stop reset tests.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 64;
+        ConfigureDynamicResponseCarrier(candidate_address, 4700);
+        helen::MemoryStateObserverService service(
+            { CreateDynamicResponseObserverDefinition(page_address, page_address + page_size) },
+            {},
+            {},
+            [](const std::string&, int)
+            {
+                return std::optional<int>(3);
+            });
+
+        try
+        {
+            Expect(service.PollOnce(), "Dynamic stop reset setup request unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == -3, "Dynamic stop reset setup did not create a transient response.");
+            service.Stop();
+            ConfigureDynamicResponseCarrier(candidate_address, -3);
+            Expect(service.PollOnce(), "Dynamic stale-response reset poll unexpectedly failed.");
+            Expect(service.GetDebugViews()[0].CachedAddress == 0, "Stop did not clear the dynamic transient response.");
+
+            Expect(service.Start(), "Dynamic observer worker failed to restart after Stop.");
+            Expect(WaitForObserverRescanCount(service, 0, 2, std::chrono::seconds(2)), "Restarted worker did not rescan stale negative memory.");
+            service.Stop();
+            ConfigureDynamicResponseCarrier(candidate_address, 4700);
+            Expect(service.PollOnce(), "Dynamic request after Stop/Start reset unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == -3, "Dynamic request after Stop/Start reset did not recover through static discovery.");
+        }
+        catch (...)
+        {
+            service.Stop();
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+
+        service.Stop();
+        Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release dynamic stop reset allocation.");
     }
 
     /**
@@ -2496,6 +2691,7 @@ namespace
             const std::vector<helen::MemoryStateObserverDebugView> cached_views = service.GetDebugViews();
             Expect(cached_views.size() == 2, "Grouped dynamic response debug view count mismatch.");
             Expect(cached_views[0].CachedAddress == candidate_address && cached_views[1].CachedAddress == candidate_address, "Grouped transient response did not preserve every observer cache.");
+            Expect(cached_views[0].RescanCount == 1 && cached_views[1].RescanCount == 0, "Grouped dynamic discovery performed more than one broad scan in a polling pass.");
 
             ConfigureDynamicResponseCarrier(candidate_address, 4701);
             Expect(service.PollOnce(), "Grouped dynamic request replacement unexpectedly failed.");
@@ -2506,6 +2702,7 @@ namespace
             Expect(service.PollOnce(), "Grouped unrelated negative response poll unexpectedly failed.");
             const std::vector<helen::MemoryStateObserverDebugView> invalidated_views = service.GetDebugViews();
             Expect(invalidated_views[0].CachedAddress == 0 && invalidated_views[1].CachedAddress == 0, "Grouped unrelated negative response did not invalidate every cache.");
+            Expect(invalidated_views[0].RescanCount == 2 && invalidated_views[1].RescanCount == 0, "Grouped unresolved discovery performed more than one broad scan in a polling pass.");
         }
         catch (...)
         {
@@ -2553,6 +2750,9 @@ void RunMemoryStateObserverServiceTests()
     RunObserverPollPassSerializationTest();
     RunDynamicResponseTransportTest();
     RunGroupedDynamicResponseTransportTest();
+    RunDynamicResponseOffsetAndBoundsTest();
+    RunDynamicResponseWriteFailureCleanupTest();
+    RunDynamicResponseStopResetTest();
 
     SYSTEM_INFO system_info{};
     GetSystemInfo(&system_info);
