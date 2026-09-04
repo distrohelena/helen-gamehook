@@ -814,6 +814,7 @@ foreach ($RequiredScreenToken in @(
     'this.RollbackLocked = false;',
     'this.Tick = function()',
     'function BeginInitialization()',
+    'function ResetResolutionCatalogState()',
     'function BeginResolutionCatalogInitialization()',
     'function DecodeResolutionScalar(rawValue)',
     'function IsDeadlineReached(deadline)',
@@ -1004,6 +1005,9 @@ if ($DestroyControllerBody.IndexOf('this.Screen.Tick', [System.StringComparison]
 }
 $CompleteRollbackBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'CompleteRollback' -Context 'Graphics rollback success'
 Assert-ContainsOrdinal -Text $CompleteRollbackBody -Token 'this.UiStatus = "Apply Failed";' -Context 'Graphics rollback success status'
+$FailInitializationBody = Get-ActionScriptNamedFunctionBody -ScriptText $ScreenFrame -FunctionName 'FailInitialization' -Context 'Graphics initialization failure reset'
+Assert-ContainsOrdinal -Text $FailInitializationBody -Token 'this.ResetResolutionCatalogState();' -Context 'Graphics initialization failure catalog reset'
+Assert-ContainsOrdinal -Text $DestroyControllerBody -Token 'this.ResetResolutionCatalogState();' -Context 'Graphics controller destruction catalog reset'
 if ($CompleteRollbackBody.IndexOf('setting.DraftIndex =', [System.StringComparison]::Ordinal) -ge 0 -or
     $CompleteRollbackBody.IndexOf('setting.InitialIndex =', [System.StringComparison]::Ordinal) -ge 0) {
     throw 'Successful graphics rollback must preserve finite setting draft and initial indices.'
@@ -1365,6 +1369,12 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
 
     if (($RowIndex + 1) -eq 2) {
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.RowIndex = 2;' -Context "$RowContext row binding"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = -1;' -Context "$RowContext state initialization"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = -1;' -Context "$RowContext initial initialization"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Default = -1;' -Context "$RowContext default initialization"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = _parent.GraphicsOptionsController.GetResolutionDraftIndex();' -Context "$RowContext state synchronization"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = _parent.GraphicsOptionsController.GetResolutionInitialIndex();' -Context "$RowContext initial synchronization"
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.Default = this.Initial;' -Context "$RowContext default synchronization"
         Assert-ContainsOrdinal -Text $RowScript -Token 'GetResolutionLabel();' -Context "$RowContext label state"
         Assert-ContainsOrdinal -Text $RowScript -Token 'CanDecrementResolution();' -Context "$RowContext left enabled state"
         Assert-ContainsOrdinal -Text $RowScript -Token 'CanIncrementResolution();' -Context "$RowContext right enabled state"
@@ -1543,7 +1553,24 @@ let calls = [];
 let currentScreen = null;
 
 global.getTimer = () => now;
-global.int = value => Number(value) || 0;
+/** Converts a JavaScript value using the ECMAScript ToInt32 operation used by AS2 int(). */
+function as2ToInt32(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number) || number === 0) {
+        return 0;
+    }
+    const integer = number < 0 ? Math.ceil(number) : Math.floor(number);
+    let modulo = integer % 4294967296;
+    if (modulo < 0) {
+        modulo += 4294967296;
+    }
+    if (modulo >= 2147483648) {
+        modulo -= 4294967296;
+    }
+    return modulo;
+}
+
+global.int = as2ToInt32;
 global.flash = { external: { ExternalInterface: { call: (name, ...args) => {
     calls.push({ name, args });
     if (name === 'FE_GetControlType') {
@@ -1655,6 +1682,13 @@ function loadRow(script, parent, children) {
         LeftClicker: { _visible: true, _x: 100 },
         RightClicker: { _visible: true, _x: 200 }
     }, children || {});
+    row.HasChanged = function() { return this.State != this.Initial; };
+    row.RestoreInitialValue = function() {
+        if (this.HasChanged()) {
+            this.State = this.Initial;
+        }
+    };
+    row.IsDefault = function() { return this.State == this.Default; };
     global._parent = parent;
     const load = new Function(script.slice(bodyStart + 1, bodyEnd));
     load.call(row);
@@ -1664,6 +1698,16 @@ function loadRow(script, parent, children) {
 function expectNoThrow(action, message) {
     assert.doesNotThrow(action, message);
 }
+
+assert.strictEqual(as2ToInt32(3.9), 3);
+assert.strictEqual(as2ToInt32(-3.9), -3);
+assert.strictEqual(as2ToInt32(Infinity), 0);
+assert.strictEqual(as2ToInt32(NaN), 0);
+assert.strictEqual(as2ToInt32(4294967297), 1);
+assert.strictEqual(as2ToInt32(-4294967297), -1);
+assert.strictEqual(as2ToInt32(2147483648), -2147483648);
+assert.strictEqual(as2ToInt32(-2147483649), 2147483647);
+assert.strictEqual(as2ToInt32(-2147483648), -2147483648);
 
 function expectInitializationFailure(responses, message) {
     setNow(0);
@@ -1687,6 +1731,7 @@ expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolu
 expectInitializationFailure([4671, 4672], 'mismatched request response must fail initialization');
 expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4700, 3)], 'stale prior resolution response must fail correlation');
 expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4702, 1280)], 'future resolution response must fail correlation');
+expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), -2147483648], 'INT_MIN resolution response must fail correlation');
 
 setNow(0);
 clearCalls();
@@ -1718,6 +1763,12 @@ queueResponses(4981);
 controller.Tick();
 assert.strictEqual(controller.ResolutionInitialIndex, 0, 'resolution commit must copy draft to initial');
 assert.strictEqual(controller.ResolutionDraftIndex, 0);
+const committedResolutionRow = loadRow(rowScripts[1], environment.screen);
+assert.strictEqual(committedResolutionRow.State, 0);
+assert.strictEqual(committedResolutionRow.Initial, 0);
+assert.strictEqual(committedResolutionRow.Default, 0);
+assert.strictEqual(committedResolutionRow.HasChanged(), false);
+assert.strictEqual(committedResolutionRow.IsDefault(), true);
 
 function applyResolutionFailure(failureResponse) {
     setNow(0);
@@ -1739,6 +1790,11 @@ queueResponses(resolutionFailure.rollbackSignal === 4970 ? 4960 : 4961);
 resolutionFailure.environment.controller.Tick();
 assert.strictEqual(resolutionFailure.environment.controller.GetApplyStatusText(), 'Apply Failed');
 assert.strictEqual(resolutionFailure.environment.controller.ResolutionDraftIndex, resolutionFailure.environment.controller.ResolutionInitialIndex);
+const rollbackResolutionRow = loadRow(rowScripts[1], resolutionFailure.environment.screen);
+assert.strictEqual(rollbackResolutionRow.State, resolutionFailure.environment.controller.ResolutionInitialIndex);
+assert.strictEqual(rollbackResolutionRow.Initial, resolutionFailure.environment.controller.ResolutionInitialIndex);
+assert.strictEqual(rollbackResolutionRow.Default, resolutionFailure.environment.controller.ResolutionInitialIndex);
+assert.strictEqual(rollbackResolutionRow.HasChanged(), false);
 
 resolutionFailure = applyResolutionFailure(5199);
 setNow(resolutionFailure.environment.controller.CurrentPendingDeadline);
@@ -1774,6 +1830,88 @@ environment.controller.DecrementResolution();
 clearCalls();
 assert.strictEqual(environment.screen.TryBack(), true);
 assert.strictEqual(calls.some(call => call.name === 'FE_SetControlType' && call.args[0] >= 5000 && call.args[0] <= 5097), false, 'Back must not emit a resolution write request');
+
+function initializeBoundaryCatalog(controller, currentWidth, currentHeight, expectedCurrentIndex) {
+    controller.BeginInitialization();
+    assert.deepStrictEqual(settingSignals(), [4670]);
+    const responses = [4671, encodeResolutionScalar(4700, 98)];
+    for (let modeIndex = 0; modeIndex < 98; modeIndex += 1) {
+        const widthRequest = 4701 + modeIndex * 2;
+        const heightRequest = widthRequest + 1;
+        const widthValue = modeIndex == 97 ? 32767 : modeIndex + 1;
+        const heightValue = modeIndex == 97 ? 32767 : 1000 + modeIndex;
+        responses.push(encodeResolutionScalar(widthRequest, widthValue));
+        responses.push(encodeResolutionScalar(heightRequest, heightValue));
+    }
+    responses.push(encodeResolutionScalar(4897, currentWidth));
+    responses.push(encodeResolutionScalar(4898, currentHeight));
+    responses.push(4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510);
+    for (const response of responses) {
+        queueResponses(response);
+        controller.Tick();
+    }
+    assert.strictEqual(controller.InitializationComplete, true);
+    assert.strictEqual(controller.ResolutionModes.length, 98);
+    assert.strictEqual(controller.ResolutionInitialIndex, expectedCurrentIndex);
+    assert.strictEqual(controller.ResolutionModes[97].Label, '32767 x 32767');
+}
+
+setNow(0);
+clearCalls();
+const boundaryEnvironment = makeEnvironment();
+initializeBoundaryCatalog(boundaryEnvironment.controller, 1, 1000, 0);
+for (let boundaryIndex = 0; boundaryIndex < 97; boundaryIndex += 1) {
+    boundaryEnvironment.controller.IncrementResolution();
+}
+assert.strictEqual(boundaryEnvironment.controller.ResolutionDraftIndex, 97);
+boundaryEnvironment.controller.ApplyChanges();
+assert.strictEqual(settingSignals()[settingSignals().length - 1], 5097, 'last resolution index must use request 5097');
+queueResponses(5197);
+boundaryEnvironment.controller.Tick();
+assert.strictEqual(settingSignals()[settingSignals().length - 1], 4991);
+queueResponses(4981);
+boundaryEnvironment.controller.Tick();
+assert.strictEqual(boundaryEnvironment.controller.ResolutionInitialIndex, 97);
+
+setNow(0);
+clearCalls();
+const currentScalarEnvironment = makeEnvironment();
+initializeBoundaryCatalog(currentScalarEnvironment.controller, 32767, 32767, 97);
+assert.strictEqual(currentScalarEnvironment.controller.ResolutionInitialIndex, 97, '32767 scalar must be accepted for current dimensions');
+
+setNow(0);
+clearCalls();
+const retryEnvironment = makeEnvironment();
+retryEnvironment.controller.BeginInitialization();
+queueResponses(4671);
+retryEnvironment.controller.Tick();
+queueResponses(0);
+retryEnvironment.controller.Tick();
+assert.strictEqual(retryEnvironment.controller.InitializationFailed, true);
+assert.deepStrictEqual(retryEnvironment.controller.ResolutionModes, []);
+assert.strictEqual(retryEnvironment.controller.ResolutionCatalogCount, 0);
+assert.strictEqual(retryEnvironment.controller.ResolutionCatalogRequest, undefined);
+assert.strictEqual(retryEnvironment.controller.ResolutionCatalogDeadline, undefined);
+assert.strictEqual(retryEnvironment.controller.ResolutionCatalogIndex, 0);
+assert.strictEqual(retryEnvironment.controller.ResolutionPendingWidth, undefined);
+assert.strictEqual(retryEnvironment.controller.ResolutionCurrentWidth, undefined);
+assert.strictEqual(retryEnvironment.controller.ResolutionCurrentHeight, undefined);
+assert.strictEqual(retryEnvironment.controller.ResolutionInitialIndex, -1);
+assert.strictEqual(retryEnvironment.controller.ResolutionDraftIndex, -1);
+clearCalls();
+initialize(retryEnvironment.controller, Array(12).fill(0));
+assert.strictEqual(retryEnvironment.controller.ResolutionInitialIndex, 1, 'same controller retry must rebuild a clean catalog');
+retryEnvironment.controller.Destroy();
+assert.deepStrictEqual(retryEnvironment.controller.ResolutionModes, []);
+assert.strictEqual(retryEnvironment.controller.ResolutionCatalogCount, 0);
+assert.strictEqual(retryEnvironment.controller.ResolutionCatalogRequest, undefined);
+assert.strictEqual(retryEnvironment.controller.ResolutionCatalogDeadline, undefined);
+assert.strictEqual(retryEnvironment.controller.ResolutionCatalogIndex, 0);
+assert.strictEqual(retryEnvironment.controller.ResolutionPendingWidth, undefined);
+assert.strictEqual(retryEnvironment.controller.ResolutionCurrentWidth, undefined);
+assert.strictEqual(retryEnvironment.controller.ResolutionCurrentHeight, undefined);
+assert.strictEqual(retryEnvironment.controller.ResolutionInitialIndex, -1);
+assert.strictEqual(retryEnvironment.controller.ResolutionDraftIndex, -1);
 
 const geometryParent = { GraphicsOptionsController: undefined };
 const editableGeometryRows = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
@@ -1830,6 +1968,23 @@ assert.strictEqual(controller.Settings.length, 12);
 assert.deepStrictEqual(controller.ResolutionModes.map(mode => mode.Label), ['1280 x 720', '1920 x 1080', '3440 x 1440']);
 assert.strictEqual(controller.ResolutionInitialIndex, 1);
 assert.strictEqual(controller.ResolutionDraftIndex, 1);
+const resolutionRow = loadRow(rowScripts[1], environment.screen);
+assert.strictEqual(resolutionRow.State, 1);
+assert.strictEqual(resolutionRow.Initial, 1);
+assert.strictEqual(resolutionRow.Default, 1);
+assert.strictEqual(resolutionRow.HasChanged(), false);
+assert.strictEqual(resolutionRow.IsDefault(), true);
+controller.DecrementResolution();
+resolutionRow.Update();
+assert.strictEqual(resolutionRow.State, 0);
+assert.strictEqual(resolutionRow.Initial, 1);
+assert.strictEqual(resolutionRow.HasChanged(), true);
+assert.strictEqual(resolutionRow.IsDefault(), false);
+resolutionRow.RestoreInitialValue();
+assert.strictEqual(resolutionRow.State, 1);
+resolutionRow.Update();
+assert.strictEqual(resolutionRow.State, 0, 'controller draft remains authoritative after inherited RestoreInitialValue');
+controller.IncrementResolution();
 assert.strictEqual(controller.InitializationDeadline, 10000);
 assert.strictEqual(controller.GetDetailLevelInitialIndex(), 0);
 assert.strictEqual(controller.GetDetailLevelDraftIndex(), 0);
