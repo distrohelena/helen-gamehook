@@ -2098,9 +2098,11 @@ void RunPackRepositoryTests()
         Expect(checked_in_active_pack_set.VirtualFiles.size() == 2, "Checked-in Batman active pack-set virtual-file count mismatch.");
         Expect(checked_in_active_pack_set.Hooks.size() == 1, "Checked-in Batman active pack-set hook count mismatch.");
         Expect(checked_in_active_pack_set.TextureReplacements.size() == 1, "Checked-in Batman active pack-set texture replacement count mismatch.");
-        Expect(checked_in_active_pack_set.Commands.size() == 5, "Checked-in Batman active pack-set command count mismatch.");
+        // The merged set contains two subtitle commands and four graphics commands, including resolution-mode Apply.
+        Expect(checked_in_active_pack_set.Commands.size() == 6, "Checked-in Batman active pack-set command count mismatch.");
         Expect(checked_in_active_pack_set.ExternalBindings.size() == 3, "Checked-in Batman active pack-set external-binding count mismatch.");
-        Expect(checked_in_active_pack_set.StateObservers.size() == 14, "Checked-in Batman active pack-set state-observer count mismatch.");
+        // The merged set contains sixteen graphics observers plus the subtitle observer.
+        Expect(checked_in_active_pack_set.StateObservers.size() == 17, "Checked-in Batman active pack-set state-observer count mismatch.");
         Expect(checked_in_active_pack_set.RuntimeSlots.size() == 1, "Checked-in Batman active pack-set runtime-slot count mismatch.");
         Expect(checked_in_active_pack_set.EnableD3d9TextureReplacementHooks, "Checked-in Batman active pack-set should enable D3D9 texture replacement hooks.");
         Expect(!checked_in_active_pack_set.EnableD3d9TextureHashLogging, "Checked-in Batman active pack-set should leave D3D9 texture hash logging disabled.");
