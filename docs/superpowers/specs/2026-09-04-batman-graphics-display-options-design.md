@@ -122,7 +122,7 @@ The generic observer service gains a bounded dynamic scalar-response contract. A
 
 For requests `[4700, 4701, 4702]`, provider values `3`, `1920`, and `1080` therefore become `-3`, `-34688`, and `-66616`, respectively. The first request retains the legacy-compatible `-3` response while later requests remain distinguishable from earlier transient values.
 
-The written response remains transient only until a new positive request overwrites it, the request fails or its address/structure is invalidated, or the observer service stops. It has no arbitrary time expiry, so the shell may read it on its next polling turn without racing a timeout; the service retains explicit originating-request provenance alongside the encoded response and address.
+The written response remains transient only until a new positive request/value from any observer in its address group overwrites it, the request fails or its address/structure is invalidated, or the observer service stops. It has no arbitrary time expiry, so the shell may read it on its next polling turn without racing a timeout; the service retains explicit originating-request provenance alongside the encoded response and address.
 
 Dynamic responses are never eligible to discover an address. Initial discovery still requires a declared protocol request or sentinel plus all existing structural checks. A cached shared carrier may retain a response only while that exact dynamic request is pending and the structure remains valid. Other members of the address group must recognize that group-owned pending response without emitting updates or clearing the shared cache.
 

@@ -1096,6 +1096,15 @@ namespace helen
 
         ReconcilePendingTransaction(observer_index, resolved_address, raw_value);
 
+        if (definition.AddressGroup.has_value() &&
+            resolved_address.has_value() &&
+            raw_value.has_value() &&
+            *raw_value > 0 &&
+            !dynamic_transient_response)
+        {
+            ClearDynamicTransientResponse(observer_index);
+        }
+
         const bool is_dynamic_response_observer = definition.DynamicResponseProviderId.has_value();
         if (is_dynamic_response_observer &&
             resolved_address.has_value() &&

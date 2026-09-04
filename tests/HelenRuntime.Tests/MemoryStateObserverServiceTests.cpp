@@ -2855,6 +2855,79 @@ namespace
         service.Stop();
         Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release grouped dynamic provenance allocation.");
     }
+
+    /**
+     * @brief Verifies a grouped static observer clears dynamic provenance when it observes a new positive carrier value.
+     * @remarks Reappearing stale negative data must then invalidate the shared group instead of being accepted as a transient response.
+     */
+    void RunGroupedDynamicPositiveOverwriteTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate memory for grouped dynamic positive overwrite tests.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 64;
+        helen::MemoryStateObserverDefinition static_definition;
+        static_definition.Id = "groupedStaticObserver";
+        static_definition.ScanStartAddress = page_address;
+        static_definition.ScanEndAddress = page_address + page_size;
+        static_definition.ScanStride = 4;
+        static_definition.ValueOffset = 0;
+        static_definition.PollIntervalMs = 1;
+        static_definition.AddressGroup = "displayModes";
+        static_definition.AddressMatchValues = { 4700, 4899 };
+        helen::MemoryStateObserverCheckDefinition constant_check;
+        constant_check.Comparison = "equals-constant";
+        constant_check.Offset = -16;
+        constant_check.ExpectedValue = 50;
+        static_definition.Checks.push_back(constant_check);
+
+        helen::MemoryStateObserverDefinition dynamic_definition =
+            CreateDynamicResponseObserverDefinition(page_address, page_address + page_size, "displayModes");
+        std::vector<int> callback_requests;
+        helen::MemoryStateObserverService service(
+            { static_definition, dynamic_definition },
+            {},
+            {},
+            [&callback_requests](const std::string&, int)
+            {
+                callback_requests.push_back(1);
+                return std::optional<int>(3);
+            });
+
+        try
+        {
+            ConfigureDynamicResponseCarrier(candidate_address, 4700);
+            Expect(service.PollOnce(), "Grouped dynamic positive overwrite setup unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == -3, "Grouped dynamic positive overwrite setup did not write the transient response.");
+            Expect(callback_requests.size() == 1, "Grouped dynamic positive overwrite setup did not invoke the provider once.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 4899);
+            Expect(service.PollOnce(), "Grouped static positive overwrite poll unexpectedly failed.");
+            Expect(service.GetDebugViews()[0].CachedAddress == candidate_address && service.GetDebugViews()[1].CachedAddress == candidate_address, "Grouped static positive overwrite lost the shared carrier.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, -3);
+            Expect(service.PollOnce(), "Grouped stale negative invalidation poll unexpectedly failed.");
+            const std::vector<helen::MemoryStateObserverDebugView> invalidated_views = service.GetDebugViews();
+            Expect(invalidated_views[0].CachedAddress == 0 && invalidated_views[1].CachedAddress == 0, "Grouped stale negative response remained accepted after a positive overwrite.");
+        }
+        catch (...)
+        {
+            service.Stop();
+            if (allocation != nullptr)
+            {
+                VirtualFree(allocation, 0, MEM_RELEASE);
+            }
+
+            throw;
+        }
+
+        service.Stop();
+        Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release grouped dynamic positive overwrite allocation.");
+    }
 }
 
 /**
@@ -2884,6 +2957,7 @@ void RunMemoryStateObserverServiceTests()
     RunDynamicResponseTransportTest();
     RunGroupedDynamicResponseTransportTest();
     RunGroupedDynamicResponseProvenanceTest();
+    RunGroupedDynamicPositiveOverwriteTest();
     RunDynamicResponseOffsetAndBoundsTest();
     RunDynamicResponseOrdinalOverflowTest();
     RunDynamicResponseWriteFailureCleanupTest();
