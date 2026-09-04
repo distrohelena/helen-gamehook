@@ -815,6 +815,7 @@ foreach ($RequiredScreenToken in @(
     'this.Tick = function()',
     'function BeginInitialization()',
     'function BeginResolutionCatalogInitialization()',
+    'function DecodeResolutionScalar(rawValue)',
     'function IsDeadlineReached(deadline)',
     'this.InitializationDeadline = getTimer() + 10000;',
     'flash.external.ExternalInterface.call("FE_SetControlType",this.Settings[this.InitializationIndex].ReadRequest,"");',
@@ -866,6 +867,8 @@ Assert-ContainsOrdinal -Text $ScreenFrame -Token 'this.ResolutionModes.push({Wid
 Assert-ContainsOrdinal -Text $ScreenFrame -Token '4897' -Context 'Resolution current width request'
 Assert-ContainsOrdinal -Text $ScreenFrame -Token '4898' -Context 'Resolution current height request'
 Assert-ContainsOrdinal -Text $ScreenFrame -Token 'rawValue == 5199' -Context 'Resolution apply failure'
+Assert-ContainsOrdinal -Text $ScreenFrame -Token 'var ordinal = Math.floor((magnitude - 1) / 32768);' -Context 'Resolution response ordinal decoder'
+Assert-ContainsOrdinal -Text $ScreenFrame -Token 'var expectedOrdinal = this.ResolutionCatalogRequest - 4700;' -Context 'Resolution response request correlation'
 
 $ExpectedSettingDefinitions = @(
     '{RowIndex:1,Name:"Fullscreen",Values:new Array("Windowed","Fullscreen"),ConfigValues:new Array(0,1),ReadRequest:4670,ReadResponseBase:4671,WriteRequestBase:4673,WriteAcknowledgementBase:4675,FailureResponse:4679,InitialIndex:-1,DraftIndex:-1}',
@@ -1623,7 +1626,7 @@ function initialize(controller, values) {
     controller.BeginInitialization();
     assert.deepStrictEqual(settingSignals(), [4670]);
     const startupRequests = [4670, 4700, 4701, 4702, 4703, 4704, 4705, 4706, 4897, 4898, 4200, 4300, 4600, 4610, 4620, 4630, 4640, 4650, 4660, 4400, 4500];
-    const responses = [4671 + values[0], -3, -1280, -720, -1920, -1080, -3440, -1440, -1920, -1080];
+    const responses = [4671 + values[0], encodeResolutionScalar(4700, 3), encodeResolutionScalar(4701, 1280), encodeResolutionScalar(4702, 720), encodeResolutionScalar(4703, 1920), encodeResolutionScalar(4704, 1080), encodeResolutionScalar(4705, 3440), encodeResolutionScalar(4706, 1440), encodeResolutionScalar(4897, 1920), encodeResolutionScalar(4898, 1080)];
     const responseBases = [4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510];
     for (let index = 1; index < values.length; index += 1) {
         responses.push(responseBases[index - 1] + values[index]);
@@ -1635,6 +1638,11 @@ function initialize(controller, values) {
     assert.deepStrictEqual(settingSignals(), startupRequests);
     assert.strictEqual(controller.InitializationComplete, true);
     assert.strictEqual(controller.CanApply(), false);
+}
+
+function encodeResolutionScalar(request, scalar) {
+    const ordinal = request - 4700;
+    return -(scalar + ordinal * 32768);
 }
 
 function loadRow(script, parent, children) {
@@ -1671,12 +1679,14 @@ function expectInitializationFailure(responses, message) {
 
 expectInitializationFailure([4671, 0], 'zero catalog count must fail initialization');
 expectInitializationFailure([4671, -99], 'oversized catalog count must fail initialization');
-expectInitializationFailure([4671, -3, -1280, -720, -1280, -720], 'duplicate resolution pairs must fail initialization');
-expectInitializationFailure([4671, -3, -1280, 0], 'incomplete resolution pair must fail initialization');
+expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4701, 1280), encodeResolutionScalar(4702, 720), encodeResolutionScalar(4703, 1280), encodeResolutionScalar(4704, 720)], 'duplicate resolution pairs must fail initialization');
+expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4701, 1280), 0], 'incomplete resolution pair must fail initialization');
 expectInitializationFailure([4671, -3, 4702], 'out-of-order resolution response must fail initialization');
 expectInitializationFailure([4671, -3, 1280], 'positive resolution scalar must fail initialization');
-expectInitializationFailure([4671, -3, -1280, -720, -1920, -1080, -3440, -1440, -800, -600], 'unsupported current resolution must fail initialization');
+expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4701, 1280), encodeResolutionScalar(4702, 720), encodeResolutionScalar(4703, 1920), encodeResolutionScalar(4704, 1080), encodeResolutionScalar(4705, 3440), encodeResolutionScalar(4706, 1440), encodeResolutionScalar(4897, 800), encodeResolutionScalar(4898, 600)], 'unsupported current resolution must fail initialization');
 expectInitializationFailure([4671, 4672], 'mismatched request response must fail initialization');
+expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4700, 3)], 'stale prior resolution response must fail correlation');
+expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4702, 1280)], 'future resolution response must fail correlation');
 
 setNow(0);
 clearCalls();
@@ -1808,7 +1818,7 @@ clearCalls();
 controller.BeginInitialization();
 const startupValues = [0, 1, 4, 0, 0, 0, 0, 0, 0, 0, 2, 1];
 const startupRequests = [4670, 4700, 4701, 4702, 4703, 4704, 4705, 4706, 4897, 4898, 4200, 4300, 4600, 4610, 4620, 4630, 4640, 4650, 4660, 4400, 4500];
-const startupResponses = [4671, -3, -1280, -720, -1920, -1080, -3440, -1440, -1920, -1080, 4210 + startupValues[1], 4310 + startupValues[2], 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410 + startupValues[10], 4510 + startupValues[11]];
+const startupResponses = [4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4701, 1280), encodeResolutionScalar(4702, 720), encodeResolutionScalar(4703, 1920), encodeResolutionScalar(4704, 1080), encodeResolutionScalar(4705, 3440), encodeResolutionScalar(4706, 1440), encodeResolutionScalar(4897, 1920), encodeResolutionScalar(4898, 1080), 4210 + startupValues[1], 4310 + startupValues[2], 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410 + startupValues[10], 4510 + startupValues[11]];
 for (const startupResponse of startupResponses) {
     queueResponses(startupResponse);
     controller.Tick();
@@ -1867,7 +1877,7 @@ setNow(0);
 environment = makeEnvironment();
 controller = environment.controller;
 controller.BeginInitialization();
-for (const initializationFailureResponse of [4671, -3, -1280, -720, -1920, -1080, -3440, -1440, -1920, -1080, 4299]) {
+for (const initializationFailureResponse of [4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4701, 1280), encodeResolutionScalar(4702, 720), encodeResolutionScalar(4703, 1920), encodeResolutionScalar(4704, 1080), encodeResolutionScalar(4705, 3440), encodeResolutionScalar(4706, 1440), encodeResolutionScalar(4897, 1920), encodeResolutionScalar(4898, 1080), 4299]) {
     queueResponses(initializationFailureResponse);
     controller.Tick();
 }

@@ -674,13 +674,8 @@ internal static class GraphicsOptionsShellScriptTemplates
                  this.FailInitialization();
                  return undefined;
               }
-              if(rawValue >= 0)
-              {
-                 this.FailInitialization();
-                 return undefined;
-              }
-              var scalarValue = 0 - rawValue;
-              if(scalarValue < 1 || scalarValue > 32767)
+              var scalarValue = this.DecodeResolutionScalar(rawValue);
+              if(scalarValue < 1)
               {
                  this.FailInitialization();
                  return undefined;
@@ -767,6 +762,22 @@ internal static class GraphicsOptionsShellScriptTemplates
                  this.ResolutionCatalogRequest = undefined;
                  this.SendInitializationRequest();
               }
+           }
+           function DecodeResolutionScalar(rawValue)
+           {
+              if(rawValue >= 0)
+              {
+                 return -1;
+              }
+              var magnitude = 0 - rawValue;
+              var ordinal = Math.floor((magnitude - 1) / 32768);
+              var scalarValue = magnitude - ordinal * 32768;
+              var expectedOrdinal = this.ResolutionCatalogRequest - 4700;
+              if(ordinal != expectedOrdinal || scalarValue < 1 || scalarValue > 32767)
+              {
+                 return -1;
+              }
+              return scalarValue;
            }
            function SetDraftIndex(rowIndex,index,forward)
            {
