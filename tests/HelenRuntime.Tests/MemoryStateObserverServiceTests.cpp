@@ -203,7 +203,7 @@ namespace
 
     /**
      * @brief Describes the complete request, response, acknowledgement, and failure allocation for one grouped Batman setting.
-     * @remarks The two-value response, write, and acknowledgement vectors are ordered as disabled then enabled, matching the normalized config values 0 and 1.
+     * @remarks Response, write, and acknowledgement vectors are aligned by index with ConfigValues, allowing MSAA's raw values to represent the non-contiguous normalized values 0, 1, 2, 3, and 5.
      */
     struct BatmanGroupedObserverProtocol
     {
@@ -213,11 +213,13 @@ namespace
         const char* TargetConfigKey;
         /** @brief Raw request value that asks HelenHook to return the current config value. */
         int ReadRequestValue;
-        /** @brief Raw response values corresponding to disabled and enabled config values. */
+        /** @brief Normalized config values represented by the aligned response, write, and acknowledgement entries. */
+        std::vector<int> ConfigValues;
+        /** @brief Raw response values aligned with ConfigValues for read requests. */
         std::vector<int> ResponseValues;
-        /** @brief Raw write request values corresponding to disabled and enabled config values. */
+        /** @brief Raw write request values aligned with ConfigValues. */
         std::vector<int> WriteValues;
-        /** @brief Raw success acknowledgement values corresponding to disabled and enabled write requests. */
+        /** @brief Raw success acknowledgement values aligned with WriteValues and ConfigValues. */
         std::vector<int> AcknowledgementValues;
         /** @brief Raw response written when the update callback rejects a write request. */
         int FailureResponseValue;
@@ -332,7 +334,7 @@ namespace
 
     /**
      * @brief Creates one full-protocol observer definition for the shared Batman frontend control carrier.
-     * @param protocol Request, response, write, acknowledgement, failure, and command values for the setting.
+     * @param protocol Request, normalized config, response, write, acknowledgement, failure, and command values for the setting.
      * @param scan_start Inclusive address at which the bounded carrier search begins.
      * @param scan_end Exclusive address at which the bounded carrier search ends.
      * @param protocol_union Sorted raw values accepted as structurally valid carrier contents by every group member.
@@ -363,12 +365,18 @@ namespace
             definition.CommandId = protocol.CommandId;
         }
 
+        Expect(
+            protocol.ConfigValues.size() == protocol.ResponseValues.size() &&
+            protocol.ConfigValues.size() == protocol.WriteValues.size() &&
+            protocol.ConfigValues.size() == protocol.AcknowledgementValues.size(),
+            "A grouped Batman protocol record did not align its normalized and raw value vectors.");
+
         for (std::size_t value_index = 0; value_index < protocol.WriteValues.size(); ++value_index)
         {
             definition.Mappings.push_back(
                 helen::MemoryStateObserverMapEntryDefinition{
                     .Match = protocol.WriteValues[value_index],
-                    .Value = static_cast<int>(value_index) });
+                    .Value = protocol.ConfigValues[value_index] });
             definition.AcknowledgementMappings.push_back(
                 helen::MemoryStateObserverMapEntryDefinition{
                     .Match = protocol.WriteValues[value_index],
@@ -379,7 +387,7 @@ namespace
         {
             definition.ResponseMappings.push_back(
                 helen::MemoryStateObserverMapEntryDefinition{
-                    .Match = static_cast<int>(value_index),
+                    .Match = protocol.ConfigValues[value_index],
                     .Value = protocol.ResponseValues[value_index] });
         }
 
@@ -1855,17 +1863,17 @@ namespace
         Expect(protocol_union.size() == 110, "The complete Batman graphics protocol union omitted one or more raw values.");
         Expect(std::is_sorted(protocol_union.begin(), protocol_union.end()), "The complete Batman graphics protocol union was not sorted.");
         const std::vector<BatmanGroupedObserverProtocol> protocols = {
-            { "graphicsObserverVsync", "vsync", 4200, { 4210, 4211 }, { 4220, 4221 }, { 4230, 4231 }, 4299, nullptr },
-            { "graphicsObserverMsaa", "msaa", 4300, { 4310, 4311, 4312, 4313, 4314 }, { 4320, 4321, 4322, 4323, 4324 }, { 4330, 4331, 4332, 4333, 4334 }, 4399, nullptr },
-            { "graphicsObserverPhysx", "physx", 4400, { 4410, 4411, 4412 }, { 4420, 4421, 4422 }, { 4430, 4431, 4432 }, 4499, nullptr },
-            { "graphicsObserverStereo", "stereo", 4500, { 4510, 4511 }, { 4520, 4521 }, { 4530, 4531 }, 4599, nullptr },
-            { "graphicsObserverBloom", "bloom", 4600, { 4601, 4602 }, { 4603, 4604 }, { 4605, 4606 }, 4609, "syncBatmanGraphicsDetailLevel" },
-            { "graphicsObserverDynamicShadows", "dynamicShadows", 4610, { 4611, 4612 }, { 4613, 4614 }, { 4615, 4616 }, 4619, "syncBatmanGraphicsDetailLevel" },
-            { "graphicsObserverMotionBlur", "motionBlur", 4620, { 4621, 4622 }, { 4623, 4624 }, { 4625, 4626 }, 4629, "syncBatmanGraphicsDetailLevel" },
-            { "graphicsObserverDistortion", "distortion", 4630, { 4631, 4632 }, { 4633, 4634 }, { 4635, 4636 }, 4639, "syncBatmanGraphicsDetailLevel" },
-            { "graphicsObserverFogVolumes", "fogVolumes", 4640, { 4641, 4642 }, { 4643, 4644 }, { 4645, 4646 }, 4649, "syncBatmanGraphicsDetailLevel" },
-            { "graphicsObserverSphericalHarmonicLighting", "sphericalHarmonicLighting", 4650, { 4651, 4652 }, { 4653, 4654 }, { 4655, 4656 }, 4659, "syncBatmanGraphicsDetailLevel" },
-            { "graphicsObserverAmbientOcclusion", "ambientOcclusion", 4660, { 4661, 4662 }, { 4663, 4664 }, { 4665, 4666 }, 4669, "syncBatmanGraphicsDetailLevel" }
+            { "graphicsObserverVsync", "vsync", 4200, { 0, 1 }, { 4210, 4211 }, { 4220, 4221 }, { 4230, 4231 }, 4299, nullptr },
+            { "graphicsObserverMsaa", "msaa", 4300, { 0, 1, 2, 3, 5 }, { 4310, 4311, 4312, 4313, 4314 }, { 4320, 4321, 4322, 4323, 4324 }, { 4330, 4331, 4332, 4333, 4334 }, 4399, nullptr },
+            { "graphicsObserverPhysx", "physx", 4400, { 0, 1, 2 }, { 4410, 4411, 4412 }, { 4420, 4421, 4422 }, { 4430, 4431, 4432 }, 4499, nullptr },
+            { "graphicsObserverStereo", "stereo", 4500, { 0, 1 }, { 4510, 4511 }, { 4520, 4521 }, { 4530, 4531 }, 4599, nullptr },
+            { "graphicsObserverBloom", "bloom", 4600, { 0, 1 }, { 4601, 4602 }, { 4603, 4604 }, { 4605, 4606 }, 4609, "syncBatmanGraphicsDetailLevel" },
+            { "graphicsObserverDynamicShadows", "dynamicShadows", 4610, { 0, 1 }, { 4611, 4612 }, { 4613, 4614 }, { 4615, 4616 }, 4619, "syncBatmanGraphicsDetailLevel" },
+            { "graphicsObserverMotionBlur", "motionBlur", 4620, { 0, 1 }, { 4621, 4622 }, { 4623, 4624 }, { 4625, 4626 }, 4629, "syncBatmanGraphicsDetailLevel" },
+            { "graphicsObserverDistortion", "distortion", 4630, { 0, 1 }, { 4631, 4632 }, { 4633, 4634 }, { 4635, 4636 }, 4639, "syncBatmanGraphicsDetailLevel" },
+            { "graphicsObserverFogVolumes", "fogVolumes", 4640, { 0, 1 }, { 4641, 4642 }, { 4643, 4644 }, { 4645, 4646 }, 4649, "syncBatmanGraphicsDetailLevel" },
+            { "graphicsObserverSphericalHarmonicLighting", "sphericalHarmonicLighting", 4650, { 0, 1 }, { 4651, 4652 }, { 4653, 4654 }, { 4655, 4656 }, 4659, "syncBatmanGraphicsDetailLevel" },
+            { "graphicsObserverAmbientOcclusion", "ambientOcclusion", 4660, { 0, 1 }, { 4661, 4662 }, { 4663, 4664 }, { 4665, 4666 }, 4669, "syncBatmanGraphicsDetailLevel" }
         };
 
         std::vector<helen::MemoryStateObserverDefinition> definitions;
@@ -1883,6 +1891,30 @@ namespace
             Expect(
                 definition.AddressMatchValues == protocol_union,
                 "A complete Batman graphics observer did not carry the exact sorted protocol union.");
+            Expect(
+                definition.Mappings.size() == protocol.ConfigValues.size(),
+                "A Batman graphics observer did not build one write mapping per normalized config value.");
+            Expect(
+                definition.ResponseMappings.size() == protocol.ConfigValues.size(),
+                "A Batman graphics observer did not build one response mapping per normalized config value.");
+            Expect(
+                definition.AcknowledgementMappings.size() == protocol.ConfigValues.size(),
+                "A Batman graphics observer did not build one acknowledgement mapping per normalized config value.");
+            for (std::size_t value_index = 0; value_index < protocol.ConfigValues.size(); ++value_index)
+            {
+                Expect(
+                    definition.Mappings[value_index].Match == protocol.WriteValues[value_index] &&
+                    definition.Mappings[value_index].Value == protocol.ConfigValues[value_index],
+                    "A Batman graphics observer write mapping did not match its protocol record.");
+                Expect(
+                    definition.ResponseMappings[value_index].Match == protocol.ConfigValues[value_index] &&
+                    definition.ResponseMappings[value_index].Value == protocol.ResponseValues[value_index],
+                    "A Batman graphics observer response mapping did not match its protocol record.");
+                Expect(
+                    definition.AcknowledgementMappings[value_index].Match == protocol.WriteValues[value_index] &&
+                    definition.AcknowledgementMappings[value_index].Value == protocol.AcknowledgementValues[value_index],
+                    "A Batman graphics observer acknowledgement mapping did not match its protocol record.");
+            }
             definitions.push_back(std::move(definition));
         }
 
