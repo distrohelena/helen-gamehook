@@ -252,19 +252,25 @@ try {
     Assert-BatmanGraphicsCommands -PackRoot $StagedPackRoot -Context 'Staged deployment fixture'
     $validStagedHooksText = Get-Content -LiteralPath (Join-Path $StagedPackRoot 'builds\steam-goty-1.0\hooks.json') -Raw
     $mutatedQualityHooksPath = Join-Path $StagedPackRoot 'builds\steam-goty-1.0\hooks.json'
-    $mutatedQualityHooks = $validStagedHooksText | ConvertFrom-Json
-    $mutatedQualityObserver = $mutatedQualityHooks.stateObservers[4]
-    $mutatedQualityObserver.responseRequestValue = 4698
-    $mutatedQualityObserver.responseMappings[0].match = 8
-    $mutatedQualityObserver.responseMappings[0].value = 4697
-    [IO.File]::WriteAllText($mutatedQualityHooksPath, ($mutatedQualityHooks | ConvertTo-Json -Depth 100), [Text.UTF8Encoding]::new($false))
-    $qualityResponseMutationRejected = $false
-    try {
-        Assert-BatmanGraphicsVsyncHooks -PackRoot $StagedPackRoot -Context 'Mutated quality response fixture'
-    } catch {
-        $qualityResponseMutationRejected = $true
+    $protocolMutations = @(
+        [pscustomobject]@{ Name = 'catalog request omission'; Mutate = { param($hooks) $hooks.stateObservers[1].dynamicResponse.requests = @($hooks.stateObservers[1].dynamicResponse.requests | Select-Object -SkipLast 1) } },
+        [pscustomobject]@{ Name = 'duplicate resolution write code'; Mutate = { param($hooks) $hooks.stateObservers[2].mappings[0].match = $hooks.stateObservers[2].mappings[1].match } },
+        [pscustomobject]@{ Name = 'dynamic scalar bound'; Mutate = { param($hooks) $hooks.stateObservers[1].dynamicResponse.minimumValue = 0 } },
+        [pscustomobject]@{ Name = 'resolution acknowledgement'; Mutate = { param($hooks) $hooks.stateObservers[2].acknowledgementMappings[0].value = 5199 } },
+        [pscustomobject]@{ Name = 'quality response'; Mutate = { param($hooks) $hooks.stateObservers[7].responseRequestValue = 4698 } }
+    )
+    foreach ($mutation in $protocolMutations) {
+        $mutatedHooks = $validStagedHooksText | ConvertFrom-Json
+        & $mutation.Mutate $mutatedHooks
+        [IO.File]::WriteAllText($mutatedQualityHooksPath, ($mutatedHooks | ConvertTo-Json -Depth 100), [Text.UTF8Encoding]::new($false))
+        $mutationRejected = $false
+        try {
+            Assert-BatmanGraphicsVsyncHooks -PackRoot $StagedPackRoot -Context "Mutated $($mutation.Name) fixture"
+        } catch {
+            $mutationRejected = $true
+        }
+        if (-not $mutationRejected) { throw "Deploy validator accepted a mutated $($mutation.Name) declaration." }
     }
-    if (-not $qualityResponseMutationRejected) { throw 'Deploy validator accepted a mutated quality observer response declaration.' }
     [IO.File]::WriteAllText($mutatedQualityHooksPath, $validStagedHooksText, [Text.UTF8Encoding]::new($false))
     $ExpectedHelenGameHookHash = (Get-FileHash -LiteralPath $StagedHelenGameHookPath -Algorithm SHA256).Hash
     $ExpectedProxyHash = (Get-FileHash -LiteralPath $StagedProxyPath -Algorithm SHA256).Hash

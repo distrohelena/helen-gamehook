@@ -19,6 +19,15 @@
                                    ]
                      },
                      {
+                         "id":  "setBatmanGraphicsResolutionMode",
+                         "name":  "Set Batman Graphics Resolution Mode",
+                         "steps":  [
+                                       {
+                                           "kind":  "set-batman-graphics-resolution-mode"
+                                       }
+                                   ]
+                     },
+                     {
                          "id":  "applyBatmanGraphicsDraft",
                          "name":  "Apply Batman Graphics Draft",
                          "steps":  [

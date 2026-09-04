@@ -295,7 +295,7 @@ function Assert-BatmanGraphicsMappings {
 }
 
 function Assert-BatmanGraphicsVsyncHooks {
-    <# Validate the current eleven-setting plus apply/rollback graphics carrier used by deployment. #>
+    <# Validate the complete sixteen-observer graphics carrier used by deployment. #>
     param(
         [Parameter(Mandatory = $true)] [string]$PackRoot,
         [Parameter(Mandatory = $true)] [string]$Context
@@ -305,11 +305,15 @@ function Assert-BatmanGraphicsVsyncHooks {
     if (-not (Test-Path -LiteralPath $hooksPath -PathType Leaf)) { throw "$Context hooks.json was not found: $hooksPath" }
     $hooks = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
     Assert-BatmanGraphicsVsyncExactProperties -Object $hooks -Names @('runtimeSlots', 'stateObservers', 'hooks') -Context "$Context hooks.json"
-    if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($hooks.stateObservers).Count -ne 13) {
-        throw "$Context hooks.json must contain empty runtimeSlots/hooks and exactly thirteen observers."
+    if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($hooks.stateObservers).Count -ne 16) {
+        throw "$Context hooks.json must contain empty runtimeSlots/hooks and exactly sixteen observers."
     }
 
     $expectedAddressMatchValues = @(
+        4670, 4671, 4672, 4673, 4674, 4675, 4676, 4679,
+
+        4960, 4961, 4969, 4970, 4971, 4980, 4981, 4989, 4990, 4991,
+        5199,
         4200, 4210, 4211, 4220, 4221, 4230, 4231, 4299,
         4300, 4310, 4311, 4312, 4313, 4314, 4320, 4321, 4322, 4323, 4324, 4330, 4331, 4332, 4333, 4334, 4399,
         4400, 4410, 4411, 4412, 4420, 4421, 4422, 4430, 4431, 4432, 4499,
@@ -323,7 +327,11 @@ function Assert-BatmanGraphicsVsyncHooks {
         4660, 4661, 4662, 4663, 4664, 4665, 4666, 4669,
         4960, 4961, 4969, 4970, 4971, 4980, 4981, 4989, 4990, 4991
     )
+    $expectedAddressMatchValues = @($expectedAddressMatchValues + (4700..4899) + (5000..5097) + (5100..5197) | Sort-Object -Unique)
     $expectedObservers = @(
+        [pscustomobject]@{ Id = 'graphicsObserverFullscreen'; Target = 'fullscreen'; Matches = @(4673, 4674); ConfigValues = @(0, 1); Responses = @(4671, 4672); Acks = @(4675, 4676); Read = 4670; Failure = 4679; Command = '' },
+        [pscustomobject]@{ Id = 'graphicsObserverDisplayModeCatalog'; Target = ''; Matches = @(); ConfigValues = @(); Responses = @(); Acks = @(); Read = $null; Failure = 4899; Command = '' },
+        [pscustomobject]@{ Id = 'graphicsObserverResolutionModeIndex'; Target = 'resolutionModeIndex'; Matches = 5000..5097; ConfigValues = 0..97; Responses = @(); Acks = 5100..5197; Read = $null; Failure = 5199; Command = 'setBatmanGraphicsResolutionMode' },
         [pscustomobject]@{ Id = 'graphicsObserverVsync'; Target = 'vsync'; Matches = @(4220, 4221); ConfigValues = @(0, 1); Responses = @(4210, 4211); Acks = @(4230, 4231); Read = 4200; Failure = 4299 },
         [pscustomobject]@{ Id = 'graphicsObserverMsaa'; Target = 'msaa'; Matches = @(4320, 4321, 4322, 4323, 4324); ConfigValues = @(0, 1, 2, 3, 5); Responses = @(4310, 4311, 4312, 4313, 4314); Acks = @(4330, 4331, 4332, 4333, 4334); Read = 4300; Failure = 4399 },
         [pscustomobject]@{ Id = 'graphicsObserverPhysx'; Target = 'physx'; Matches = @(4420, 4421, 4422); ConfigValues = @(0, 1, 2); Responses = @(4410, 4411, 4412); Acks = @(4430, 4431, 4432); Read = 4400; Failure = 4499 },
@@ -341,12 +349,15 @@ function Assert-BatmanGraphicsVsyncHooks {
     $settingObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'responseRequestValue', 'responseMappings', 'acknowledgementMappings', 'failureResponseValue')
     $commandObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'acknowledgementMappings', 'failureResponseValue', 'command')
     $commandSettingObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'responseRequestValue', 'responseMappings', 'acknowledgementMappings', 'failureResponseValue', 'command')
+    $dynamicObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'addressMatchValues', 'checks', 'dynamicResponse', 'failureResponseValue')
     for ($observerIndex = 0; $observerIndex -lt $expectedObservers.Count; $observerIndex++) {
         $expected = $expectedObservers[$observerIndex]
         $observer = $hooks.stateObservers[$observerIndex]
-        $properties = if ($observerIndex -lt 4) { $settingObserverProperties } elseif ($observerIndex -lt 11) { $commandSettingObserverProperties } else { $commandObserverProperties }
+        $properties = if ($observerIndex -eq 1) { $dynamicObserverProperties } elseif ($observerIndex -eq 2 -or $observerIndex -ge 14) { $commandObserverProperties } elseif ($observerIndex -ge 7) { $commandSettingObserverProperties } else { $settingObserverProperties }
         Assert-BatmanGraphicsVsyncExactProperties -Object $observer -Names $properties -Context "$Context $($expected.Id)"
-        if ($observer.id -cne $expected.Id -or $observer.targetConfigKey -cne $expected.Target) { throw "$Context $($expected.Id) identity drifted." }
+        if ($observer.id -cne $expected.Id) { throw "$Context $($expected.Id) identity drifted." }
+        if ($observerIndex -ne 1 -and $observer.targetConfigKey -cne $expected.Target) { throw "$Context $($expected.Id) target drifted." }
+        if ($observerIndex -eq 1 -and $observer.PSObject.Properties.Name -contains 'targetConfigKey') { throw "$Context dynamic observer must omit targetConfigKey." }
         if ($observer.scanStartAddress -cne '0x10000000' -or $observer.scanEndAddress -cne '0x30000000' -or $observer.scanStride -ne 4 -or $observer.valueOffset -ne 12 -or $observer.pollIntervalMs -ne 50) {
             throw "$Context $($observer.id) scan geometry drifted."
         }
@@ -354,23 +365,32 @@ function Assert-BatmanGraphicsVsyncHooks {
             throw "$Context $($observer.id) addressMatchValues drifted."
         }
         Assert-BatmanGraphicsVsyncChecks -Observer $observer -Context "$Context $($observer.id)"
-        Assert-BatmanGraphicsMappings -Observer $observer -ExpectedMatches $expected.Matches -ExpectedValues $expected.ConfigValues -Context "$Context $($observer.id)"
-        Assert-BatmanGraphicsMappings -Observer ([pscustomobject]@{ mappings = $observer.acknowledgementMappings }) -ExpectedMatches $expected.Matches -ExpectedValues $expected.Acks -Context "$Context $($observer.id) acknowledgement"
-        if ($observerIndex -lt 11) {
-            if ($observer.responseRequestValue -ne $expected.Read -or @($observer.responseMappings).Count -ne $expected.Responses.Count) { throw "$Context $($observer.id) response mapping drifted." }
-            Assert-BatmanGraphicsMappings -Observer ([pscustomobject]@{ mappings = $observer.responseMappings }) -ExpectedMatches $expected.ConfigValues -ExpectedValues $expected.Responses -Context "$Context $($observer.id) response"
-            if ($observerIndex -ge 4 -and $observer.command -cne $expected.Command) {
-                throw "$Context $($observer.id) command drifted."
+        if ($observerIndex -eq 1) {
+            foreach ($forbidden in @('targetConfigKey', 'mappings', 'responseRequestValue', 'responseMappings', 'acknowledgementMappings', 'command')) {
+                if ($observer.PSObject.Properties.Name -contains $forbidden) { throw "$Context dynamic observer contains forbidden '$forbidden'." }
             }
-        } elseif ($observer.command -cne $expected.Command) {
-            throw "$Context $($observer.id) command drifted."
+            if ($observer.dynamicResponse.provider -cne 'batmanDisplayModes' -or (@($observer.dynamicResponse.requests) -join ',' -cne ((4700..4898) -join ',') -or $observer.dynamicResponse.minimumValue -ne 1 -or $observer.dynamicResponse.maximumValue -ne 32767)) { throw "$Context dynamic catalog declaration drifted." }
+        } elseif ($observerIndex -eq 2) {
+            if (@($observer.mappings).Count -ne 98 -or @($observer.acknowledgementMappings).Count -ne 98 -or $observer.command -cne 'setBatmanGraphicsResolutionMode' -or $observer.failureResponseValue -ne 5199) { throw "$Context resolution observer drifted." }
+            for ($mappingIndex = 0; $mappingIndex -lt 98; $mappingIndex++) {
+                if ($observer.mappings[$mappingIndex].match -ne (5000 + $mappingIndex) -or $observer.mappings[$mappingIndex].value -ne $mappingIndex -or $observer.acknowledgementMappings[$mappingIndex].match -ne (5000 + $mappingIndex) -or $observer.acknowledgementMappings[$mappingIndex].value -ne (5100 + $mappingIndex)) { throw "$Context resolution mapping $($mappingIndex + 1) drifted." }
+            }
+        } else {
+            Assert-BatmanGraphicsMappings -Observer $observer -ExpectedMatches $expected.Matches -ExpectedValues $expected.ConfigValues -Context "$Context $($observer.id)"
+            Assert-BatmanGraphicsMappings -Observer ([pscustomobject]@{ mappings = $observer.acknowledgementMappings }) -ExpectedMatches $expected.Matches -ExpectedValues $expected.Acks -Context "$Context $($observer.id) acknowledgement"
+            if ($observerIndex -lt 14) {
+                if ($observer.responseRequestValue -ne $expected.Read -or @($observer.responseMappings).Count -ne $expected.Responses.Count) { throw "$Context $($observer.id) response mapping drifted." }
+                Assert-BatmanGraphicsMappings -Observer ([pscustomobject]@{ mappings = $observer.responseMappings }) -ExpectedMatches $expected.ConfigValues -ExpectedValues $expected.Responses -Context "$Context $($observer.id) response"
+            }
+            if (($observerIndex -ge 7 -and $observerIndex -le 13 -or $observerIndex -ge 14) -and $observer.command -cne $expected.Command) { throw "$Context $($observer.id) command drifted." }
+            if ($observerIndex -lt 7 -and $observer.PSObject.Properties.Name -contains 'command') { throw "$Context $($observer.id) must not declare a command." }
         }
         if ($observer.failureResponseValue -ne $expected.Failure) { throw "$Context $($observer.id) failure response drifted." }
     }
 }
 
 function Assert-BatmanGraphicsCommands {
-    <# Validate the ordered load, detail-level sync, and apply command protocol during deployment. #>
+    <# Validate the ordered load, detail-level sync, resolution, and apply command protocol during deployment. #>
     param(
         [Parameter(Mandatory = $true)] [string]$PackRoot,
         [Parameter(Mandatory = $true)] [string]$Context
@@ -381,10 +401,11 @@ function Assert-BatmanGraphicsCommands {
     $commandsDocument = Get-Content -LiteralPath $commandsPath -Raw | ConvertFrom-Json
     Assert-BatmanGraphicsVsyncExactProperties -Object $commandsDocument -Names @('commands') -Context "$Context commands.json"
     $commands = @($commandsDocument.commands)
-    if ($commands.Count -ne 3) { throw "$Context commands.json must contain exactly three commands." }
+    if ($commands.Count -ne 4) { throw "$Context commands.json must contain exactly four commands." }
     $expectedCommands = @(
         [pscustomobject]@{ Id = 'loadBatmanGraphicsDraftIntoConfig'; Name = 'Load Batman Graphics Draft Into Config'; Steps = @('load-batman-graphics-draft-into-config') },
         [pscustomobject]@{ Id = 'syncBatmanGraphicsDetailLevel'; Name = 'Sync Batman Graphics Detail Level'; Steps = @('sync-batman-graphics-detail-level') },
+        [pscustomobject]@{ Id = 'setBatmanGraphicsResolutionMode'; Name = 'Set Batman Graphics Resolution Mode'; Steps = @('set-batman-graphics-resolution-mode') },
         [pscustomobject]@{ Id = 'applyBatmanGraphicsDraft'; Name = 'Apply Batman Graphics Draft'; Steps = @('apply-batman-graphics-config', 'load-batman-graphics-draft-into-config') }
     )
     for ($index = 0; $index -lt $expectedCommands.Count; $index++) {

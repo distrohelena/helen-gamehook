@@ -27,6 +27,11 @@
                        "defaultValue":  0
                    },
                    {
+                       "key":  "resolutionModeIndex",
+                       "type":  "int",
+                       "defaultValue":  -1
+                   },
+                   {
                        "key":  "vsync",
                        "type":  "int",
                        "defaultValue":  0

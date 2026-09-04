@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ExpectedGraphicsShellSha256 = '4DE68B489423E027A1671825010A7904A35CB77DEF548B51E707C3CBFB6B81CA'
+$ExpectedGraphicsShellSha256 = 'A79BE2B47157B98C9E1E6CFC7BEA33D29EC584549805EA27FB2AE51F0F5F2FA3'
 
 . (Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1')
 . (Join-Path $PSScriptRoot 'BatmanPackVerificationHelpers.ps1')
@@ -487,8 +487,9 @@ function Assert-VsyncSliceRowContract {
     param([string]$Text, [int]$Index, [string]$Context)
 
     $labels = @('Fullscreen', 'Resolution', 'VSync', 'MSAA', 'Detail Level', 'Bloom', 'Dynamic Shadows', 'Motion Blur', 'Distortion', 'Fog Volumes', 'Spherical Harmonic Lighting', 'Ambient Occlusion', 'PhysX', 'Stereo 3D', 'Apply Changes')
-    if ($Index -in @(2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13)) {
+    if ($Index -in @(0, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13)) {
         $activeRows = @{
+            0 = [pscustomobject]@{ RowIndex = 1; Values = 'this.Names = new Array("Windowed","Fullscreen");' }
             2 = [pscustomobject]@{ RowIndex = 3; Values = 'this.Names = new Array("Off","On");' }
             3 = [pscustomobject]@{ RowIndex = 4; Values = 'this.Names = new Array("Off","2x","4x","8x","16x");' }
             4 = [pscustomobject]@{ RowIndex = 5; Values = 'this.Names = new Array("Off","On");' }
@@ -511,6 +512,20 @@ function Assert-VsyncSliceRowContract {
         Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsOptionsController.DecrementSetting(this.RowIndex);' -Context "$Context Decrement"
         Assert-ContainsOrdinal -Text $Text -Token $labels[$Index] -Context "$Context label"
         Assert-ContainsOrdinal -Text $Text -Token 'this._visible = true;' -Context "$Context visibility"
+        return
+    }
+
+    if ($Index -eq 1) {
+        Assert-ContainsOrdinal -Text $Text -Token 'this.Names = new Array();' -Context "$Context names"
+        Assert-ContainsOrdinal -Text $Text -Token 'this.RowIndex = 2;' -Context "$Context row index"
+        Assert-ContainsOrdinal -Text $Text -Token 'GetResolutionDraftIndex();' -Context "$Context draft state"
+        Assert-ContainsOrdinal -Text $Text -Token 'ToggleResolution();' -Context "$Context RunAction"
+        Assert-ContainsOrdinal -Text $Text -Token 'IncrementResolution();' -Context "$Context Increment"
+        Assert-ContainsOrdinal -Text $Text -Token 'DecrementResolution();' -Context "$Context Decrement"
+        Assert-ContainsOrdinal -Text $Text -Token 'ResolutionModes' -Context "$Context catalog labels"
+        Assert-ContainsOrdinal -Text $Text -Token '.Label' -Context "$Context catalog labels"
+        Assert-ContainsOrdinal -Text $Text -Token 'this._visible = true;' -Context "$Context visibility"
+        if ($Text.IndexOf('this.Names = new Array("Not active");', [StringComparison]::Ordinal) -ge 0) { throw "$Context must not be inactive." }
         return
     }
 
@@ -974,10 +989,8 @@ $expectedObserverIds = @('graphicsObserverFullscreen', 'graphicsObserverDisplayM
 $expectedObserverTargets = @('fullscreen', '', 'resolutionModeIndex', 'vsync', 'msaa', 'physx', 'stereo', 'bloom', 'dynamicShadows', 'motionBlur', 'distortion', 'fogVolumes', 'sphericalHarmonicLighting', 'ambientOcclusion', 'applySignal', 'rollbackSignal')
 $expectedAddressMatchValues = @(
     4670, 4671, 4672, 4673, 4674, 4675, 4676, 4679,
-    4700..4899,
     4960, 4961, 4969, 4970, 4971, 4980, 4981, 4989, 4990, 4991,
-    5000..5097,
-    5100..5197, 5199,
+    5199,
     4200, 4210, 4211, 4220, 4221, 4230, 4231, 4299,
     4300, 4310, 4311, 4312, 4313, 4314, 4320, 4321, 4322, 4323, 4324, 4330, 4331, 4332, 4333, 4334, 4399,
     4400, 4410, 4411, 4412, 4420, 4421, 4422, 4430, 4431, 4432, 4499,
@@ -990,7 +1003,7 @@ $expectedAddressMatchValues = @(
     4650, 4651, 4652, 4653, 4654, 4655, 4656, 4659,
     4660, 4661, 4662, 4663, 4664, 4665, 4666, 4669
 )
-$expectedAddressMatchValues = @($expectedAddressMatchValues | Sort-Object)
+$expectedAddressMatchValues = @($expectedAddressMatchValues + (4700..4899) + (5000..5097) + (5100..5197) | Sort-Object -Unique)
 for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observerIndex++) {
     $observer = $hooks.stateObservers[$observerIndex]
     $expectedProperties = if ($observerIndex -eq 1) { $expectedDynamicObserverProperties } elseif ($observerIndex -eq 2) { $expectedResolutionObserverProperties } elseif ($observerIndex -eq 0 -or $observerIndex -ge 3 -and $observerIndex -le 6) { $expectedObserverProperties } elseif ($observerIndex -ge 7 -and $observerIndex -le 13) { $expectedCommandSettingObserverProperties } else { $expectedCommandObserverProperties }
@@ -1009,7 +1022,7 @@ for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observe
         if ([long]$addressValue -le 0) { throw "hooks.json $($observer.id) addressMatchValues must contain positive discovery values only; ordinal-tagged dynamic negatives are transient responses." }
     }
     Assert-GraphicsCarrierChecks -Observer $observer -Context "hooks.json $($observer.id)"
-    $mappingNames = if ($observerIndex -eq 1) { @() } elseif ($observerIndex -lt 11) { @('mappings', 'responseMappings', 'acknowledgementMappings') } else { @('mappings', 'acknowledgementMappings') }
+    $mappingNames = if ($observerIndex -eq 1) { @() } elseif ($observerIndex -eq 2) { @('mappings', 'acknowledgementMappings') } elseif ($observerIndex -lt 11) { @('mappings', 'responseMappings', 'acknowledgementMappings') } else { @('mappings', 'acknowledgementMappings') }
     foreach ($mappingName in $mappingNames) {
         Assert-StrictJsonArray -Value $observer.$mappingName -Context "hooks.json $($observer.id) $mappingName"
         foreach ($entry in @($observer.$mappingName)) {

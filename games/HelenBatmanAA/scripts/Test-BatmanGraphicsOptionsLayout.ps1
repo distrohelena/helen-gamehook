@@ -39,8 +39,8 @@ function Assert-RowShellContract {
         $rowPath = Join-Path $ScreenDirectory "frame_1\PlaceObject2_290_List_Template_$($depths[$index])\CLIPACTIONRECORD onClipEvent(load).as"
         if (-not (Test-Path -LiteralPath $rowPath)) { throw "Missing known row script $rowPath." }
         $rowText = Get-Content -LiteralPath $rowPath -Raw
-        if ($index -ge 2 -and $index -lt 14 -and $index -ne 4) {
-            $activeNames = if ($index -eq 3) { 'this.Names = new Array("Off","2x","4x","8x","16x");' } elseif ($index -eq 12) { 'this.Names = new Array("Off","Normal","High");' } else { 'this.Names = new Array("Off","On");' }
+        if ($index -lt 14 -and $index -ne 1 -and $index -ne 4) {
+            $activeNames = if ($index -eq 0) { 'this.Names = new Array("Windowed","Fullscreen");' } elseif ($index -eq 3) { 'this.Names = new Array("Off","2x","4x","8x","16x");' } elseif ($index -eq 12) { 'this.Names = new Array("Off","Normal","High");' } else { 'this.Names = new Array("Off","On");' }
             Assert-ContainsOrdinal $rowText $activeNames "row $($index + 1) names"
             Assert-ContainsOrdinal $rowText "this.RowIndex = $($index + 1);" "row $($index + 1) row index"
             Assert-ContainsOrdinal $rowText 'this.State = _parent.GraphicsOptionsController.GetDraftIndex(this.RowIndex);' "row $($index + 1) initial state"
@@ -49,6 +49,23 @@ function Assert-RowShellContract {
             Assert-ContainsOrdinal $rowText '_parent.GraphicsOptionsController.DecrementSetting(this.RowIndex);' "row $($index + 1) Decrement"
             Assert-ContainsOrdinal $rowText $labels[$index] "row $($index + 1) label"
             Assert-ContainsOrdinal $rowText 'this._visible = true;' "row $($index + 1) visibility"
+            $leftAlignmentCount = @([regex]::Matches($rowText, 'LeftClicker\._x\s*-\s*=\s*12|LeftClicker\._x\s*=\s*LeftClicker\._x\s*-\s*12')).Count
+            $rightAlignmentCount = @([regex]::Matches($rowText, 'RightClicker\._x\s*\+\s*=\s*12|RightClicker\._x\s*=\s*RightClicker\._x\s*\+\s*12')).Count
+            if ($leftAlignmentCount -ne 1 -or $rightAlignmentCount -ne 1) { throw "row $($index + 1) must widen its arrows exactly once." }
+        } elseif ($index -eq 1) {
+            Assert-ContainsOrdinal $rowText 'this.Names = new Array();' 'row 2 names'
+            Assert-ContainsOrdinal $rowText 'this.RowIndex = 2;' 'row 2 row index'
+            Assert-ContainsOrdinal $rowText 'GetResolutionDraftIndex();' 'row 2 initial state'
+            Assert-ContainsOrdinal $rowText 'ToggleResolution();' 'row 2 RunAction'
+            Assert-ContainsOrdinal $rowText 'IncrementResolution();' 'row 2 Increment'
+            Assert-ContainsOrdinal $rowText 'DecrementResolution();' 'row 2 Decrement'
+            Assert-ContainsOrdinal $rowText 'ResolutionModes' 'row 2 catalog labels'
+            Assert-ContainsOrdinal $rowText '.Label' 'row 2 catalog labels'
+            Assert-ContainsOrdinal $rowText 'this._visible = true;' 'row 2 visibility'
+            if ($rowText.IndexOf('this.Names = new Array("Not active");', [StringComparison]::Ordinal) -ge 0) { throw 'row 2 must not be inactive.' }
+            $leftAlignmentCount = @([regex]::Matches($rowText, 'LeftClicker\._x\s*-\s*=\s*12|LeftClicker\._x\s*=\s*LeftClicker\._x\s*-\s*12')).Count
+            $rightAlignmentCount = @([regex]::Matches($rowText, 'RightClicker\._x\s*\+\s*=\s*12|RightClicker\._x\s*=\s*RightClicker\._x\s*\+\s*12')).Count
+            if ($leftAlignmentCount -ne 1 -or $rightAlignmentCount -ne 1) { throw 'row 2 must widen its arrows exactly once.' }
         } elseif ($index -eq 4) {
             Assert-ContainsOrdinal $rowText 'this.Names = new Array("Low","Medium","High","Very High","Custom");' 'row 5 names'
             Assert-ContainsOrdinal $rowText 'this.State = -1;' 'row 5 state'
@@ -154,6 +171,21 @@ try {
     Assert-ContainsOrdinal $menuText 'Graphics Options' 'Options menu script'
     foreach ($required in @('Graphics Options', 'CancelScreen', 'ReturnFromScreen', 'FE_SetActiveScreenName","Graphics Options', 'GraphicsRow15._visible = true;', 'this.AddItem(GraphicsRow14,12,14,-1,-1);')) { Assert-ContainsOrdinal $screenText $required 'Options Graphics screen script' }
     Assert-RowShellContract -ScreenDirectory $screenDirectory.FullName
+    foreach ($mutation in @(
+        [pscustomobject]@{ Name = 'fullscreen'; Index = 0; Token = 'this.Names = new Array("Windowed","Fullscreen");'; Replacement = 'this.Names = new Array("Not active");' },
+        [pscustomobject]@{ Name = 'resolution'; Index = 1; Token = 'this.Names = new Array();'; Replacement = 'this.Names = new Array("Not active");' }
+    )) {
+        $mutationDirectory = Join-Path $verificationRoot ('mutation-' + $mutation.Name)
+        Copy-Item -LiteralPath $screenDirectory.FullName -Destination $mutationDirectory -Recurse
+        $mutationDepths = @('141', '133')
+        $mutationPath = Join-Path $mutationDirectory "frame_1\PlaceObject2_290_List_Template_$($mutationDepths[$mutation.Index])\CLIPACTIONRECORD onClipEvent(load).as"
+        $mutationText = Get-Content -LiteralPath $mutationPath -Raw
+        if ($mutationText.IndexOf($mutation.Token, [StringComparison]::Ordinal) -lt 0) { throw "Could not prepare $($mutation.Name) row mutation." }
+        [IO.File]::WriteAllText($mutationPath, $mutationText.Replace($mutation.Token, $mutation.Replacement), [Text.UTF8Encoding]::new($false))
+        $mutationRejected = $false
+        try { Assert-RowShellContract -ScreenDirectory $mutationDirectory } catch { $mutationRejected = $true }
+        if (-not $mutationRejected) { throw "Layout validator accepted a restored inactive $($mutation.Name) row." }
+    }
     foreach ($forbidden in @('GraphicsController', 'ExitPrompt', 'Helen_', 'Unsaved graphics changes', 'Some changes require a restart')) { Assert-NotContainsOrdinal -Text $screenText -Token $forbidden -Context 'graphics shell screen script' }
     foreach ($script in $scripts) { foreach ($forbidden in @('Helen_', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft')) { Assert-NotContainsOrdinal -Text (Get-Content -LiteralPath $script.FullName -Raw) -Token $forbidden -Context $script.Name } }
 }
