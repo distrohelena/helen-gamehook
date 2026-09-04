@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ExpectedGraphicsShellSha256 = '867E34C353F26EB3D41C2C6EFCF5AEAF1DF82F9C67E40CCD667371A9F8093421'
+$ExpectedGraphicsShellSha256 = 'C28D37D6FEA0DEC92A87A6101080BE424DD448B4538F58DD4B2F78B837C9DBDF'
 
 . (Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1')
 . (Join-Path $PSScriptRoot 'BatmanPackVerificationHelpers.ps1')

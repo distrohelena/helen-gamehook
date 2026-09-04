@@ -1605,8 +1605,8 @@ function loadRow(script, parent, children) {
         _parent: parent,
         Label: { Label: { Text: { text: '' } } },
         ItemText: { text: '', _alpha: 0 },
-        LeftClicker: { _visible: true },
-        RightClicker: { _visible: true }
+        LeftClicker: { _visible: true, _x: 100 },
+        RightClicker: { _visible: true, _x: 200 }
     }, children || {});
     global._parent = parent;
     const load = new Function(script.slice(bodyStart + 1, bodyEnd));
@@ -1616,6 +1616,24 @@ function loadRow(script, parent, children) {
 
 function expectNoThrow(action, message) {
     assert.doesNotThrow(action, message);
+}
+
+const geometryParent = { GraphicsOptionsController: undefined };
+const editableGeometryRows = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+for (const rowIndex of editableGeometryRows) {
+    const row = loadRow(rowScripts[rowIndex], geometryParent);
+    assert.strictEqual(row.LeftClicker._x, 88, `editable row ${rowIndex + 1} shifts the left clicker exactly once on load`);
+    assert.strictEqual(row.RightClicker._x, 212, `editable row ${rowIndex + 1} shifts the right clicker exactly once on load`);
+    row.Update();
+    row.Update();
+    assert.strictEqual(row.LeftClicker._x, 88, `editable row ${rowIndex + 1} does not drift during Update`);
+    assert.strictEqual(row.RightClicker._x, 212, `editable row ${rowIndex + 1} does not drift during Update`);
+}
+
+for (const rowIndex of [0, 1, 14]) {
+    const row = loadRow(rowScripts[rowIndex], geometryParent);
+    assert.strictEqual(row.LeftClicker._x, 100, `arrowless row ${rowIndex + 1} keeps the left clicker unshifted`);
+    assert.strictEqual(row.RightClicker._x, 200, `arrowless row ${rowIndex + 1} keeps the right clicker unshifted`);
 }
 
 setNow(0);

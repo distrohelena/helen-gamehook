@@ -843,7 +843,7 @@ internal static class GraphicsOptionsShellScriptTemplates
     /// <returns>An ActionScript load handler for the derived detail preset row.</returns>
     private static string CreateDetailLevelRowClipAction()
     {
-        return """
+        return $$"""
         onClipEvent(load){
            this.LabelName = "Detail Level";
            this.Names = new Array("Low","Medium","High","Very High","Custom");
@@ -946,8 +946,28 @@ internal static class GraphicsOptionsShellScriptTemplates
               }
            };
            this._visible = true;
+           {{CreateEditableRowArrowAlignmentAction()}}
            this.Update();
         }
+        """;
+    }
+
+    /// <summary>
+    /// Returns the guarded geometry adjustment shared by editable graphics rows. Callers emit this
+    /// snippet once from their load handler so repeated Update calls cannot accumulate positional drift.
+    /// </summary>
+    /// <returns>ActionScript that shifts the optional directional clickers away from centered value text.</returns>
+    private static string CreateEditableRowArrowAlignmentAction()
+    {
+        return """
+           if(this.LeftClicker != undefined)
+           {
+              this.LeftClicker._x = this.LeftClicker._x - 12;
+           }
+           if(this.RightClicker != undefined)
+           {
+              this.RightClicker._x = this.RightClicker._x + 12;
+           }
         """;
     }
 
@@ -1074,6 +1094,7 @@ internal static class GraphicsOptionsShellScriptTemplates
               }
            };
            this._visible = true;
+           {{CreateEditableRowArrowAlignmentAction()}}
            this.Update();
         }
         """;
