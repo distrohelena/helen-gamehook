@@ -315,11 +315,19 @@ namespace
 
             ConfigureDynamicResponseCarrier(candidate_address, 4701);
             Expect(service.PollOnce(), "Dynamic request 4701 unexpectedly failed.");
-            Expect(ReadInt32(candidate_address) == -1920, "Dynamic request 4701 did not receive the encoded response.");
+            Expect(ReadInt32(candidate_address) == -34688, "Dynamic request 4701 did not receive the ordinal-tagged response.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, -3);
+            Expect(service.PollOnce(), "Stale ordinal response poll unexpectedly failed.");
+            Expect(service.GetDebugViews()[0].CachedAddress == 0, "A stale response from ordinal zero was accepted for ordinal one.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 4700);
+            Expect(service.PollOnce(), "Dynamic observer did not recover after stale ordinal invalidation.");
+            Expect(ReadInt32(candidate_address) == -3, "Dynamic observer did not restore the ordinal-zero response.");
 
             ConfigureDynamicResponseCarrier(candidate_address, 4702);
             Expect(service.PollOnce(), "Dynamic request 4702 unexpectedly failed.");
-            Expect(ReadInt32(candidate_address) == -1080, "Dynamic request 4702 did not receive the encoded response.");
+            Expect(ReadInt32(candidate_address) == -66616, "Dynamic request 4702 did not receive the ordinal-tagged response.");
 
             ConfigureDynamicResponseCarrier(candidate_address, -777);
             Expect(service.PollOnce(), "Unrelated negative response poll unexpectedly failed.");
@@ -450,7 +458,7 @@ namespace
 
             ConfigureDynamicResponseCarrier(candidate_address, 4701, 12);
             Expect(service.PollOnce(), "Dynamic maximum-bound request unexpectedly failed.");
-            Expect(ReadInt32(candidate_address + 12) == -32767, "Dynamic maximum-bound response was not encoded at ValueOffset.");
+            Expect(ReadInt32(candidate_address + 12) == -65535, "Dynamic maximum-bound response was not ordinal-tagged at ValueOffset.");
         }
         catch (...)
         {
@@ -465,6 +473,61 @@ namespace
 
         service.Stop();
         Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release dynamic offset and bounds allocation.");
+    }
+
+    /**
+     * @brief Verifies the largest representable request ordinal and rejects an ordinal whose encoded magnitude exceeds int32.
+     */
+    void RunDynamicResponseOrdinalOverflowTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate memory for dynamic ordinal overflow tests.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 64;
+        helen::MemoryStateObserverDefinition definition = CreateDynamicResponseObserverDefinition(page_address, page_address + page_size);
+        definition.AddressMatchValues = { 9000 + 65535, 9000 + 65536, 4899 };
+        definition.DynamicResponseRequestValues.clear();
+        for (int ordinal = 0; ordinal <= 65536; ++ordinal)
+        {
+            definition.DynamicResponseRequestValues.push_back(9000 + ordinal);
+        }
+
+        helen::MemoryStateObserverService service(
+            { definition },
+            {},
+            {},
+            [](const std::string&, int raw_request_value)
+            {
+                return std::optional<int>(raw_request_value == 9000 + 65535 ? 32767 : 1);
+            });
+
+        try
+        {
+            ConfigureDynamicResponseCarrier(candidate_address, 9000 + 65535);
+            Expect(service.PollOnce(), "Largest practical dynamic request ordinal unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == -2147483647, "Largest practical dynamic ordinal was encoded incorrectly.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 9000 + 65536);
+            Expect(service.PollOnce(), "Overflowing dynamic request ordinal unexpectedly failed the poll.");
+            Expect(ReadInt32(candidate_address) == 4899, "Overflowing dynamic request ordinal did not receive the failure response.");
+        }
+        catch (...)
+        {
+            service.Stop();
+            if (allocation != nullptr)
+            {
+                VirtualFree(allocation, 0, MEM_RELEASE);
+            }
+
+            throw;
+        }
+
+        service.Stop();
+        Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release dynamic ordinal overflow allocation.");
     }
 
     /**
@@ -2698,7 +2761,7 @@ namespace
 
             ConfigureDynamicResponseCarrier(candidate_address, 4701);
             Expect(service.PollOnce(), "Grouped dynamic request replacement unexpectedly failed.");
-            Expect(ReadInt32(candidate_address) == -1920, "Grouped dynamic request replacement did not receive its response.");
+            Expect(ReadInt32(candidate_address) == -34688, "Grouped dynamic request replacement did not receive its ordinal-tagged response.");
             Expect(callback_requests.size() == 2, "Grouped dynamic request replacement did not clear the old transient response.");
 
             ConfigureDynamicResponseCarrier(candidate_address, -777);
@@ -2754,6 +2817,7 @@ void RunMemoryStateObserverServiceTests()
     RunDynamicResponseTransportTest();
     RunGroupedDynamicResponseTransportTest();
     RunDynamicResponseOffsetAndBoundsTest();
+    RunDynamicResponseOrdinalOverflowTest();
     RunDynamicResponseWriteFailureCleanupTest();
     RunDynamicResponseStopResetTest();
 

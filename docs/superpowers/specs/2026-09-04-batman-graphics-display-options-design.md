@@ -118,7 +118,9 @@ Codes `4700` through `4899` remain reserved for catalog requests:
 
 The maximum of 98 entries fits this allocation exactly.
 
-The generic observer service gains a bounded dynamic scalar-response contract. A declared request invokes a supplied query callback with the observer identity and request value. The callback returns one checked positive integer. The service writes an unambiguous encoded scalar response; the shell decodes and validates it against the pending request.
+The generic observer service gains a bounded dynamic scalar-response contract. A declared request invokes a supplied query callback with the observer identity and request value. The callback returns one checked positive integer. The service writes an unambiguous ordinal-tagged negative response: for request ordinal `i` (zero-based) and scalar `v`, the magnitude is `i * 32768 + v`, with checked wide arithmetic and `INT_MIN` allowed only when that exact magnitude is required. The shell decodes and validates both ordinal and scalar against the pending request.
+
+For requests `[4700, 4701, 4702]`, provider values `3`, `1920`, and `1080` therefore become `-3`, `-34688`, and `-66616`, respectively. The first request retains the legacy-compatible `-3` response while later requests remain distinguishable from earlier transient values.
 
 Dynamic responses are never eligible to discover an address. Initial discovery still requires a declared protocol request or sentinel plus all existing structural checks. A cached shared carrier may retain a response only while that exact dynamic request is pending and the structure remains valid. Other members of the address group must recognize that group-owned pending response without emitting updates or clearing the shared cache.
 
@@ -211,7 +213,7 @@ Windows API access is placed behind an injected display-mode source so tests use
 - parses the bounded dynamic scalar-response declaration
 - invokes the query callback only for a declared request
 - rejects missing, nonpositive, malformed, or out-of-bounds callback results
-- correlates one response with its exact pending request
+- correlates one ordinal-tagged response with its exact pending request
 - preserves the shared carrier cache while a valid dynamic response is pending
 - does not let another grouped observer consume that response
 - never uses a dynamic response for initial address discovery

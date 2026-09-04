@@ -245,8 +245,8 @@ Create one dynamic observer with requests `4700`, `4701`, and `4702`, bounds `1.
 
 ```cpp
 Expect(ReadInt32(carrier_value_address) == -3, "Catalog count response was not encoded as a negative scalar.");
-Expect(ReadInt32(carrier_value_address) == -1920, "Catalog width response was not returned.");
-Expect(ReadInt32(carrier_value_address) == -1080, "Catalog height response was not returned.");
+Expect(ReadInt32(carrier_value_address) == -34688, "Catalog width response was not ordinal-tagged.");
+Expect(ReadInt32(carrier_value_address) == -66616, "Catalog height response was not ordinal-tagged.");
 ```
 
 Add cases proving that a missing callback, absent provider result, zero, a value above 32767, or an exception writes `4899`; a negative response cannot discover a carrier; an exact pending negative response keeps the shared address cached across every grouped observer; an unrelated negative value invalidates the group; and a new declared request clears the old transient response.
@@ -273,7 +273,7 @@ When a declared dynamic request is read:
 
 1. Call the callback with the declared provider and raw request.
 2. Reject absence, exceptions, and values outside inclusive declared bounds.
-3. Encode success as `-value`; reject `INT_MIN` and any result that would not be negative.
+3. Find the request's zero-based ordinal in `DynamicResponseRequestValues` and encode success as the negative magnitude `ordinal * 32768 + value`; use checked wide arithmetic, allowing `INT_MIN` only for magnitude `2147483648`, and reject an invalid ordinal or overflow. For `[4700, 4701, 4702]` with values `[3, 1920, 1080]`, the encoded responses are `-3`, `-34688`, and `-66616`.
 4. Write the response at `ValueOffset`.
 5. Record request, response, address, and address group before the next poll.
 6. On failure, write `FailureResponseValue` and clear pending dynamic state.
@@ -487,7 +487,7 @@ this.ResolutionCatalogRequest = 4700;
 this.ResolutionCatalogDeadline = undefined;
 ```
 
-Initialization order is Fullscreen, catalog count, each width/height pair, current width, current height, then the remaining eleven transmitted settings. Catalog requests are `4700`, entry requests `4701 + 2*i` and `4702 + 2*i`, current width `4897`, and current height `4898`. `4899` is failure. Successful scalar responses are negative; decode with `-rawValue` and require `1..32767`.
+Initialization order is Fullscreen, catalog count, each width/height pair, current width, current height, then the remaining eleven transmitted settings. Catalog requests are `4700`, entry requests `4701 + 2*i` and `4702 + 2*i`, current width `4897`, and current height `4898`. `4899` is failure. Successful scalar responses are ordinal-tagged negatives; decode magnitude as `-rawValue`, request ordinal as `floor((magnitude - 1) / 32768)`, and scalar as `magnitude - ordinal * 32768`, requiring scalar `1..32767` and matching the pending request ordinal.
 
 Build each explicit object only after both dimensions arrive:
 

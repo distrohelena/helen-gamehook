@@ -285,6 +285,57 @@ namespace
     }
 
     /**
+     * @brief Encodes one bounded dynamic scalar with its request ordinal in a signed negative carrier response.
+     * @param definition Observer definition whose ordered request list supplies the ordinal.
+     * @param raw_request_value Declared positive request that originated the provider call.
+     * @param scalar_value Positive provider result to encode.
+     * @param encoded_response Receives the negative ordinal-tagged response when representable.
+     * @return True when the request ordinal and scalar can be encoded without overflow; otherwise false.
+     * @remarks The 32768 stride leaves scalar values 1..32767 unambiguous. Magnitude 2147483648 is represented by INT_MIN.
+     */
+    bool TryEncodeDynamicResponse(
+        const helen::MemoryStateObserverDefinition& definition,
+        int raw_request_value,
+        int scalar_value,
+        int& encoded_response) noexcept
+    {
+        const auto request = std::find(
+            definition.DynamicResponseRequestValues.begin(),
+            definition.DynamicResponseRequestValues.end(),
+            raw_request_value);
+        if (request == definition.DynamicResponseRequestValues.end() || scalar_value <= 0 || scalar_value > 32767)
+        {
+            return false;
+        }
+
+        constexpr long long response_stride = 32768;
+        constexpr long long maximum_magnitude = static_cast<long long>((std::numeric_limits<int>::max)()) + 1;
+        const std::size_t ordinal = static_cast<std::size_t>(request - definition.DynamicResponseRequestValues.begin());
+        const std::size_t maximum_ordinal = static_cast<std::size_t>((maximum_magnitude - 1) / response_stride);
+        if (ordinal > maximum_ordinal)
+        {
+            return false;
+        }
+
+        const long long magnitude = static_cast<long long>(ordinal) * response_stride + scalar_value;
+        if (magnitude > maximum_magnitude)
+        {
+            return false;
+        }
+
+        if (magnitude == maximum_magnitude)
+        {
+            encoded_response = (std::numeric_limits<int>::min)();
+        }
+        else
+        {
+            encoded_response = -static_cast<int>(magnitude);
+        }
+
+        return encoded_response < 0;
+    }
+
+    /**
      * @brief Returns the smallest positive poll interval declared by the active observer set.
      * @param definitions Observers whose timed poll intervals should be examined.
      * @return Smallest declared poll interval in milliseconds.
@@ -1035,7 +1086,19 @@ namespace helen
                 return failure_written;
             }
 
-            const int response_value = -*dynamic_value;
+            int response_value = 0;
+            if (!TryEncodeDynamicResponse(definition, *raw_value, *dynamic_value, response_value))
+            {
+                const bool failure_written = WriteDynamicFailureResponse(
+                    observer_index,
+                    definition,
+                    *resolved_address,
+                    *raw_value,
+                    "response-encoding-overflow");
+                CacheResolvedAddress(observer_index, *resolved_address);
+                return failure_written;
+            }
+
             std::uintptr_t response_address = 0;
             if (!TryApplyOffset(*resolved_address, definition.ValueOffset, response_address) ||
                 !TryWriteInt32(response_address, response_value))
