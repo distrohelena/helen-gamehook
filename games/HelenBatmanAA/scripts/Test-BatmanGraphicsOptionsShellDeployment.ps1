@@ -163,6 +163,7 @@ foreach ($RequiredToken in @(
     'AfterRecoveryRootCreation',
     'Get-DirectorySnapshot',
     'Assert-BatmanGraphicsVsyncHooks',
+    'Assert-BatmanGraphicsCommands',
     'Assert-BatmanGraphicsPackFileSet',
     'Remove-DeploymentStagingRoot',
     'GetPathRoot',
@@ -248,6 +249,7 @@ try {
     Reset-DeploymentFixture -LivePackRoot $LivePackRoot -LiveConfigPath $LiveConfigPath -LiveHelenGameHookPath $LiveHelenGameHookPath -LiveProxyPath $LiveProxyPath -SubtitlePackRoot $SubtitlePackRoot -StagingRoot $StagingRoot -RecoveryRoot $RecoveryRoot -StagedPackRoot $StagedPackRoot -StagedConfigPath $StagedConfigPath -StagedHelenGameHookPath $StagedHelenGameHookPath -StagedProxyPath $StagedProxyPath -IncludeExistingGraphicsPack $true
     [IO.File]::WriteAllBytes($LiveTargetPath, [Text.Encoding]::ASCII.GetBytes('old-target'))
     Assert-BatmanGraphicsVsyncHooks -PackRoot $StagedPackRoot -Context 'Staged deployment fixture'
+    Assert-BatmanGraphicsCommands -PackRoot $StagedPackRoot -Context 'Staged deployment fixture'
     $ExpectedHelenGameHookHash = (Get-FileHash -LiteralPath $StagedHelenGameHookPath -Algorithm SHA256).Hash
     $ExpectedProxyHash = (Get-FileHash -LiteralPath $StagedProxyPath -Algorithm SHA256).Hash
 
@@ -303,6 +305,7 @@ try {
         param($LivePackPath, $LiveConfigPathForVerification, $LiveHelenPath, $LiveProxyPath)
         if ((Get-Content -LiteralPath (Join-Path $LivePackPath 'state.txt') -Raw) -cne 'new-pack') { throw 'Verifier saw the wrong graphics pack.' }
         Assert-BatmanGraphicsVsyncHooks -PackRoot $LivePackPath -Context 'Activated deployment fixture'
+        Assert-BatmanGraphicsCommands -PackRoot $LivePackPath -Context 'Activated deployment fixture'
         $config = Get-Content -LiteralPath $LiveConfigPathForVerification -Raw | ConvertFrom-Json
         $packs = @($config.enabledPacksByExecutable.'ShippingPC-BmGame.exe')
         if ($packs.Count -ne 2 -or $packs[0] -ne 'batman-aa-subtitles' -or $packs[1] -ne 'batman-aa-graphics-options') { throw 'Verifier saw the wrong pack order.' }

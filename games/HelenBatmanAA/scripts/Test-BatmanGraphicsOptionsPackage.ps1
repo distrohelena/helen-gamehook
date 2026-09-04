@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ExpectedGraphicsShellSha256 = '6CF058DA55867BE38F4A7861C877EB2D4CFD98E4510848D924B2322FCBDF65A5'
+$ExpectedGraphicsShellSha256 = '867E34C353F26EB3D41C2C6EFCF5AEAF1DF82F9C67E40CCD667371A9F8093421'
 
 . (Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1')
 . (Join-Path $PSScriptRoot 'BatmanPackVerificationHelpers.ps1')
@@ -416,10 +416,18 @@ function Assert-VsyncSliceRowContract {
     param([string]$Text, [int]$Index, [string]$Context)
 
     $labels = @('Fullscreen', 'Resolution', 'VSync', 'MSAA', 'Detail Level', 'Bloom', 'Dynamic Shadows', 'Motion Blur', 'Distortion', 'Fog Volumes', 'Spherical Harmonic Lighting', 'Ambient Occlusion', 'PhysX', 'Stereo 3D', 'Apply Changes')
-    if ($Index -in @(2, 3, 12, 13)) {
+    if ($Index -in @(2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13)) {
         $activeRows = @{
             2 = [pscustomobject]@{ RowIndex = 3; Values = 'this.Names = new Array("Off","On");' }
             3 = [pscustomobject]@{ RowIndex = 4; Values = 'this.Names = new Array("Off","2x","4x","8x","16x");' }
+            4 = [pscustomobject]@{ RowIndex = 5; Values = 'this.Names = new Array("Off","On");' }
+            5 = [pscustomobject]@{ RowIndex = 6; Values = 'this.Names = new Array("Off","On");' }
+            6 = [pscustomobject]@{ RowIndex = 7; Values = 'this.Names = new Array("Off","On");' }
+            7 = [pscustomobject]@{ RowIndex = 8; Values = 'this.Names = new Array("Off","On");' }
+            8 = [pscustomobject]@{ RowIndex = 9; Values = 'this.Names = new Array("Off","On");' }
+            9 = [pscustomobject]@{ RowIndex = 10; Values = 'this.Names = new Array("Off","On");' }
+            10 = [pscustomobject]@{ RowIndex = 11; Values = 'this.Names = new Array("Off","On");' }
+            11 = [pscustomobject]@{ RowIndex = 12; Values = 'this.Names = new Array("Off","On");' }
             12 = [pscustomobject]@{ RowIndex = 13; Values = 'this.Names = new Array("Off","Normal","High");' }
             13 = [pscustomobject]@{ RowIndex = 14; Values = 'this.Names = new Array("Off","On");' }
         }
@@ -431,6 +439,21 @@ function Assert-VsyncSliceRowContract {
         Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsOptionsController.IncrementSetting(this.RowIndex);' -Context "$Context Increment"
         Assert-ContainsOrdinal -Text $Text -Token '_parent.GraphicsOptionsController.DecrementSetting(this.RowIndex);' -Context "$Context Decrement"
         Assert-ContainsOrdinal -Text $Text -Token $labels[$Index] -Context "$Context label"
+        Assert-ContainsOrdinal -Text $Text -Token 'this._visible = true;' -Context "$Context visibility"
+        return
+    }
+
+    if ($Index -eq 4) {
+        Assert-ContainsOrdinal -Text $Text -Token 'this.Names = new Array("Low","Medium","High","Very High","Custom");' -Context "$Context names"
+        Assert-ContainsOrdinal -Text $Text -Token 'this.State = -1;' -Context "$Context state"
+        Assert-ContainsOrdinal -Text $Text -Token 'this.Initial = -1;' -Context "$Context initial state"
+        Assert-ContainsOrdinal -Text $Text -Token 'this.Default = -1;' -Context "$Context default state"
+        Assert-ContainsOrdinal -Text $Text -Token 'GetDetailLevelDraftIndex();' -Context "$Context draft state"
+        Assert-ContainsOrdinal -Text $Text -Token 'GetDetailLevelInitialIndex();' -Context "$Context initial state"
+        Assert-ContainsOrdinal -Text $Text -Token 'ToggleDetailPreset();' -Context "$Context RunAction"
+        Assert-ContainsOrdinal -Text $Text -Token 'IncrementDetailPreset();' -Context "$Context Increment"
+        Assert-ContainsOrdinal -Text $Text -Token 'DecrementDetailPreset();' -Context "$Context Decrement"
+        if ($Text.IndexOf('ToggleSetting', [StringComparison]::Ordinal) -ge 0 -or $Text.IndexOf('IncrementSetting', [StringComparison]::Ordinal) -ge 0 -or $Text.IndexOf('DecrementSetting', [StringComparison]::Ordinal) -ge 0) { throw "$Context must delegate only to detail preset methods." }
         Assert-ContainsOrdinal -Text $Text -Token 'this._visible = true;' -Context "$Context visibility"
         return
     }
@@ -797,23 +820,31 @@ if (@($bindings.bindings).Count -ne 0) { throw 'bindings.json must contain zero 
 $commands = Get-Content -LiteralPath $commandsJsonPath -Raw | ConvertFrom-Json
 Assert-ExactProperties -Object $commands -Names @('commands') -Context 'commands.json'
 Assert-StrictJsonArray -Value $commands.commands -Context 'commands.json commands'
-if (@($commands.commands).Count -ne 2) { throw 'commands.json must contain exactly two commands.' }
+if (@($commands.commands).Count -ne 3) { throw 'commands.json must contain exactly three commands.' }
 $loadCommand = $commands.commands[0]
-$applyCommand = $commands.commands[1]
+$syncCommand = $commands.commands[1]
+$applyCommand = $commands.commands[2]
 Assert-ExactOrderedProperties -Object $loadCommand -Names @('id', 'name', 'steps') -Context 'commands.json load command'
+Assert-ExactOrderedProperties -Object $syncCommand -Names @('id', 'name', 'steps') -Context 'commands.json sync command'
 Assert-ExactOrderedProperties -Object $applyCommand -Names @('id', 'name', 'steps') -Context 'commands.json apply command'
 Assert-StrictJsonStringEquals -Value $loadCommand.id -Expected 'loadBatmanGraphicsDraftIntoConfig' -Context 'commands.json load command id'
 Assert-StrictJsonStringEquals -Value $loadCommand.name -Expected 'Load Batman Graphics Draft Into Config' -Context 'commands.json load command name'
 Assert-StrictJsonArray -Value $loadCommand.steps -Context 'commands.json load steps'
 if (@($loadCommand.steps).Count -ne 1) { throw 'commands.json load command must contain exactly one step.' }
+Assert-StrictJsonStringEquals -Value $syncCommand.id -Expected 'syncBatmanGraphicsDetailLevel' -Context 'commands.json sync command id'
+Assert-StrictJsonStringEquals -Value $syncCommand.name -Expected 'Sync Batman Graphics Detail Level' -Context 'commands.json sync command name'
+Assert-StrictJsonArray -Value $syncCommand.steps -Context 'commands.json sync steps'
+if (@($syncCommand.steps).Count -ne 1) { throw 'commands.json sync command must contain exactly one step.' }
 Assert-StrictJsonStringEquals -Value $applyCommand.id -Expected 'applyBatmanGraphicsDraft' -Context 'commands.json apply command id'
 Assert-StrictJsonStringEquals -Value $applyCommand.name -Expected 'Apply Batman Graphics Draft' -Context 'commands.json apply command name'
 Assert-StrictJsonArray -Value $applyCommand.steps -Context 'commands.json apply steps'
 if (@($applyCommand.steps).Count -ne 2) { throw 'commands.json apply command must contain exactly two steps.' }
 Assert-ExactOrderedProperties -Object $loadCommand.steps[0] -Names @('kind') -Context 'commands.json load step'
+Assert-ExactOrderedProperties -Object $syncCommand.steps[0] -Names @('kind') -Context 'commands.json sync step'
 Assert-ExactOrderedProperties -Object $applyCommand.steps[0] -Names @('kind') -Context 'commands.json apply config step'
 Assert-ExactOrderedProperties -Object $applyCommand.steps[1] -Names @('kind') -Context 'commands.json apply load step'
 Assert-StrictJsonStringEquals -Value $loadCommand.steps[0].kind -Expected 'load-batman-graphics-draft-into-config' -Context 'commands.json load step kind'
+Assert-StrictJsonStringEquals -Value $syncCommand.steps[0].kind -Expected 'sync-batman-graphics-detail-level' -Context 'commands.json sync step kind'
 Assert-StrictJsonStringEquals -Value $applyCommand.steps[0].kind -Expected 'apply-batman-graphics-config' -Context 'commands.json apply config step kind'
 Assert-StrictJsonStringEquals -Value $applyCommand.steps[1].kind -Expected 'load-batman-graphics-draft-into-config' -Context 'commands.json apply load step kind'
 
@@ -822,7 +853,7 @@ Assert-ExactOrderedProperties -Object $hooks -Names @('runtimeSlots', 'stateObse
 Assert-StrictJsonArray -Value $hooks.runtimeSlots -Context 'hooks.json runtimeSlots'
 Assert-StrictJsonArray -Value $hooks.stateObservers -Context 'hooks.json stateObservers'
 Assert-StrictJsonArray -Value $hooks.hooks -Context 'hooks.json hooks'
-if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($hooks.stateObservers).Count -ne 6) { throw 'hooks.json runtime slots, observers, or hooks count drifted.' }
+if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($hooks.stateObservers).Count -ne 13) { throw 'hooks.json runtime slots, observers, or hooks count drifted.' }
 
 function Assert-GraphicsCarrierChecks {
     param([Parameter(Mandatory = $true)] [psobject]$Observer, [Parameter(Mandatory = $true)] [string]$Context)
@@ -853,18 +884,26 @@ function Assert-GraphicsCarrierChecks {
 
 $expectedObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'responseRequestValue', 'responseMappings', 'acknowledgementMappings', 'failureResponseValue')
 $expectedCommandObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'acknowledgementMappings', 'failureResponseValue', 'command')
-$expectedObserverIds = @('graphicsObserverVsync', 'graphicsObserverMsaa', 'graphicsObserverPhysx', 'graphicsObserverStereo', 'graphicsObserverApplySignal', 'graphicsObserverRollbackSignal')
-$expectedObserverTargets = @('vsync', 'msaa', 'physx', 'stereo', 'applySignal', 'rollbackSignal')
+$expectedCommandSettingObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'responseRequestValue', 'responseMappings', 'acknowledgementMappings', 'failureResponseValue', 'command')
+$expectedObserverIds = @('graphicsObserverVsync', 'graphicsObserverMsaa', 'graphicsObserverPhysx', 'graphicsObserverStereo', 'graphicsObserverBloom', 'graphicsObserverDynamicShadows', 'graphicsObserverMotionBlur', 'graphicsObserverDistortion', 'graphicsObserverFogVolumes', 'graphicsObserverSphericalHarmonicLighting', 'graphicsObserverAmbientOcclusion', 'graphicsObserverApplySignal', 'graphicsObserverRollbackSignal')
+$expectedObserverTargets = @('vsync', 'msaa', 'physx', 'stereo', 'bloom', 'dynamicShadows', 'motionBlur', 'distortion', 'fogVolumes', 'sphericalHarmonicLighting', 'ambientOcclusion', 'applySignal', 'rollbackSignal')
 $expectedAddressMatchValues = @(
     4200, 4210, 4211, 4220, 4221, 4230, 4231, 4299,
     4300, 4310, 4311, 4312, 4313, 4314, 4320, 4321, 4322, 4323, 4324, 4330, 4331, 4332, 4333, 4334, 4399,
     4400, 4410, 4411, 4412, 4420, 4421, 4422, 4430, 4431, 4432, 4499,
     4500, 4510, 4511, 4520, 4521, 4530, 4531, 4599,
+    4600, 4601, 4602, 4603, 4604, 4605, 4606, 4609,
+    4610, 4611, 4612, 4613, 4614, 4615, 4616, 4619,
+    4620, 4621, 4622, 4623, 4624, 4625, 4626, 4629,
+    4630, 4631, 4632, 4633, 4634, 4635, 4636, 4639,
+    4640, 4641, 4642, 4643, 4644, 4645, 4646, 4649,
+    4650, 4651, 4652, 4653, 4654, 4655, 4656, 4659,
+    4660, 4661, 4662, 4663, 4664, 4665, 4666, 4669,
     4960, 4961, 4969, 4970, 4971, 4980, 4981, 4989, 4990, 4991
 )
 for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observerIndex++) {
     $observer = $hooks.stateObservers[$observerIndex]
-    $expectedProperties = if ($observerIndex -lt 4) { $expectedObserverProperties } else { $expectedCommandObserverProperties }
+    $expectedProperties = if ($observerIndex -lt 4) { $expectedObserverProperties } elseif ($observerIndex -lt 11) { $expectedCommandSettingObserverProperties } else { $expectedCommandObserverProperties }
     Assert-ExactOrderedProperties -Object $observer -Names $expectedProperties -Context "hooks.json $($expectedObserverIds[$observerIndex])"
     Assert-StrictJsonStringEquals -Value $observer.id -Expected $expectedObserverIds[$observerIndex] -Context "hooks.json observer $($observerIndex + 1) id"
     Assert-StrictJsonStringEquals -Value $observer.targetConfigKey -Expected $expectedObserverTargets[$observerIndex] -Context "hooks.json $($observerIndex + 1) targetConfigKey"
@@ -876,7 +915,7 @@ for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observe
     Assert-StrictJsonIntegerEquals -Value $observer.pollIntervalMs -Expected 50 -Context "hooks.json observer $($observerIndex + 1) pollIntervalMs"
     Assert-StrictJsonIntegerArrayEquals -Values $observer.addressMatchValues -Expected $expectedAddressMatchValues -Context "hooks.json observer $($observerIndex + 1) addressMatchValues"
     Assert-GraphicsCarrierChecks -Observer $observer -Context "hooks.json $($observer.id)"
-    $mappingNames = if ($observerIndex -lt 4) { @('mappings', 'responseMappings', 'acknowledgementMappings') } else { @('mappings', 'acknowledgementMappings') }
+    $mappingNames = if ($observerIndex -lt 11) { @('mappings', 'responseMappings', 'acknowledgementMappings') } else { @('mappings', 'acknowledgementMappings') }
     foreach ($mappingName in $mappingNames) {
         Assert-StrictJsonArray -Value $observer.$mappingName -Context "hooks.json $($observer.id) $mappingName"
         foreach ($entry in @($observer.$mappingName)) {
@@ -889,10 +928,17 @@ for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observe
 }
 
 $expectedGraphicsProtocols = @(
-    [pscustomobject]@{ Id = 'graphicsObserverVsync'; Read = 4200; Responses = @(4210, 4211); Writes = @(4220, 4221); Acks = @(4230, 4231); Failure = 4299; ConfigValues = @(0, 1) },
-    [pscustomobject]@{ Id = 'graphicsObserverMsaa'; Read = 4300; Responses = @(4310, 4311, 4312, 4313, 4314); Writes = @(4320, 4321, 4322, 4323, 4324); Acks = @(4330, 4331, 4332, 4333, 4334); Failure = 4399; ConfigValues = @(0, 1, 2, 3, 5) },
-    [pscustomobject]@{ Id = 'graphicsObserverPhysx'; Read = 4400; Responses = @(4410, 4411, 4412); Writes = @(4420, 4421, 4422); Acks = @(4430, 4431, 4432); Failure = 4499; ConfigValues = @(0, 1, 2) },
-    [pscustomobject]@{ Id = 'graphicsObserverStereo'; Read = 4500; Responses = @(4510, 4511); Writes = @(4520, 4521); Acks = @(4530, 4531); Failure = 4599; ConfigValues = @(0, 1) }
+    [pscustomobject]@{ Id = 'graphicsObserverVsync'; Read = 4200; Responses = @(4210, 4211); Writes = @(4220, 4221); Acks = @(4230, 4231); Failure = 4299; ConfigValues = @(0, 1); Command = '' },
+    [pscustomobject]@{ Id = 'graphicsObserverMsaa'; Read = 4300; Responses = @(4310, 4311, 4312, 4313, 4314); Writes = @(4320, 4321, 4322, 4323, 4324); Acks = @(4330, 4331, 4332, 4333, 4334); Failure = 4399; ConfigValues = @(0, 1, 2, 3, 5); Command = '' },
+    [pscustomobject]@{ Id = 'graphicsObserverPhysx'; Read = 4400; Responses = @(4410, 4411, 4412); Writes = @(4420, 4421, 4422); Acks = @(4430, 4431, 4432); Failure = 4499; ConfigValues = @(0, 1, 2); Command = '' },
+    [pscustomobject]@{ Id = 'graphicsObserverStereo'; Read = 4500; Responses = @(4510, 4511); Writes = @(4520, 4521); Acks = @(4530, 4531); Failure = 4599; ConfigValues = @(0, 1); Command = '' },
+    [pscustomobject]@{ Id = 'graphicsObserverBloom'; Read = 4600; Responses = @(4601, 4602); Writes = @(4603, 4604); Acks = @(4605, 4606); Failure = 4609; ConfigValues = @(0, 1); Command = 'syncBatmanGraphicsDetailLevel' },
+    [pscustomobject]@{ Id = 'graphicsObserverDynamicShadows'; Read = 4610; Responses = @(4611, 4612); Writes = @(4613, 4614); Acks = @(4615, 4616); Failure = 4619; ConfigValues = @(0, 1); Command = 'syncBatmanGraphicsDetailLevel' },
+    [pscustomobject]@{ Id = 'graphicsObserverMotionBlur'; Read = 4620; Responses = @(4621, 4622); Writes = @(4623, 4624); Acks = @(4625, 4626); Failure = 4629; ConfigValues = @(0, 1); Command = 'syncBatmanGraphicsDetailLevel' },
+    [pscustomobject]@{ Id = 'graphicsObserverDistortion'; Read = 4630; Responses = @(4631, 4632); Writes = @(4633, 4634); Acks = @(4635, 4636); Failure = 4639; ConfigValues = @(0, 1); Command = 'syncBatmanGraphicsDetailLevel' },
+    [pscustomobject]@{ Id = 'graphicsObserverFogVolumes'; Read = 4640; Responses = @(4641, 4642); Writes = @(4643, 4644); Acks = @(4645, 4646); Failure = 4649; ConfigValues = @(0, 1); Command = 'syncBatmanGraphicsDetailLevel' },
+    [pscustomobject]@{ Id = 'graphicsObserverSphericalHarmonicLighting'; Read = 4650; Responses = @(4651, 4652); Writes = @(4653, 4654); Acks = @(4655, 4656); Failure = 4659; ConfigValues = @(0, 1); Command = 'syncBatmanGraphicsDetailLevel' },
+    [pscustomobject]@{ Id = 'graphicsObserverAmbientOcclusion'; Read = 4660; Responses = @(4661, 4662); Writes = @(4663, 4664); Acks = @(4665, 4666); Failure = 4669; ConfigValues = @(0, 1); Command = 'syncBatmanGraphicsDetailLevel' }
 )
 for ($protocolIndex = 0; $protocolIndex -lt $expectedGraphicsProtocols.Count; $protocolIndex++) {
     $protocol = $expectedGraphicsProtocols[$protocolIndex]
@@ -900,6 +946,11 @@ for ($protocolIndex = 0; $protocolIndex -lt $expectedGraphicsProtocols.Count; $p
     if ($null -eq $observer.mappings -or @($observer.mappings).Count -ne $protocol.Writes.Count -or $null -eq $observer.responseMappings -or @($observer.responseMappings).Count -ne $protocol.Responses.Count -or $null -eq $observer.acknowledgementMappings -or @($observer.acknowledgementMappings).Count -ne $protocol.Acks.Count) { throw "hooks.json $($protocol.Id) mapping counts drifted." }
     Assert-StrictJsonIntegerEquals -Value $observer.responseRequestValue -Expected $protocol.Read -Context "hooks.json $($protocol.Id) responseRequestValue"
     Assert-StrictJsonIntegerEquals -Value $observer.failureResponseValue -Expected $protocol.Failure -Context "hooks.json $($protocol.Id) failureResponseValue"
+    if ($protocolIndex -ge 4 -and $protocolIndex -lt 11) {
+        Assert-StrictJsonStringEquals -Value $observer.command -Expected 'syncBatmanGraphicsDetailLevel' -Context "hooks.json $($protocol.Id) command"
+    } elseif ($protocolIndex -lt 4 -and $observer.PSObject.Properties.Name -contains 'command') {
+        throw "hooks.json $($protocol.Id) must not declare a command."
+    }
     for ($mappingIndex = 0; $mappingIndex -lt $protocol.Writes.Count; $mappingIndex++) {
         Assert-StrictJsonMappingEquals -Mapping $observer.mappings[$mappingIndex] -ExpectedMatch $protocol.Writes[$mappingIndex] -ExpectedValue $protocol.ConfigValues[$mappingIndex] -Context "hooks.json $($protocol.Id) write mapping $($mappingIndex + 1)"
         Assert-StrictJsonMappingEquals -Mapping $observer.responseMappings[$mappingIndex] -ExpectedMatch $protocol.ConfigValues[$mappingIndex] -ExpectedValue $protocol.Responses[$mappingIndex] -Context "hooks.json $($protocol.Id) response mapping $($mappingIndex + 1)"
@@ -911,8 +962,8 @@ $vsyncObserver = $hooks.stateObservers[0]
 $msaaObserver = $hooks.stateObservers[1]
 $physxObserver = $hooks.stateObservers[2]
 $stereoObserver = $hooks.stateObservers[3]
-$applyObserver = $hooks.stateObservers[4]
-$rollbackObserver = $hooks.stateObservers[5]
+$applyObserver = $hooks.stateObservers[11]
+$rollbackObserver = $hooks.stateObservers[12]
 Assert-StrictJsonStringEquals -Value $applyObserver.id -Expected 'graphicsObserverApplySignal' -Context 'hooks.json apply observer id'
 Assert-StrictJsonStringEquals -Value $applyObserver.targetConfigKey -Expected 'applySignal' -Context 'hooks.json apply observer targetConfigKey'
 Assert-StrictJsonStringEquals -Value $applyObserver.command -Expected 'applyBatmanGraphicsDraft' -Context 'hooks.json apply observer command'

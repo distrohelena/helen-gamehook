@@ -146,17 +146,24 @@ function ConvertTo-StrictGraphicsMappingArray {
 }
 
 $graphicsProtocol = @(
-    [ordered]@{ Id='graphicsObserverVsync'; Key='vsync'; Read=4200; Responses=@(4210,4211); Writes=@(4220,4221); Acks=@(4230,4231); Failure=4299; ConfigValues=@(0,1) },
-    [ordered]@{ Id='graphicsObserverMsaa'; Key='msaa'; Read=4300; Responses=@(4310,4311,4312,4313,4314); Writes=@(4320,4321,4322,4323,4324); Acks=@(4330,4331,4332,4333,4334); Failure=4399; ConfigValues=@(0,1,2,3,5) },
-    [ordered]@{ Id='graphicsObserverPhysx'; Key='physx'; Read=4400; Responses=@(4410,4411,4412); Writes=@(4420,4421,4422); Acks=@(4430,4431,4432); Failure=4499; ConfigValues=@(0,1,2) },
-    [ordered]@{ Id='graphicsObserverStereo'; Key='stereo'; Read=4500; Responses=@(4510,4511); Writes=@(4520,4521); Acks=@(4530,4531); Failure=4599; ConfigValues=@(0,1) }
+    [ordered]@{ Id='graphicsObserverVsync'; Key='vsync'; Read=4200; Responses=@(4210,4211); Writes=@(4220,4221); Acks=@(4230,4231); Failure=4299; ConfigValues=@(0,1); Command='' },
+    [ordered]@{ Id='graphicsObserverMsaa'; Key='msaa'; Read=4300; Responses=@(4310,4311,4312,4313,4314); Writes=@(4320,4321,4322,4323,4324); Acks=@(4330,4331,4332,4333,4334); Failure=4399; ConfigValues=@(0,1,2,3,5); Command='' },
+    [ordered]@{ Id='graphicsObserverPhysx'; Key='physx'; Read=4400; Responses=@(4410,4411,4412); Writes=@(4420,4421,4422); Acks=@(4430,4431,4432); Failure=4499; ConfigValues=@(0,1,2); Command='' },
+    [ordered]@{ Id='graphicsObserverStereo'; Key='stereo'; Read=4500; Responses=@(4510,4511); Writes=@(4520,4521); Acks=@(4530,4531); Failure=4599; ConfigValues=@(0,1); Command='' },
+    [ordered]@{ Id='graphicsObserverBloom'; Key='bloom'; Read=4600; Responses=@(4601,4602); Writes=@(4603,4604); Acks=@(4605,4606); Failure=4609; ConfigValues=@(0,1); Command='syncBatmanGraphicsDetailLevel' },
+    [ordered]@{ Id='graphicsObserverDynamicShadows'; Key='dynamicShadows'; Read=4610; Responses=@(4611,4612); Writes=@(4613,4614); Acks=@(4615,4616); Failure=4619; ConfigValues=@(0,1); Command='syncBatmanGraphicsDetailLevel' },
+    [ordered]@{ Id='graphicsObserverMotionBlur'; Key='motionBlur'; Read=4620; Responses=@(4621,4622); Writes=@(4623,4624); Acks=@(4625,4626); Failure=4629; ConfigValues=@(0,1); Command='syncBatmanGraphicsDetailLevel' },
+    [ordered]@{ Id='graphicsObserverDistortion'; Key='distortion'; Read=4630; Responses=@(4631,4632); Writes=@(4633,4634); Acks=@(4635,4636); Failure=4639; ConfigValues=@(0,1); Command='syncBatmanGraphicsDetailLevel' },
+    [ordered]@{ Id='graphicsObserverFogVolumes'; Key='fogVolumes'; Read=4640; Responses=@(4641,4642); Writes=@(4643,4644); Acks=@(4645,4646); Failure=4649; ConfigValues=@(0,1); Command='syncBatmanGraphicsDetailLevel' },
+    [ordered]@{ Id='graphicsObserverSphericalHarmonicLighting'; Key='sphericalHarmonicLighting'; Read=4650; Responses=@(4651,4652); Writes=@(4653,4654); Acks=@(4655,4656); Failure=4659; ConfigValues=@(0,1); Command='syncBatmanGraphicsDetailLevel' },
+    [ordered]@{ Id='graphicsObserverAmbientOcclusion'; Key='ambientOcclusion'; Read=4660; Responses=@(4661,4662); Writes=@(4663,4664); Acks=@(4665,4666); Failure=4669; ConfigValues=@(0,1); Command='syncBatmanGraphicsDetailLevel' }
 )
 
 $graphicsCommandValues = @(4960,4961,4969,4970,4971,4980,4981,4989,4990,4991)
 
 function Assert-GraphicsProtocolTable {
     <#
-    Validate the authoritative four-setting table and command signal values before
+    Validate the authoritative graphics-setting table and command signal values before
     any union, mapping, or observer generation can index malformed protocol data.
     #>
     param(
@@ -166,7 +173,7 @@ function Assert-GraphicsProtocolTable {
 
     if ($null -eq $Protocol -or $Protocol.Count -eq 0) { throw 'Graphics protocol table must contain at least one setting.' }
     if ($null -eq $CommandValues -or $CommandValues.Count -eq 0) { throw 'Graphics command protocol must contain at least one raw value.' }
-    $requiredPropertyNames = @('Id', 'Key', 'Read', 'Responses', 'Writes', 'Acks', 'Failure', 'ConfigValues')
+    $requiredPropertyNames = @('Id', 'Key', 'Read', 'Responses', 'Writes', 'Acks', 'Failure', 'ConfigValues', 'Command')
     $commandSet = [Collections.Generic.HashSet[int]]::new()
     for ($commandIndex = 0; $commandIndex -lt $CommandValues.Count; $commandIndex++) {
         $commandValue = ConvertTo-StrictGraphicsIntegralValue -Value $CommandValues[$commandIndex] -Context "Graphics command value $($commandIndex + 1)"
@@ -182,9 +189,11 @@ function Assert-GraphicsProtocolTable {
         if ($null -eq $entry) { throw "$entryContext must be an object." }
         $actualPropertyNames = if ($entry -is [Collections.IDictionary]) { @($entry.Keys | ForEach-Object { [string]$_ } | Sort-Object) } else { @($entry.PSObject.Properties.Name | Sort-Object) }
         $expectedPropertyNames = @($requiredPropertyNames | Sort-Object)
-        if (($actualPropertyNames -join '|') -cne ($expectedPropertyNames -join '|')) { throw "$entryContext must contain exactly Id, Key, Read, Responses, Writes, Acks, Failure, and ConfigValues." }
+        if (($actualPropertyNames -join '|') -cne ($expectedPropertyNames -join '|')) { throw "$entryContext must contain exactly Id, Key, Read, Responses, Writes, Acks, Failure, ConfigValues, and Command." }
         if ($entry.Id -isnot [string] -or [string]::IsNullOrWhiteSpace($entry.Id)) { throw "$entryContext Id must be a non-empty string." }
         if ($entry.Key -isnot [string] -or [string]::IsNullOrWhiteSpace($entry.Key)) { throw "$entryContext Key must be a non-empty string." }
+        if ($entry.Command -isnot [string]) { throw "$entryContext Command must be a string." }
+        if ($entry.Command.Length -gt 0 -and [string]::IsNullOrWhiteSpace($entry.Command)) { throw "$entryContext Command must not be whitespace-only when supplied." }
         if (-not $settingIdSet.Add($entry.Id)) { throw "$entryContext duplicates setting Id '$($entry.Id)'." }
         if (-not $settingKeySet.Add($entry.Key)) { throw "$entryContext duplicates setting Key '$($entry.Key)'." }
         $read = ConvertTo-StrictGraphicsIntegralValue -Value $entry.Read -Context "$entryContext Read"
@@ -712,8 +721,17 @@ try {
             }
         )
     }
+    $syncGraphicsDetailLevelCommand = [ordered]@{
+        id = 'syncBatmanGraphicsDetailLevel'
+        name = 'Sync Batman Graphics Detail Level'
+        steps = @(
+            [ordered]@{
+                kind = 'sync-batman-graphics-detail-level'
+            }
+        )
+    }
     $commands = [ordered]@{
-        commands = @($loadGraphicsDraftCommand, $applyGraphicsDraftCommand)
+        commands = @($loadGraphicsDraftCommand, $syncGraphicsDetailLevelCommand, $applyGraphicsDraftCommand)
     }
     $settingObservers = @(
         foreach ($protocol in $graphicsProtocol) {
@@ -732,7 +750,7 @@ try {
                     [ordered]@{ match = [int]$protocol.Writes[$mappingIndex]; value = [int]$protocol.Acks[$mappingIndex] }
                 }
             )
-            New-GraphicsCarrierObserver -Id $protocol.Id -TargetConfigKey $protocol.Key -AddressMatchValues $graphicsAddressMatchValues -Mappings $settingMappings -ResponseRequestValue ([int]$protocol.Read) -ResponseMappings $settingResponseMappings -AcknowledgementMappings $settingAcknowledgementMappings -FailureResponseValue ([int]$protocol.Failure)
+            New-GraphicsCarrierObserver -Id $protocol.Id -TargetConfigKey $protocol.Key -AddressMatchValues $graphicsAddressMatchValues -Mappings $settingMappings -ResponseRequestValue ([int]$protocol.Read) -ResponseMappings $settingResponseMappings -AcknowledgementMappings $settingAcknowledgementMappings -FailureResponseValue ([int]$protocol.Failure) -Command $protocol.Command
         }
     )
     $applyAcknowledgementMappings = @(

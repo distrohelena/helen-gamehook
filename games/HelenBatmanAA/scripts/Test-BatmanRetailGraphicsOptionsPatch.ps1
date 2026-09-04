@@ -9,7 +9,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $env:MSBUILDDISABLENODEREUSE = '1'
-$ExpectedGraphicsShellSha256 = '6CF058DA55867BE38F4A7861C877EB2D4CFD98E4510848D924B2322FCBDF65A5'
+$ExpectedGraphicsShellSha256 = '867E34C353F26EB3D41C2C6EFCF5AEAF1DF82F9C67E40CCD667371A9F8093421'
 # Captured verified reconstruction values for the second sprite-333 DoActionTag (1226 UTF-8 bytes) and Graphics-row clip action (436 UTF-8 bytes).
 $ExpectedSprite333SecondActionSha256 = '692534D720ECE3C338843D8AFD9C4402F7308F59DD010A29B5C57B3479B13A42'
 $ExpectedSprite333SecondClipActionSha256 = '97BBDD8B9790941BB620D145174830A9EAA2E32D911705BCBE3BFAB40C4495CB'
@@ -66,10 +66,18 @@ function Assert-VsyncSliceRowContract {
     param([string]$Text, [int]$Index, [string]$Context)
 
     $labels = @('Fullscreen', 'Resolution', 'VSync', 'MSAA', 'Detail Level', 'Bloom', 'Dynamic Shadows', 'Motion Blur', 'Distortion', 'Fog Volumes', 'Spherical Harmonic Lighting', 'Ambient Occlusion', 'PhysX', 'Stereo 3D', 'Apply Changes')
-    if ($Index -in @(2, 3, 12, 13)) {
+    if ($Index -in @(2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13)) {
         $activeRows = @{
             2 = [pscustomobject]@{ RowIndex = 3; Values = 'this.Names = new Array("Off","On");' }
             3 = [pscustomobject]@{ RowIndex = 4; Values = 'this.Names = new Array("Off","2x","4x","8x","16x");' }
+            4 = [pscustomobject]@{ RowIndex = 5; Values = 'this.Names = new Array("Off","On");' }
+            5 = [pscustomobject]@{ RowIndex = 6; Values = 'this.Names = new Array("Off","On");' }
+            6 = [pscustomobject]@{ RowIndex = 7; Values = 'this.Names = new Array("Off","On");' }
+            7 = [pscustomobject]@{ RowIndex = 8; Values = 'this.Names = new Array("Off","On");' }
+            8 = [pscustomobject]@{ RowIndex = 9; Values = 'this.Names = new Array("Off","On");' }
+            9 = [pscustomobject]@{ RowIndex = 10; Values = 'this.Names = new Array("Off","On");' }
+            10 = [pscustomobject]@{ RowIndex = 11; Values = 'this.Names = new Array("Off","On");' }
+            11 = [pscustomobject]@{ RowIndex = 12; Values = 'this.Names = new Array("Off","On");' }
             12 = [pscustomobject]@{ RowIndex = 13; Values = 'this.Names = new Array("Off","Normal","High");' }
             13 = [pscustomobject]@{ RowIndex = 14; Values = 'this.Names = new Array("Off","On");' }
         }
@@ -81,6 +89,21 @@ function Assert-VsyncSliceRowContract {
         Assert-ContainsOrdinal $Text '_parent.GraphicsOptionsController.IncrementSetting(this.RowIndex);' "$Context Increment"
         Assert-ContainsOrdinal $Text '_parent.GraphicsOptionsController.DecrementSetting(this.RowIndex);' "$Context Decrement"
         Assert-ContainsOrdinal $Text $labels[$Index] "$Context label"
+        Assert-ContainsOrdinal $Text 'this._visible = true;' "$Context visibility"
+        return
+    }
+
+    if ($Index -eq 4) {
+        Assert-ContainsOrdinal $Text 'this.Names = new Array("Low","Medium","High","Very High","Custom");' "$Context names"
+        Assert-ContainsOrdinal $Text 'this.State = -1;' "$Context state"
+        Assert-ContainsOrdinal $Text 'this.Initial = -1;' "$Context initial state"
+        Assert-ContainsOrdinal $Text 'this.Default = -1;' "$Context default state"
+        Assert-ContainsOrdinal $Text 'GetDetailLevelDraftIndex();' "$Context draft state"
+        Assert-ContainsOrdinal $Text 'GetDetailLevelInitialIndex();' "$Context initial state"
+        Assert-ContainsOrdinal $Text 'ToggleDetailPreset();' "$Context RunAction"
+        Assert-ContainsOrdinal $Text 'IncrementDetailPreset();' "$Context Increment"
+        Assert-ContainsOrdinal $Text 'DecrementDetailPreset();' "$Context Decrement"
+        if ($Text.IndexOf('ToggleSetting', [StringComparison]::Ordinal) -ge 0 -or $Text.IndexOf('IncrementSetting', [StringComparison]::Ordinal) -ge 0 -or $Text.IndexOf('DecrementSetting', [StringComparison]::Ordinal) -ge 0) { throw "$Context must delegate only to detail preset methods." }
         Assert-ContainsOrdinal $Text 'this._visible = true;' "$Context visibility"
         return
     }

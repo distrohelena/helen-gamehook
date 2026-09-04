@@ -39,18 +39,45 @@ function Assert-RowShellContract {
         $rowPath = Join-Path $ScreenDirectory "frame_1\PlaceObject2_290_List_Template_$($depths[$index])\CLIPACTIONRECORD onClipEvent(load).as"
         if (-not (Test-Path -LiteralPath $rowPath)) { throw "Missing known row script $rowPath." }
         $rowText = Get-Content -LiteralPath $rowPath -Raw
-        if ($index -lt 14) {
+        if ($index -ge 2 -and $index -lt 14 -and $index -ne 4) {
+            $activeNames = if ($index -eq 3) { 'this.Names = new Array("Off","2x","4x","8x","16x");' } elseif ($index -eq 12) { 'this.Names = new Array("Off","Normal","High");' } else { 'this.Names = new Array("Off","On");' }
+            Assert-ContainsOrdinal $rowText $activeNames "row $($index + 1) names"
+            Assert-ContainsOrdinal $rowText "this.RowIndex = $($index + 1);" "row $($index + 1) row index"
+            Assert-ContainsOrdinal $rowText 'this.State = _parent.GraphicsOptionsController.GetDraftIndex(this.RowIndex);' "row $($index + 1) initial state"
+            Assert-ContainsOrdinal $rowText '_parent.GraphicsOptionsController.ToggleSetting(this.RowIndex);' "row $($index + 1) RunAction"
+            Assert-ContainsOrdinal $rowText '_parent.GraphicsOptionsController.IncrementSetting(this.RowIndex);' "row $($index + 1) Increment"
+            Assert-ContainsOrdinal $rowText '_parent.GraphicsOptionsController.DecrementSetting(this.RowIndex);' "row $($index + 1) Decrement"
+            Assert-ContainsOrdinal $rowText $labels[$index] "row $($index + 1) label"
+            Assert-ContainsOrdinal $rowText 'this._visible = true;' "row $($index + 1) visibility"
+        } elseif ($index -eq 4) {
+            Assert-ContainsOrdinal $rowText 'this.Names = new Array("Low","Medium","High","Very High","Custom");' 'row 5 names'
+            Assert-ContainsOrdinal $rowText 'this.State = -1;' 'row 5 state'
+            Assert-ContainsOrdinal $rowText 'this.Initial = -1;' 'row 5 initial state'
+            Assert-ContainsOrdinal $rowText 'this.Default = -1;' 'row 5 default state'
+            Assert-ContainsOrdinal $rowText 'GetDetailLevelDraftIndex();' 'row 5 draft state'
+            Assert-ContainsOrdinal $rowText 'GetDetailLevelInitialIndex();' 'row 5 initial state'
+            Assert-ContainsOrdinal $rowText 'ToggleDetailPreset();' 'row 5 RunAction'
+            Assert-ContainsOrdinal $rowText 'IncrementDetailPreset();' 'row 5 Increment'
+            Assert-ContainsOrdinal $rowText 'DecrementDetailPreset();' 'row 5 Decrement'
+            Assert-ContainsOrdinal $rowText 'this._visible = true;' 'row 5 visibility'
+            if ($rowText.IndexOf('ToggleSetting', [StringComparison]::Ordinal) -ge 0 -or $rowText.IndexOf('IncrementSetting', [StringComparison]::Ordinal) -ge 0 -or $rowText.IndexOf('DecrementSetting', [StringComparison]::Ordinal) -ge 0) { throw 'row 5 must delegate only to detail preset methods.' }
+        } elseif ($index -lt 2) {
             Assert-ContainsOrdinal $rowText 'this.Names = new Array("Not active");' "row $($index + 1)"
             if ($rowText -notmatch 'this\.(?:Label\.)?Label\.Text\.text\s*=\s*"' -and $rowText -notmatch 'this\.Label\.Text\.text\s*=\s*"') { throw "row $($index + 1) is missing its fixed label assignment." }
             Assert-ContainsOrdinal $rowText $labels[$index] "row $($index + 1) label"
             Assert-ContainsOrdinal $rowText 'this._visible = true;' "row $($index + 1) visibility"
+            foreach ($action in @('RunAction', 'Increment', 'Decrement', 'ShowPrompt')) {
+                if ((Get-ActionFunctionBody $rowText "this.$action") -ne '') { throw "row $($index + 1) action $action must be a no-op." }
+            }
         } else {
             Assert-ContainsOrdinal $rowText 'this.Names = new Array("");' 'row 15 names'
-            Assert-ContainsOrdinal $rowText 'this._visible = false;' 'row 15 visibility'
+            Assert-ContainsOrdinal $rowText 'Apply Changes' 'row 15 label'
             Assert-ContainsOrdinal $rowText 'this.ItemText.text = "";' 'row 15 value'
-        }
-        foreach ($action in @('RunAction', 'Increment', 'Decrement', 'ShowPrompt')) {
-            if ((Get-ActionFunctionBody $rowText "this.$action") -ne '') { throw "row $($index + 1) action $action must be a no-op." }
+            Assert-ContainsOrdinal $rowText 'this._visible = true;' 'row 15 visibility'
+            Assert-ContainsOrdinal $rowText '_parent.GraphicsOptionsController.ApplyChanges();' 'row 15 RunAction'
+            foreach ($action in @('Increment', 'Decrement', 'ShowPrompt')) {
+                if ((Get-ActionFunctionBody $rowText "this.$action") -ne '') { throw "row 15 action $action must be a no-op." }
+            }
         }
     }
 }
@@ -125,10 +152,10 @@ try {
     $menuText = Get-Content -LiteralPath $menuScriptPath -Raw
     Assert-ContainsOrdinal $menuText 'GotoScreen("OptionsGraphics")' 'Options menu script'
     Assert-ContainsOrdinal $menuText 'Graphics Options' 'Options menu script'
-    foreach ($required in @('Graphics Options', 'CancelScreen', 'ReturnFromScreen', 'FE_SetActiveScreenName","Graphics Options', 'GraphicsRow15._visible = false;', 'this.AddItem(GraphicsRow14,12,0,-1,-1);')) { Assert-ContainsOrdinal $screenText $required 'Options Graphics screen script' }
+    foreach ($required in @('Graphics Options', 'CancelScreen', 'ReturnFromScreen', 'FE_SetActiveScreenName","Graphics Options', 'GraphicsRow15._visible = true;', 'this.AddItem(GraphicsRow14,12,14,-1,-1);')) { Assert-ContainsOrdinal $screenText $required 'Options Graphics screen script' }
     Assert-RowShellContract -ScreenDirectory $screenDirectory.FullName
-    foreach ($forbidden in @('GraphicsController', 'ExitPrompt', 'Helen_', 'ApplyChanges', 'Unsaved graphics changes', 'Some changes require a restart')) { Assert-NotContainsOrdinal -Text $screenText -Token $forbidden -Context 'graphics shell screen script' }
-    foreach ($script in $scripts) { foreach ($forbidden in @('Helen_', 'ApplyChanges', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft')) { Assert-NotContainsOrdinal -Text (Get-Content -LiteralPath $script.FullName -Raw) -Token $forbidden -Context $script.Name } }
+    foreach ($forbidden in @('GraphicsController', 'ExitPrompt', 'Helen_', 'Unsaved graphics changes', 'Some changes require a restart')) { Assert-NotContainsOrdinal -Text $screenText -Token $forbidden -Context 'graphics shell screen script' }
+    foreach ($script in $scripts) { foreach ($forbidden in @('Helen_', 'GraphicsExitPrompt', 'loadBatmanGraphicsDraftIntoConfig', 'applyBatmanGraphicsDraft')) { Assert-NotContainsOrdinal -Text (Get-Content -LiteralPath $script.FullName -Raw) -Token $forbidden -Context $script.Name } }
 }
 finally {
     if (Test-Path -LiteralPath $verificationRoot) { Remove-Item -LiteralPath $verificationRoot -Recurse -Force }
