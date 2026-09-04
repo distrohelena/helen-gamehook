@@ -227,12 +227,13 @@ namespace
 
     /**
      * @brief Builds the sorted raw-value union accepted by every member of the Batman frontend control group.
-     * @return Complete sorted protocol union for VSync, MSAA, PhysX, Stereo, and all seven quality observers.
+     * @return Complete sorted 116-value protocol union for the eleven settings, legacy 4101-4106 state values, and apply/rollback signals.
      * @remarks Keeping this list explicit makes omissions or accidental protocol reuse fail in the grouped fixture rather than being hidden by per-observer mappings.
      */
     std::vector<int> CreateCompleteBatmanGroupedProtocolUnion()
     {
         return {
+            4101, 4102, 4103, 4104, 4105, 4106,
             4200, 4210, 4211, 4220, 4221, 4230, 4231, 4299,
             4300, 4310, 4311, 4312, 4313, 4314, 4320, 4321, 4322, 4323, 4324, 4330, 4331, 4332, 4333, 4334, 4399,
             4400, 4410, 4411, 4412, 4420, 4421, 4422, 4430, 4431, 4432, 4499,
@@ -243,7 +244,8 @@ namespace
             4630, 4631, 4632, 4633, 4634, 4635, 4636, 4639,
             4640, 4641, 4642, 4643, 4644, 4645, 4646, 4649,
             4650, 4651, 4652, 4653, 4654, 4655, 4656, 4659,
-            4660, 4661, 4662, 4663, 4664, 4665, 4666, 4669
+            4660, 4661, 4662, 4663, 4664, 4665, 4666, 4669,
+            4960, 4961, 4969, 4970, 4971, 4980, 4981, 4989, 4990, 4991
         };
     }
 
@@ -1851,7 +1853,7 @@ namespace
         const std::uintptr_t carrier_a_address = page_address + 128;
         const std::uintptr_t carrier_b_address = page_address + 256;
         const std::vector<int> protocol_union = CreateCompleteBatmanGroupedProtocolUnion();
-        Expect(protocol_union.size() == 100, "The complete Batman graphics protocol union omitted one or more raw values.");
+        Expect(protocol_union.size() == 116, "The complete Batman graphics protocol union omitted one or more raw values.");
         Expect(std::is_sorted(protocol_union.begin(), protocol_union.end()), "The complete Batman graphics protocol union was not sorted.");
         const std::vector<BatmanGroupedObserverProtocol> protocols = {
             { "graphicsObserverVsync", "vsync", 4200, { 4210, 4211 }, { 4220, 4221 }, { 4230, 4231 }, 4299, nullptr },

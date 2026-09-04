@@ -232,16 +232,98 @@ namespace
     }
 
     /**
-     * @brief Asserts one persisted boolean assignment in a decoded Batman INI document.
-     * @param text Decoded INI text whose assignment should be searched.
-     * @param key INI key whose boolean value is required.
+     * @brief Trims ASCII whitespace from one parsed INI token without changing its backing document.
+     * @param text Token view that should be normalized for exact section, key, or value comparison.
+     * @return View covering the token after leading and trailing ASCII whitespace is removed.
+     */
+    std::string_view TrimBatmanIniToken(std::string_view text)
+    {
+        while (!text.empty() && (text.front() == ' ' || text.front() == '\t'))
+        {
+            text.remove_prefix(1);
+        }
+
+        while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r'))
+        {
+            text.remove_suffix(1);
+        }
+
+        return text;
+    }
+
+    /**
+     * @brief Reads one exact section/key value from a decoded Batman INI document.
+     * @param text Decoded INI document whose section and key should be parsed.
+     * @param section Section header that must contain the requested key.
+     * @param key Exact key name whose value should be returned.
+     * @return Owning value when the exact section/key assignment exists; otherwise no value.
+     * @remarks Parsing section and key boundaries prevents stale values, similarly named keys, or assignments in another section from satisfying persistence checks.
+     */
+    std::optional<std::string> TryReadBatmanIniValue(std::string_view text, const char* section, const char* key)
+    {
+        std::string_view current_section;
+        std::size_t line_start = 0;
+        while (line_start <= text.size())
+        {
+            const std::size_t newline_position = text.find('\n', line_start);
+            const std::size_t line_end = newline_position == std::string_view::npos ? text.size() : newline_position;
+            std::string_view line = TrimBatmanIniToken(text.substr(line_start, line_end - line_start));
+
+            if (line.size() >= 2 && line.front() == '[' && line.back() == ']')
+            {
+                current_section = TrimBatmanIniToken(line.substr(1, line.size() - 2));
+            }
+            else if (current_section == section)
+            {
+                const std::size_t separator_position = line.find('=');
+                if (separator_position != std::string_view::npos &&
+                    TrimBatmanIniToken(line.substr(0, separator_position)) == key)
+                {
+                    return std::string(TrimBatmanIniToken(line.substr(separator_position + 1)));
+                }
+            }
+
+            if (newline_position == std::string_view::npos)
+            {
+                break;
+            }
+
+            line_start = newline_position + 1;
+        }
+
+        return std::nullopt;
+    }
+
+    /**
+     * @brief Asserts one exact parsed assignment in a decoded Batman INI document.
+     * @param text Decoded INI document whose section/key assignment should be checked.
+     * @param section Exact INI section containing the assignment.
+     * @param key Exact INI key whose value is required.
+     * @param expected Expected value after INI whitespace normalization.
+     * @param message Failure message reported when the exact assignment is absent or differs.
+     */
+    void ExpectBatmanIniValue(
+        std::string_view text,
+        const char* section,
+        const char* key,
+        std::string_view expected,
+        const char* message)
+    {
+        const std::optional<std::string> actual = TryReadBatmanIniValue(text, section, key);
+        Expect(actual.has_value() && *actual == expected, message);
+    }
+
+    /**
+     * @brief Asserts one exact parsed boolean assignment in a decoded Batman INI document.
+     * @param text Decoded INI document whose boolean assignment should be checked.
+     * @param key Exact SystemSettings key whose boolean value is required.
      * @param enabled Expected normalized boolean value, encoded as True when nonzero and False otherwise.
-     * @param message Failure message reported when the exact assignment is absent.
+     * @param message Failure message reported when the exact assignment is absent or differs.
      */
     void ExpectBatmanIniBoolean(std::string_view text, const char* key, int enabled, const char* message)
     {
-        const std::string expected_assignment = std::string(key) + "=" + (enabled != 0 ? "True" : "False");
-        Expect(text.find(expected_assignment) != std::string_view::npos, message);
+        const std::string expected_value = enabled != 0 ? "True" : "False";
+        ExpectBatmanIniValue(text, "SystemSettings", key, expected_value, message);
     }
 
     /**
@@ -489,8 +571,8 @@ namespace
     }
 
     /**
-     * @brief Builds a representative Batman graphics INI body that matches a very-high preset setup.
-     * @return Test INI text with every required Batman graphics key present.
+     * @brief Builds a deliberately conflicting generated Batman graphics INI body for launcher-authority tests.
+     * @return Test INI text with every required Batman graphics key present but quality/detail values distinct from UserEngine.ini.
      */
     std::string CreateBatmanGraphicsIniText()
     {
@@ -504,14 +586,14 @@ namespace
             "ResX=2560\r\n"
             "ResY=1440\r\n"
             "MaxMultisamples=4\r\n"
-            "DetailMode=2\r\n"
-            "Bloom=True\r\n"
-            "DynamicShadows=True\r\n"
-            "MotionBlur=True\r\n"
-            "Distortion=True\r\n"
-            "FogVolumes=True\r\n"
-            "DisableSphericalHarmonicLights=False\r\n"
-            "AmbientOcclusion=True\r\n"
+            "DetailMode=0\r\n"
+            "Bloom=False\r\n"
+            "DynamicShadows=False\r\n"
+            "MotionBlur=False\r\n"
+            "Distortion=False\r\n"
+            "FogVolumes=False\r\n"
+            "DisableSphericalHarmonicLights=True\r\n"
+            "AmbientOcclusion=False\r\n"
             "Stereo=False\r\n";
     }
 
@@ -891,6 +973,30 @@ void RunCommandExecutorTests()
         const std::filesystem::path batman_user_ini_path = GetSiblingBatmanUserEngineIniPath(batman_ini_path);
         WriteAllText(batman_ini_path, CreateBatmanGraphicsIniText());
         WriteAsciiAsUtf16LittleEndianText(batman_user_ini_path, CreateBatmanLauncherOwnedGraphicsIniText(true));
+        const BatmanQualityLeaves generated_fixture_quality = {
+            .Bloom = 0,
+            .DynamicShadows = 0,
+            .MotionBlur = 0,
+            .Distortion = 0,
+            .FogVolumes = 0,
+            .SphericalHarmonicLighting = 0,
+            .AmbientOcclusion = 0
+        };
+        const BatmanQualityLeaves launcher_fixture_quality = {
+            .Bloom = 1,
+            .DynamicShadows = 1,
+            .MotionBlur = 1,
+            .Distortion = 1,
+            .FogVolumes = 1,
+            .SphericalHarmonicLighting = 1,
+            .AmbientOcclusion = 1
+        };
+        const std::string generated_fixture_text = ReadAllText(batman_ini_path);
+        const std::string launcher_fixture_text = ReadAsciiFromUtf16LittleEndianText(batman_user_ini_path);
+        ExpectBatmanPersistedQualityLeaves(generated_fixture_text, generated_fixture_quality);
+        ExpectBatmanPersistedQualityLeaves(launcher_fixture_text, launcher_fixture_quality);
+        ExpectBatmanIniValue(generated_fixture_text, "SystemSettings", "DetailMode", "0", "Generated Batman fixture DetailMode was not deliberately distinct.");
+        ExpectBatmanIniValue(launcher_fixture_text, "SystemSettings", "DetailMode", "2", "Launcher Batman fixture DetailMode was not deliberately distinct.");
 
         helen::CommandDispatcher batman_dispatcher;
         RegisterBatmanGraphicsConfigKeys(batman_dispatcher);
@@ -967,6 +1073,8 @@ void RunCommandExecutorTests()
         SetBatmanQualityLeaves(batman_dispatcher, custom_leaves);
         Expect(batman_executor.RunCommand("syncBatmanGraphicsDetailLevel"), "Batman detail-sync command unexpectedly failed.");
         Expect(batman_dispatcher.TryGetInt("detailLevel") == 4, "Batman detail-sync did not derive the Custom detail state.");
+        const std::string pre_custom_engine_ini_text = ReadAllText(batman_ini_path);
+        ExpectBatmanIniValue(pre_custom_engine_ini_text, "SystemSettings", "DetailMode", "0", "Custom Batman apply fixture did not start from the deliberate generated DetailMode value.");
         Expect(batman_executor.RunCommand("applyBatmanGraphicsDraft"), "Batman graphics apply command failed for the complete custom quality draft.");
         Expect(batman_dispatcher.TryGetInt("detailLevel") == 4, "Batman graphics apply did not preserve the Custom detail state.");
         ExpectBatmanQualityLeaves(batman_dispatcher, custom_leaves);
