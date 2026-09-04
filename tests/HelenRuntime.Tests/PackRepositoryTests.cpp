@@ -1077,6 +1077,76 @@ void RunPackRepositoryTests()
             observer_hash,
             dynamic_unknown_member_hooks);
 
+        const std::string dynamic_command_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "      \"pollIntervalMs\": 50,",
+            "      \"pollIntervalMs\": 50,\n"
+            "      \"command\": \"unused\",");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-command-pack",
+            "dynamic-command-build",
+            "DynamicCommandGame.exe",
+            5026,
+            observer_hash,
+            dynamic_command_hooks);
+
+        const std::string dynamic_string_target_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "      \"pollIntervalMs\": 50,",
+            "      \"pollIntervalMs\": 50,\n"
+            "      \"targetConfigKey\": \"unused\",");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-string-target-pack",
+            "dynamic-string-target-build",
+            "DynamicStringTargetGame.exe",
+            5027,
+            observer_hash,
+            dynamic_string_target_hooks);
+
+        const std::string dynamic_integer_target_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "      \"pollIntervalMs\": 50,",
+            "      \"pollIntervalMs\": 50,\n"
+            "      \"targetConfigKey\": 17,");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-integer-target-pack",
+            "dynamic-integer-target-build",
+            "DynamicIntegerTargetGame.exe",
+            5028,
+            observer_hash,
+            dynamic_integer_target_hooks);
+
+        const std::string dynamic_null_target_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "      \"pollIntervalMs\": 50,",
+            "      \"pollIntervalMs\": 50,\n"
+            "      \"targetConfigKey\": null,");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-null-target-pack",
+            "dynamic-null-target-build",
+            "DynamicNullTargetGame.exe",
+            5029,
+            observer_hash,
+            dynamic_null_target_hooks);
+
+        const std::string dynamic_array_target_hooks = ReplaceObserverManifestText(
+            dynamic_response_observer_hooks,
+            "      \"pollIntervalMs\": 50,",
+            "      \"pollIntervalMs\": 50,\n"
+            "      \"targetConfigKey\": [],");
+        WriteObserverPackFixture(
+            packs_root,
+            "dynamic-array-target-pack",
+            "dynamic-array-target-build",
+            "DynamicArrayTargetGame.exe",
+            5030,
+            observer_hash,
+            dynamic_array_target_hooks);
+
         const std::string_view rejected_dynamic_executable_names[] = {
             "DynamicEmptyProviderGame.exe",
             "DynamicEmptyRequestsGame.exe",
@@ -1121,6 +1191,37 @@ void RunPackRepositoryTests()
                 rejected_dynamic_file_sizes[index],
                 observer_hash);
             Expect(!rejected_dynamic_pack.has_value(), rejected_dynamic_messages[index]);
+        }
+
+        const std::string_view rejected_dynamic_shape_executable_names[] = {
+            "DynamicCommandGame.exe",
+            "DynamicStringTargetGame.exe",
+            "DynamicIntegerTargetGame.exe",
+            "DynamicNullTargetGame.exe",
+            "DynamicArrayTargetGame.exe"
+        };
+        const std::uintmax_t rejected_dynamic_shape_file_sizes[] = {
+            5026,
+            5027,
+            5028,
+            5029,
+            5030
+        };
+        const char* rejected_dynamic_shape_messages[] = {
+            "Pack repository accepted a dynamic observer with a command member.",
+            "Pack repository accepted a dynamic observer with a target config string.",
+            "Pack repository accepted a dynamic observer with a target config integer.",
+            "Pack repository accepted a dynamic observer with a null target config.",
+            "Pack repository accepted a dynamic observer with an array target config."
+        };
+        for (std::size_t index = 0; index < std::size(rejected_dynamic_shape_executable_names); ++index)
+        {
+            const std::optional<helen::LoadedBuildPack> rejected_dynamic_shape_pack = repository.LoadForExecutable(
+                packs_root,
+                std::string(rejected_dynamic_shape_executable_names[index]),
+                rejected_dynamic_shape_file_sizes[index],
+                observer_hash);
+            Expect(!rejected_dynamic_shape_pack.has_value(), rejected_dynamic_shape_messages[index]);
         }
 
         WriteObserverPackFixture(

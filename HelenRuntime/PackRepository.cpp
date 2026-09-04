@@ -1153,10 +1153,16 @@ namespace
      */
     bool ParseStateObserver(const helen::JsonValue& value, helen::MemoryStateObserverDefinition& definition)
     {
-        definition.Id = TryGetString(FindObjectMember(value, "id")).value_or("");
-        definition.TargetConfigKey = TryGetString(FindObjectMember(value, "targetConfigKey")).value_or("");
+        const helen::JsonValue* target_config_key_value = FindObjectMember(value, "targetConfigKey");
         const helen::JsonValue* dynamic_response_value = FindObjectMember(value, "dynamicResponse");
         const helen::JsonValue* command_value = FindObjectMember(value, "command");
+        if (dynamic_response_value != nullptr && (target_config_key_value != nullptr || command_value != nullptr))
+        {
+            return false;
+        }
+
+        definition.Id = TryGetString(FindObjectMember(value, "id")).value_or("");
+        definition.TargetConfigKey = TryGetString(target_config_key_value).value_or("");
         if (command_value != nullptr)
         {
             definition.CommandId = TryGetString(command_value);
