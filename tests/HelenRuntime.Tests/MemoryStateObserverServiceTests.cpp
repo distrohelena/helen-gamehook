@@ -301,6 +301,20 @@ namespace
             Expect(service.PollOnce(), "Exact pending dynamic response unexpectedly invalidated the carrier.");
             Expect(service.GetDebugViews()[0].CachedAddress == candidate_address, "Exact pending dynamic response did not preserve the cached carrier.");
 
+            ConfigureDynamicResponseCarrier(candidate_address, -32771);
+            Expect(service.PollOnce(), "Corrupted dynamic ordinal poll unexpectedly failed.");
+            Expect(service.GetDebugViews()[0].CachedAddress == 0, "Corrupted dynamic ordinal was accepted as the pending response.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 4700);
+            Expect(service.PollOnce(), "Dynamic observer did not recover after corrupted ordinal invalidation.");
+            Expect(callback_requests.size() == 2, "Dynamic observer did not perform a fresh provider call after corrupted ordinal invalidation.");
+            Expect(ReadInt32(candidate_address) == -3, "Dynamic observer recovery after corrupted ordinal did not encode the response.");
+
+            ConfigureDynamicResponseCarrier(candidate_address, 4700);
+            Expect(service.PollOnce(), "Same-request dynamic replay unexpectedly failed.");
+            Expect(callback_requests.size() == 3, "A same-request replay reused stale transient state instead of invoking the provider.");
+            Expect(ReadInt32(candidate_address) == -3, "Same-request dynamic replay did not encode the response.");
+
             fail_next_request = true;
             ConfigureDynamicResponseCarrier(candidate_address, 4701);
             Expect(service.PollOnce(), "Dynamic request failure response unexpectedly failed.");
@@ -2788,6 +2802,59 @@ namespace
         service.Stop();
         Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release grouped dynamic response allocation.");
     }
+
+    /**
+     * @brief Verifies grouped transient provenance rejects a response whose encoded ordinal disagrees with the current observer definition.
+     */
+    void RunGroupedDynamicResponseProvenanceTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate memory for grouped dynamic provenance tests.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t candidate_address = page_address + 64;
+        ConfigureDynamicResponseCarrier(candidate_address, 4700);
+        helen::MemoryStateObserverDefinition origin_definition =
+            CreateDynamicResponseObserverDefinition(page_address, page_address + page_size, "displayModes");
+        helen::MemoryStateObserverDefinition mismatched_definition =
+            CreateDynamicResponseObserverDefinition(page_address, page_address + page_size, "displayModes");
+        mismatched_definition.DynamicResponseRequestValues = { 4701, 4700, 4702 };
+        std::vector<int> callback_requests;
+        helen::MemoryStateObserverService service(
+            { origin_definition, mismatched_definition },
+            {},
+            {},
+            [&callback_requests](const std::string&, int)
+            {
+                callback_requests.push_back(1);
+                return std::optional<int>(3);
+            });
+
+        try
+        {
+            Expect(service.PollOnce(), "Grouped provenance setup poll unexpectedly failed.");
+            Expect(ReadInt32(candidate_address) == -3, "Grouped provenance setup did not write the origin response.");
+            Expect(callback_requests.size() == 1, "Mismatched grouped observer consumed the origin response.");
+            const std::vector<helen::MemoryStateObserverDebugView> views = service.GetDebugViews();
+            Expect(views[0].CachedAddress == 0 && views[1].CachedAddress == 0, "Mismatched grouped ordinal was accepted without matching request provenance.");
+        }
+        catch (...)
+        {
+            service.Stop();
+            if (allocation != nullptr)
+            {
+                VirtualFree(allocation, 0, MEM_RELEASE);
+            }
+
+            throw;
+        }
+
+        service.Stop();
+        Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release grouped dynamic provenance allocation.");
+    }
 }
 
 /**
@@ -2816,6 +2883,7 @@ void RunMemoryStateObserverServiceTests()
     RunObserverPollPassSerializationTest();
     RunDynamicResponseTransportTest();
     RunGroupedDynamicResponseTransportTest();
+    RunGroupedDynamicResponseProvenanceTest();
     RunDynamicResponseOffsetAndBoundsTest();
     RunDynamicResponseOrdinalOverflowTest();
     RunDynamicResponseWriteFailureCleanupTest();

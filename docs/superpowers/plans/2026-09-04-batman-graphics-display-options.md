@@ -269,6 +269,8 @@ MemoryStateObserverService(
 
 Store one transient raw response per address group and per ungrouped observer. Initial scanning continues to call only the static `IsAddressMatchValue`. Cached validation accepts the exact transient value only while its originating dynamic request is pending and all structural checks still pass.
 
+Retain the originating raw request explicitly with each transient response and address. The response remains transient until a new positive request overwrites it, provider failure, address/structure invalidation, or `Stop()`; do not add an arbitrary time expiry that could race shell reads.
+
 When a declared dynamic request is read:
 
 1. Call the callback with the declared provider and raw request.

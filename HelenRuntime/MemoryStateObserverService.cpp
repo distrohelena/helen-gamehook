@@ -336,6 +336,37 @@ namespace
     }
 
     /**
+     * @brief Decodes the request value represented by an ordinal-tagged negative dynamic response.
+     * @param definition Current observer definition whose ordered request list supplies the ordinal.
+     * @param encoded_response Negative raw response read from the carrier.
+     * @param decoded_request Receives the request value represented by the response.
+     * @return True when the response has a valid scalar magnitude and in-range request ordinal; otherwise false.
+     */
+    bool TryDecodeDynamicResponseRequest(
+        const helen::MemoryStateObserverDefinition& definition,
+        int encoded_response,
+        int& decoded_request) noexcept
+    {
+        if (encoded_response >= 0)
+        {
+            return false;
+        }
+
+        const long long magnitude = -static_cast<long long>(encoded_response);
+        constexpr long long response_stride = 32768;
+        const long long ordinal = (magnitude - 1) / response_stride;
+        const long long scalar = magnitude - ordinal * response_stride;
+        if (magnitude <= 0 || scalar <= 0 || scalar > 32767 || ordinal < 0 ||
+            static_cast<unsigned long long>(ordinal) >= definition.DynamicResponseRequestValues.size())
+        {
+            return false;
+        }
+
+        decoded_request = definition.DynamicResponseRequestValues[static_cast<std::size_t>(ordinal)];
+        return true;
+    }
+
+    /**
      * @brief Returns the smallest positive poll interval declared by the active observer set.
      * @param definitions Observers whose timed poll intervals should be examined.
      * @return Smallest declared poll interval in milliseconds.
@@ -418,6 +449,7 @@ namespace helen
         pending_transaction_requests_.assign(definitions_.size(), std::nullopt);
         pending_transaction_addresses_.assign(definitions_.size(), std::nullopt);
         transient_dynamic_responses_.assign(definitions_.size(), std::nullopt);
+        transient_dynamic_requests_.assign(definitions_.size(), std::nullopt);
         transient_dynamic_addresses_.assign(definitions_.size(), std::nullopt);
 
         for (const MemoryStateObserverDefinition& definition : definitions_)
@@ -489,8 +521,11 @@ namespace helen
 
         std::lock_guard<std::mutex> lock(mutex_);
         std::fill(transient_dynamic_responses_.begin(), transient_dynamic_responses_.end(), std::nullopt);
+        std::fill(transient_dynamic_requests_.begin(), transient_dynamic_requests_.end(), std::nullopt);
         std::fill(transient_dynamic_addresses_.begin(), transient_dynamic_addresses_.end(), std::nullopt);
         grouped_transient_dynamic_responses_.clear();
+        grouped_transient_dynamic_requests_.clear();
+        grouped_transient_dynamic_observers_.clear();
         grouped_transient_dynamic_addresses_.clear();
     }
 
@@ -613,6 +648,7 @@ namespace helen
                 pending_transaction_requests_[observer_index].reset();
                 pending_transaction_addresses_[observer_index].reset();
                 transient_dynamic_responses_[observer_index].reset();
+                transient_dynamic_requests_[observer_index].reset();
                 transient_dynamic_addresses_[observer_index].reset();
             }
 
@@ -624,6 +660,8 @@ namespace helen
         if (previous_grouped_address != grouped_addresses_.end() && previous_grouped_address->second != address)
         {
             grouped_transient_dynamic_responses_.erase(*address_group);
+            grouped_transient_dynamic_requests_.erase(*address_group);
+            grouped_transient_dynamic_observers_.erase(*address_group);
             grouped_transient_dynamic_addresses_.erase(*address_group);
             for (std::size_t matching_index = 0; matching_index < definitions_.size(); ++matching_index)
             {
@@ -655,12 +693,15 @@ namespace helen
             pending_transaction_requests_[observer_index].reset();
             pending_transaction_addresses_[observer_index].reset();
             transient_dynamic_responses_[observer_index].reset();
+            transient_dynamic_requests_[observer_index].reset();
             transient_dynamic_addresses_[observer_index].reset();
             return;
         }
 
         grouped_addresses_.erase(*address_group);
         grouped_transient_dynamic_responses_.erase(*address_group);
+        grouped_transient_dynamic_requests_.erase(*address_group);
+        grouped_transient_dynamic_observers_.erase(*address_group);
         grouped_transient_dynamic_addresses_.erase(*address_group);
         for (std::size_t matching_index = 0; matching_index < definitions_.size(); ++matching_index)
         {
@@ -768,17 +809,48 @@ namespace helen
         if (address_group.has_value())
         {
             const auto response = grouped_transient_dynamic_responses_.find(*address_group);
+            const auto request = grouped_transient_dynamic_requests_.find(*address_group);
+            const auto origin_observer = grouped_transient_dynamic_observers_.find(*address_group);
             const auto response_address = grouped_transient_dynamic_addresses_.find(*address_group);
-            return response != grouped_transient_dynamic_responses_.end() &&
-                response_address != grouped_transient_dynamic_addresses_.end() &&
-                response->second == raw_value &&
-                response_address->second == address;
+            if (response == grouped_transient_dynamic_responses_.end() ||
+                request == grouped_transient_dynamic_requests_.end() ||
+                origin_observer == grouped_transient_dynamic_observers_.end() ||
+                response_address == grouped_transient_dynamic_addresses_.end() ||
+                response->second != raw_value ||
+                response_address->second != address ||
+                origin_observer->second >= definitions_.size())
+            {
+                return false;
+            }
+
+            int origin_request = 0;
+            if (!TryDecodeDynamicResponseRequest(definitions_[origin_observer->second], raw_value, origin_request) ||
+                origin_request != request->second ||
+                !IsDynamicResponseRequestValue(definitions_[origin_observer->second], origin_request))
+            {
+                return false;
+            }
+
+            if (!definitions_[observer_index].DynamicResponseProviderId.has_value())
+            {
+                return true;
+            }
+
+            int current_request = 0;
+            return TryDecodeDynamicResponseRequest(definitions_[observer_index], raw_value, current_request) &&
+                current_request == request->second &&
+                IsDynamicResponseRequestValue(definitions_[observer_index], current_request);
         }
 
+        int decoded_request = 0;
         return transient_dynamic_responses_[observer_index].has_value() &&
+            transient_dynamic_requests_[observer_index].has_value() &&
             transient_dynamic_addresses_[observer_index].has_value() &&
             *transient_dynamic_responses_[observer_index] == raw_value &&
-            *transient_dynamic_addresses_[observer_index] == address;
+            *transient_dynamic_addresses_[observer_index] == address &&
+            TryDecodeDynamicResponseRequest(definitions_[observer_index], raw_value, decoded_request) &&
+            decoded_request == *transient_dynamic_requests_[observer_index] &&
+            IsDynamicResponseRequestValue(definitions_[observer_index], decoded_request);
     }
 
     void MemoryStateObserverService::ClearDynamicTransientResponse(std::size_t observer_index)
@@ -788,17 +860,21 @@ namespace helen
         if (address_group.has_value())
         {
             grouped_transient_dynamic_responses_.erase(*address_group);
+            grouped_transient_dynamic_requests_.erase(*address_group);
+            grouped_transient_dynamic_observers_.erase(*address_group);
             grouped_transient_dynamic_addresses_.erase(*address_group);
             return;
         }
 
         transient_dynamic_responses_[observer_index].reset();
+        transient_dynamic_requests_[observer_index].reset();
         transient_dynamic_addresses_[observer_index].reset();
     }
 
     void MemoryStateObserverService::RecordDynamicTransientResponse(
         std::size_t observer_index,
         std::uintptr_t address,
+        int raw_request_value,
         int response_value)
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -806,11 +882,14 @@ namespace helen
         if (address_group.has_value())
         {
             grouped_transient_dynamic_responses_[*address_group] = response_value;
+            grouped_transient_dynamic_requests_[*address_group] = raw_request_value;
+            grouped_transient_dynamic_observers_[*address_group] = observer_index;
             grouped_transient_dynamic_addresses_[*address_group] = address;
             return;
         }
 
         transient_dynamic_responses_[observer_index] = response_value;
+        transient_dynamic_requests_[observer_index] = raw_request_value;
         transient_dynamic_addresses_[observer_index] = address;
     }
 
@@ -1108,7 +1187,7 @@ namespace helen
                 return false;
             }
 
-            RecordDynamicTransientResponse(observer_index, *resolved_address, response_value);
+            RecordDynamicTransientResponse(observer_index, *resolved_address, *raw_value, response_value);
             CacheResolvedAddress(observer_index, *resolved_address);
             {
                 std::lock_guard<std::mutex> lock(mutex_);

@@ -196,11 +196,13 @@ namespace helen
          * @brief Records one successfully written dynamic response for an observer or its address group.
          * @param observer_index Zero-based observer index that originated the response.
          * @param address Carrier base address receiving the response.
+         * @param raw_request_value Positive request value that originated the response.
          * @param response_value Negative raw response written to the carrier.
          */
         void RecordDynamicTransientResponse(
             std::size_t observer_index,
             std::uintptr_t address,
+            int raw_request_value,
             int response_value);
 
         /** @brief Declared observers evaluated by this service. */
@@ -223,10 +225,16 @@ namespace helen
         MemoryStateObserverDynamicResponseCallback dynamic_response_callback_;
         /** @brief Exact negative response retained for each ungrouped observer until a new request or invalidation arrives. */
         std::vector<std::optional<int>> transient_dynamic_responses_;
+        /** @brief Raw dynamic request that originated each ungrouped transient response. */
+        std::vector<std::optional<int>> transient_dynamic_requests_;
         /** @brief Carrier address paired with each ungrouped transient dynamic response. */
         std::vector<std::optional<std::uintptr_t>> transient_dynamic_addresses_;
         /** @brief Exact negative response retained once for each grouped observer address group. */
         std::unordered_map<std::string, int> grouped_transient_dynamic_responses_;
+        /** @brief Raw dynamic request that originated each grouped transient response. */
+        std::unordered_map<std::string, int> grouped_transient_dynamic_requests_;
+        /** @brief Dynamic observer index that originated each grouped transient response. */
+        std::unordered_map<std::string, std::size_t> grouped_transient_dynamic_observers_;
         /** @brief Carrier address paired with each grouped transient dynamic response. */
         std::unordered_map<std::string, std::uintptr_t> grouped_transient_dynamic_addresses_;
         /** @brief Protects debug views, cached addresses, and thread start-stop state. */
