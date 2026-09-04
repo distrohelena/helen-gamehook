@@ -389,6 +389,32 @@ function Assert-CurrentGraphicsSourceProvenance {
     if ($allowListCount -ne 21) { throw "Current shell builder source allow-list must contain exactly 21 files, found $allowListCount." }
 }
 
+function Assert-BatmanRuntimeDisplayProviderContract {
+    <# Validate the runtime provider as a multi-part source contract so lifetime and snapshot semantics cannot drift independently. #>
+    param([Parameter(Mandatory = $true)] [string]$RuntimeSourcePath)
+    if (-not (Test-Path -LiteralPath $RuntimeSourcePath -PathType Leaf)) { throw "Batman runtime source was not found: $RuntimeSourcePath" }
+    $source = Get-Content -LiteralPath $RuntimeSourcePath -Raw
+    $displayConstruction = $source.IndexOf('g_batman_display_mode_service = std::make_unique<helen::BatmanDisplayModeService>()', [StringComparison]::Ordinal)
+    $graphicsConstruction = $source.IndexOf('g_batman_graphics_config_service = std::make_unique<helen::BatmanGraphicsConfigService>', [StringComparison]::Ordinal)
+    if ($displayConstruction -lt 0 -or $graphicsConstruction -lt 0 -or $displayConstruction -ge $graphicsConstruction) { throw 'Batman display service must be constructed before the graphics config service.' }
+    $callbackMatch = [regex]::Match($source, '(?s)const\s+helen::MemoryStateObserverDynamicResponseCallback\s+dynamic_response_callback\s*=\s*(?<body>.*?);\s*g_build_runtime_coordinator\s*=')
+    if (-not $callbackMatch.Success) { throw 'Batman runtime dynamic provider callback could not be isolated.' }
+    $callback = $callbackMatch.Groups['body'].Value
+    foreach ($required in @('provider_id != "batmanDisplayModes"', 'raw_request == 4700', 'TryGetIntPair', 'display_mode_service.Refresh()', 'raw_request == 4897 || raw_request == 4898', 'QueryCatalogScalar')) {
+        Assert-ContainsOrdinal -Text $callback -Token $required -Context "Batman runtime dynamic provider callback ($required)"
+    }
+    if (([regex]::Matches($callback, 'display_catalog_current_pair->reset\(\)')).Count -lt 2 -or $source.IndexOf('std::make_shared<std::optional<helen::CommandIntPair>>()', [StringComparison]::Ordinal) -lt 0) { throw 'Batman runtime dynamic provider must clear the owned current-pair snapshot on refresh and after the height response.' }
+    $coordinatorMatch = [regex]::Match($source, '(?s)g_build_runtime_coordinator\s*=\s*std::make_unique<helen::BuildRuntimeCoordinator>\(.*?\);')
+    if (-not $coordinatorMatch.Success -or $coordinatorMatch.Value.IndexOf('dynamic_response_callback', [StringComparison]::Ordinal) -lt 0) { throw 'Batman runtime coordinator must receive the dynamic provider callback.' }
+    $resetMatch = [regex]::Match($source, '(?s)void ResetPackRuntimeState\(\).*?\n    \}')
+    if (-not $resetMatch.Success) { throw 'Batman runtime pack reset function could not be isolated.' }
+    $reset = $resetMatch.Value
+    $coordinatorReset = $reset.IndexOf('g_build_runtime_coordinator.reset()', [StringComparison]::Ordinal)
+    $graphicsReset = $reset.IndexOf('g_batman_graphics_config_service.reset()', [StringComparison]::Ordinal)
+    $displayReset = $reset.IndexOf('g_batman_display_mode_service.reset()', [StringComparison]::Ordinal)
+    if ($coordinatorReset -lt 0 -or $graphicsReset -lt 0 -or $displayReset -lt 0 -or $coordinatorReset -ge $graphicsReset -or $graphicsReset -ge $displayReset) { throw 'Batman runtime reset must stop the coordinator before graphics and display services.' }
+}
+
 function Get-HgdeltaFunctionBody {
     param(
         [Parameter(Mandatory = $true)] [string]$Text,
@@ -767,7 +793,9 @@ foreach ($requiredPath in @($packJsonPath, $buildJsonPath, $bindingsJsonPath, $c
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Batman graphics-options package input not found: $requiredPath" }
 }
 $rebuildSourcePath = Join-Path $PSScriptRoot 'Rebuild-BatmanGraphicsOptionsExperiment.ps1'
+$runtimeSourcePath = Join-Path (Split-Path -Parent $PSScriptRoot | Split-Path -Parent | Split-Path -Parent) 'HelenGameHook\HelenGameHook.cpp'
 Assert-RebuildAtomicSourceContract -ScriptPath $rebuildSourcePath
+Assert-BatmanRuntimeDisplayProviderContract -RuntimeSourcePath $runtimeSourcePath
 Assert-CurrentGraphicsSourceProvenance -RebuildPath $rebuildSourcePath -ShellTemplatePath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsShellScriptTemplates.cs') -ShellBuilderPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsAssetBuilder.cs') -BuilderProgramPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\Program.cs') -XmlPatcherPath (Join-Path $BuilderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsXmlPatcher.cs')
 Assert-AtomicPublicationRegression
 Assert-ExactPackFileSet -Root $packRoot -BuildDirectoryName 'steam-goty-1.0'
@@ -787,15 +815,16 @@ Assert-StrictJsonStringEquals -Value $pack.targets[0].gameId -Expected 'batman-a
 Assert-StrictJsonArray -Value $pack.targets[0].executables -Context 'pack.json target executables'
 if (@($pack.targets[0].executables).Count -ne 1) { throw 'pack.json target must contain exactly one executable.' }
 Assert-StrictJsonStringEquals -Value $pack.targets[0].executables[0] -Expected 'ShippingPC-BmGame.exe' -Context 'pack.json target executable'
-$expectedConfigKeys = @('fullscreen', 'resolutionWidth', 'resolutionHeight', 'vsync', 'msaa', 'detailLevel', 'bloom', 'dynamicShadows', 'motionBlur', 'distortion', 'fogVolumes', 'sphericalHarmonicLighting', 'ambientOcclusion', 'physx', 'stereo', 'applySignal', 'rollbackSignal')
+$expectedConfigKeys = @('fullscreen', 'resolutionWidth', 'resolutionHeight', 'resolutionModeIndex', 'vsync', 'msaa', 'detailLevel', 'bloom', 'dynamicShadows', 'motionBlur', 'distortion', 'fogVolumes', 'sphericalHarmonicLighting', 'ambientOcclusion', 'physx', 'stereo', 'applySignal', 'rollbackSignal')
 Assert-StrictJsonArray -Value $pack.config -Context 'pack.json config'
-if (@($pack.config).Count -ne $expectedConfigKeys.Count) { throw "pack.json config must contain exactly $($expectedConfigKeys.Count) entries." }
+if (@($pack.config).Count -ne $expectedConfigKeys.Count) { throw "pack.json config must contain exactly $($expectedConfigKeys.Count) entries; the checked-in package is stale for the Task 8 display protocol." }
 for ($index = 0; $index -lt $expectedConfigKeys.Count; $index++) {
     $configEntry = $pack.config[$index]
     Assert-ExactOrderedProperties -Object $configEntry -Names @('key', 'type', 'defaultValue') -Context "pack.json config entry $($index + 1)"
     Assert-StrictJsonStringEquals -Value $configEntry.key -Expected $expectedConfigKeys[$index] -Context "pack.json config entry $($index + 1) key"
     Assert-StrictJsonStringEquals -Value $configEntry.type -Expected 'int' -Context "pack.json config entry $($index + 1) type"
-    Assert-StrictJsonIntegerEquals -Value $configEntry.defaultValue -Expected 0 -Context "pack.json config entry $($index + 1) defaultValue"
+    $expectedDefault = if ($configEntry.key -eq 'resolutionModeIndex') { -1 } else { 0 }
+    Assert-StrictJsonIntegerEquals -Value $configEntry.defaultValue -Expected $expectedDefault -Context "pack.json config entry $($index + 1) defaultValue"
 }
 Assert-StrictJsonArray -Value $pack.builds -Context 'pack.json builds'
 if (@($pack.builds).Count -ne 1) { throw 'pack.json build list must contain exactly one build.' }
@@ -820,12 +849,14 @@ if (@($bindings.bindings).Count -ne 0) { throw 'bindings.json must contain zero 
 $commands = Get-Content -LiteralPath $commandsJsonPath -Raw | ConvertFrom-Json
 Assert-ExactProperties -Object $commands -Names @('commands') -Context 'commands.json'
 Assert-StrictJsonArray -Value $commands.commands -Context 'commands.json commands'
-if (@($commands.commands).Count -ne 3) { throw 'commands.json must contain exactly three commands.' }
+if (@($commands.commands).Count -ne 4) { throw 'commands.json must contain exactly four commands.' }
 $loadCommand = $commands.commands[0]
 $syncCommand = $commands.commands[1]
-$applyCommand = $commands.commands[2]
+$resolutionCommand = $commands.commands[2]
+$applyCommand = $commands.commands[3]
 Assert-ExactOrderedProperties -Object $loadCommand -Names @('id', 'name', 'steps') -Context 'commands.json load command'
 Assert-ExactOrderedProperties -Object $syncCommand -Names @('id', 'name', 'steps') -Context 'commands.json sync command'
+Assert-ExactOrderedProperties -Object $resolutionCommand -Names @('id', 'name', 'steps') -Context 'commands.json resolution command'
 Assert-ExactOrderedProperties -Object $applyCommand -Names @('id', 'name', 'steps') -Context 'commands.json apply command'
 Assert-StrictJsonStringEquals -Value $loadCommand.id -Expected 'loadBatmanGraphicsDraftIntoConfig' -Context 'commands.json load command id'
 Assert-StrictJsonStringEquals -Value $loadCommand.name -Expected 'Load Batman Graphics Draft Into Config' -Context 'commands.json load command name'
@@ -835,16 +866,22 @@ Assert-StrictJsonStringEquals -Value $syncCommand.id -Expected 'syncBatmanGraphi
 Assert-StrictJsonStringEquals -Value $syncCommand.name -Expected 'Sync Batman Graphics Detail Level' -Context 'commands.json sync command name'
 Assert-StrictJsonArray -Value $syncCommand.steps -Context 'commands.json sync steps'
 if (@($syncCommand.steps).Count -ne 1) { throw 'commands.json sync command must contain exactly one step.' }
+Assert-StrictJsonStringEquals -Value $resolutionCommand.id -Expected 'setBatmanGraphicsResolutionMode' -Context 'commands.json resolution command id'
+Assert-StrictJsonStringEquals -Value $resolutionCommand.name -Expected 'Set Batman Graphics Resolution Mode' -Context 'commands.json resolution command name'
+Assert-StrictJsonArray -Value $resolutionCommand.steps -Context 'commands.json resolution steps'
+if (@($resolutionCommand.steps).Count -ne 1) { throw 'commands.json resolution command must contain exactly one step.' }
 Assert-StrictJsonStringEquals -Value $applyCommand.id -Expected 'applyBatmanGraphicsDraft' -Context 'commands.json apply command id'
 Assert-StrictJsonStringEquals -Value $applyCommand.name -Expected 'Apply Batman Graphics Draft' -Context 'commands.json apply command name'
 Assert-StrictJsonArray -Value $applyCommand.steps -Context 'commands.json apply steps'
 if (@($applyCommand.steps).Count -ne 2) { throw 'commands.json apply command must contain exactly two steps.' }
 Assert-ExactOrderedProperties -Object $loadCommand.steps[0] -Names @('kind') -Context 'commands.json load step'
 Assert-ExactOrderedProperties -Object $syncCommand.steps[0] -Names @('kind') -Context 'commands.json sync step'
+Assert-ExactOrderedProperties -Object $resolutionCommand.steps[0] -Names @('kind') -Context 'commands.json resolution step'
 Assert-ExactOrderedProperties -Object $applyCommand.steps[0] -Names @('kind') -Context 'commands.json apply config step'
 Assert-ExactOrderedProperties -Object $applyCommand.steps[1] -Names @('kind') -Context 'commands.json apply load step'
 Assert-StrictJsonStringEquals -Value $loadCommand.steps[0].kind -Expected 'load-batman-graphics-draft-into-config' -Context 'commands.json load step kind'
 Assert-StrictJsonStringEquals -Value $syncCommand.steps[0].kind -Expected 'sync-batman-graphics-detail-level' -Context 'commands.json sync step kind'
+Assert-StrictJsonStringEquals -Value $resolutionCommand.steps[0].kind -Expected 'set-batman-graphics-resolution-mode' -Context 'commands.json resolution step kind'
 Assert-StrictJsonStringEquals -Value $applyCommand.steps[0].kind -Expected 'apply-batman-graphics-config' -Context 'commands.json apply config step kind'
 Assert-StrictJsonStringEquals -Value $applyCommand.steps[1].kind -Expected 'load-batman-graphics-draft-into-config' -Context 'commands.json apply load step kind'
 
@@ -853,7 +890,7 @@ Assert-ExactOrderedProperties -Object $hooks -Names @('runtimeSlots', 'stateObse
 Assert-StrictJsonArray -Value $hooks.runtimeSlots -Context 'hooks.json runtimeSlots'
 Assert-StrictJsonArray -Value $hooks.stateObservers -Context 'hooks.json stateObservers'
 Assert-StrictJsonArray -Value $hooks.hooks -Context 'hooks.json hooks'
-if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($hooks.stateObservers).Count -ne 13) { throw 'hooks.json runtime slots, observers, or hooks count drifted.' }
+if (@($hooks.runtimeSlots).Count -ne 0 -or @($hooks.hooks).Count -ne 0 -or @($hooks.stateObservers).Count -ne 16) { throw 'hooks.json runtime slots, observers, or hooks count drifted: the checked-in package is stale for the Task 8 display protocol.' }
 
 function Assert-GraphicsCarrierChecks {
     param([Parameter(Mandatory = $true)] [psobject]$Observer, [Parameter(Mandatory = $true)] [string]$Context)
@@ -885,9 +922,16 @@ function Assert-GraphicsCarrierChecks {
 $expectedObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'responseRequestValue', 'responseMappings', 'acknowledgementMappings', 'failureResponseValue')
 $expectedCommandObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'acknowledgementMappings', 'failureResponseValue', 'command')
 $expectedCommandSettingObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'responseRequestValue', 'responseMappings', 'acknowledgementMappings', 'failureResponseValue', 'command')
-$expectedObserverIds = @('graphicsObserverVsync', 'graphicsObserverMsaa', 'graphicsObserverPhysx', 'graphicsObserverStereo', 'graphicsObserverBloom', 'graphicsObserverDynamicShadows', 'graphicsObserverMotionBlur', 'graphicsObserverDistortion', 'graphicsObserverFogVolumes', 'graphicsObserverSphericalHarmonicLighting', 'graphicsObserverAmbientOcclusion', 'graphicsObserverApplySignal', 'graphicsObserverRollbackSignal')
-$expectedObserverTargets = @('vsync', 'msaa', 'physx', 'stereo', 'bloom', 'dynamicShadows', 'motionBlur', 'distortion', 'fogVolumes', 'sphericalHarmonicLighting', 'ambientOcclusion', 'applySignal', 'rollbackSignal')
+$expectedDynamicObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'addressMatchValues', 'checks', 'dynamicResponse', 'failureResponseValue')
+$expectedResolutionObserverProperties = @('id', 'addressGroup', 'scanStartAddress', 'scanEndAddress', 'scanStride', 'valueOffset', 'pollIntervalMs', 'targetConfigKey', 'addressMatchValues', 'checks', 'mappings', 'acknowledgementMappings', 'failureResponseValue', 'command')
+$expectedObserverIds = @('graphicsObserverFullscreen', 'graphicsObserverDisplayModeCatalog', 'graphicsObserverResolutionModeIndex', 'graphicsObserverVsync', 'graphicsObserverMsaa', 'graphicsObserverPhysx', 'graphicsObserverStereo', 'graphicsObserverBloom', 'graphicsObserverDynamicShadows', 'graphicsObserverMotionBlur', 'graphicsObserverDistortion', 'graphicsObserverFogVolumes', 'graphicsObserverSphericalHarmonicLighting', 'graphicsObserverAmbientOcclusion', 'graphicsObserverApplySignal', 'graphicsObserverRollbackSignal')
+$expectedObserverTargets = @('fullscreen', '', 'resolutionModeIndex', 'vsync', 'msaa', 'physx', 'stereo', 'bloom', 'dynamicShadows', 'motionBlur', 'distortion', 'fogVolumes', 'sphericalHarmonicLighting', 'ambientOcclusion', 'applySignal', 'rollbackSignal')
 $expectedAddressMatchValues = @(
+    4670, 4671, 4672, 4673, 4674, 4675, 4676, 4679,
+    4700..4899,
+    4960, 4961, 4969, 4970, 4971, 4980, 4981, 4989, 4990, 4991,
+    5000..5097,
+    5100..5197, 5199,
     4200, 4210, 4211, 4220, 4221, 4230, 4231, 4299,
     4300, 4310, 4311, 4312, 4313, 4314, 4320, 4321, 4322, 4323, 4324, 4330, 4331, 4332, 4333, 4334, 4399,
     4400, 4410, 4411, 4412, 4420, 4421, 4422, 4430, 4431, 4432, 4499,
@@ -898,15 +942,16 @@ $expectedAddressMatchValues = @(
     4630, 4631, 4632, 4633, 4634, 4635, 4636, 4639,
     4640, 4641, 4642, 4643, 4644, 4645, 4646, 4649,
     4650, 4651, 4652, 4653, 4654, 4655, 4656, 4659,
-    4660, 4661, 4662, 4663, 4664, 4665, 4666, 4669,
-    4960, 4961, 4969, 4970, 4971, 4980, 4981, 4989, 4990, 4991
+    4660, 4661, 4662, 4663, 4664, 4665, 4666, 4669
 )
+$expectedAddressMatchValues = @($expectedAddressMatchValues | Sort-Object)
 for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observerIndex++) {
     $observer = $hooks.stateObservers[$observerIndex]
-    $expectedProperties = if ($observerIndex -lt 4) { $expectedObserverProperties } elseif ($observerIndex -lt 11) { $expectedCommandSettingObserverProperties } else { $expectedCommandObserverProperties }
+    $expectedProperties = if ($observerIndex -eq 1) { $expectedDynamicObserverProperties } elseif ($observerIndex -eq 2) { $expectedResolutionObserverProperties } elseif ($observerIndex -eq 0 -or $observerIndex -ge 3 -and $observerIndex -le 6) { $expectedObserverProperties } elseif ($observerIndex -ge 7 -and $observerIndex -le 13) { $expectedCommandSettingObserverProperties } else { $expectedCommandObserverProperties }
     Assert-ExactOrderedProperties -Object $observer -Names $expectedProperties -Context "hooks.json $($expectedObserverIds[$observerIndex])"
     Assert-StrictJsonStringEquals -Value $observer.id -Expected $expectedObserverIds[$observerIndex] -Context "hooks.json observer $($observerIndex + 1) id"
-    Assert-StrictJsonStringEquals -Value $observer.targetConfigKey -Expected $expectedObserverTargets[$observerIndex] -Context "hooks.json $($observerIndex + 1) targetConfigKey"
+    if ($observerIndex -ne 1) { Assert-StrictJsonStringEquals -Value $observer.targetConfigKey -Expected $expectedObserverTargets[$observerIndex] -Context 'hooks.json observer targetConfigKey' }
+    elseif ($observer.PSObject.Properties.Name -contains 'targetConfigKey') { throw 'hooks.json catalog dynamic observer must omit targetConfigKey.' }
     Assert-StrictJsonStringEquals -Value $observer.addressGroup -Expected 'batmanFrontendControlType' -Context "hooks.json observer $($observerIndex + 1) addressGroup"
     Assert-StrictJsonStringEquals -Value $observer.scanStartAddress -Expected '0x10000000' -Context "hooks.json observer $($observerIndex + 1) scanStartAddress"
     Assert-StrictJsonStringEquals -Value $observer.scanEndAddress -Expected '0x30000000' -Context "hooks.json observer $($observerIndex + 1) scanEndAddress"
@@ -914,8 +959,11 @@ for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observe
     Assert-StrictJsonIntegerEquals -Value $observer.valueOffset -Expected 12 -Context "hooks.json observer $($observerIndex + 1) valueOffset"
     Assert-StrictJsonIntegerEquals -Value $observer.pollIntervalMs -Expected 50 -Context "hooks.json observer $($observerIndex + 1) pollIntervalMs"
     Assert-StrictJsonIntegerArrayEquals -Values $observer.addressMatchValues -Expected $expectedAddressMatchValues -Context "hooks.json observer $($observerIndex + 1) addressMatchValues"
+    foreach ($addressValue in @($observer.addressMatchValues)) {
+        if ([long]$addressValue -le 0) { throw "hooks.json $($observer.id) addressMatchValues must contain positive discovery values only; ordinal-tagged dynamic negatives are transient responses." }
+    }
     Assert-GraphicsCarrierChecks -Observer $observer -Context "hooks.json $($observer.id)"
-    $mappingNames = if ($observerIndex -lt 11) { @('mappings', 'responseMappings', 'acknowledgementMappings') } else { @('mappings', 'acknowledgementMappings') }
+    $mappingNames = if ($observerIndex -eq 1) { @() } elseif ($observerIndex -lt 11) { @('mappings', 'responseMappings', 'acknowledgementMappings') } else { @('mappings', 'acknowledgementMappings') }
     foreach ($mappingName in $mappingNames) {
         Assert-StrictJsonArray -Value $observer.$mappingName -Context "hooks.json $($observer.id) $mappingName"
         foreach ($entry in @($observer.$mappingName)) {
@@ -926,6 +974,34 @@ for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observe
         }
     }
 }
+
+$catalogObserver = $hooks.stateObservers[1]
+$fullscreenObserver = $hooks.stateObservers[0]
+Assert-StrictJsonIntegerEquals -Value $fullscreenObserver.responseRequestValue -Expected 4670 -Context 'hooks.json fullscreen responseRequestValue'
+Assert-StrictJsonMappingEquals -Mapping $fullscreenObserver.mappings[0] -ExpectedMatch 4673 -ExpectedValue 0 -Context 'hooks.json fullscreen off write mapping'
+Assert-StrictJsonMappingEquals -Mapping $fullscreenObserver.mappings[1] -ExpectedMatch 4674 -ExpectedValue 1 -Context 'hooks.json fullscreen on write mapping'
+Assert-StrictJsonMappingEquals -Mapping $fullscreenObserver.responseMappings[0] -ExpectedMatch 0 -ExpectedValue 4671 -Context 'hooks.json fullscreen off response mapping'
+Assert-StrictJsonMappingEquals -Mapping $fullscreenObserver.responseMappings[1] -ExpectedMatch 1 -ExpectedValue 4672 -Context 'hooks.json fullscreen on response mapping'
+Assert-StrictJsonMappingEquals -Mapping $fullscreenObserver.acknowledgementMappings[0] -ExpectedMatch 4673 -ExpectedValue 4675 -Context 'hooks.json fullscreen off acknowledgement mapping'
+Assert-StrictJsonMappingEquals -Mapping $fullscreenObserver.acknowledgementMappings[1] -ExpectedMatch 4674 -ExpectedValue 4676 -Context 'hooks.json fullscreen on acknowledgement mapping'
+Assert-StrictJsonIntegerEquals -Value $fullscreenObserver.failureResponseValue -Expected 4679 -Context 'hooks.json fullscreen failureResponseValue'
+foreach ($forbiddenCatalogProperty in @('targetConfigKey', 'mappings', 'responseRequestValue', 'responseMappings', 'acknowledgementMappings', 'command')) {
+    if ($catalogObserver.PSObject.Properties.Name -contains $forbiddenCatalogProperty) { throw "hooks.json catalog dynamic observer must omit forbidden static property '$forbiddenCatalogProperty'." }
+}
+Assert-ExactOrderedProperties -Object $catalogObserver.dynamicResponse -Names @('provider', 'requests', 'minimumValue', 'maximumValue') -Context 'hooks.json catalog dynamicResponse'
+Assert-StrictJsonStringEquals -Value $catalogObserver.dynamicResponse.provider -Expected 'batmanDisplayModes' -Context 'hooks.json catalog provider'
+Assert-StrictJsonIntegerArrayEquals -Values $catalogObserver.dynamicResponse.requests -Expected @(4700..4898) -Context 'hooks.json catalog requests'
+Assert-StrictJsonIntegerEquals -Value $catalogObserver.dynamicResponse.minimumValue -Expected 1 -Context 'hooks.json catalog minimumValue'
+Assert-StrictJsonIntegerEquals -Value $catalogObserver.dynamicResponse.maximumValue -Expected 32767 -Context 'hooks.json catalog maximumValue'
+Assert-StrictJsonIntegerEquals -Value $catalogObserver.failureResponseValue -Expected 4899 -Context 'hooks.json catalog failureResponseValue'
+$resolutionObserver = $hooks.stateObservers[2]
+if (@($resolutionObserver.mappings).Count -ne 98 -or @($resolutionObserver.acknowledgementMappings).Count -ne 98) { throw 'hooks.json resolution observer must contain exactly 98 generated mappings.' }
+for ($resolutionIndex = 0; $resolutionIndex -lt 98; $resolutionIndex++) {
+    Assert-StrictJsonMappingEquals -Mapping $resolutionObserver.mappings[$resolutionIndex] -ExpectedMatch (5000 + $resolutionIndex) -ExpectedValue $resolutionIndex -Context "hooks.json resolution write mapping $($resolutionIndex + 1)"
+    Assert-StrictJsonMappingEquals -Mapping $resolutionObserver.acknowledgementMappings[$resolutionIndex] -ExpectedMatch (5000 + $resolutionIndex) -ExpectedValue (5100 + $resolutionIndex) -Context "hooks.json resolution acknowledgement mapping $($resolutionIndex + 1)"
+}
+Assert-StrictJsonIntegerEquals -Value $resolutionObserver.failureResponseValue -Expected 5199 -Context 'hooks.json resolution failureResponseValue'
+Assert-StrictJsonStringEquals -Value $resolutionObserver.command -Expected 'setBatmanGraphicsResolutionMode' -Context 'hooks.json resolution command'
 
 $expectedGraphicsProtocols = @(
     [pscustomobject]@{ Id = 'graphicsObserverVsync'; Read = 4200; Responses = @(4210, 4211); Writes = @(4220, 4221); Acks = @(4230, 4231); Failure = 4299; ConfigValues = @(0, 1); Command = '' },
@@ -942,7 +1018,7 @@ $expectedGraphicsProtocols = @(
 )
 for ($protocolIndex = 0; $protocolIndex -lt $expectedGraphicsProtocols.Count; $protocolIndex++) {
     $protocol = $expectedGraphicsProtocols[$protocolIndex]
-    $observer = $hooks.stateObservers[$protocolIndex]
+    $observer = $hooks.stateObservers[$protocolIndex + 3]
     if ($null -eq $observer.mappings -or @($observer.mappings).Count -ne $protocol.Writes.Count -or $null -eq $observer.responseMappings -or @($observer.responseMappings).Count -ne $protocol.Responses.Count -or $null -eq $observer.acknowledgementMappings -or @($observer.acknowledgementMappings).Count -ne $protocol.Acks.Count) { throw "hooks.json $($protocol.Id) mapping counts drifted." }
     Assert-StrictJsonIntegerEquals -Value $observer.responseRequestValue -Expected $protocol.Read -Context "hooks.json $($protocol.Id) responseRequestValue"
     Assert-StrictJsonIntegerEquals -Value $observer.failureResponseValue -Expected $protocol.Failure -Context "hooks.json $($protocol.Id) failureResponseValue"
@@ -958,12 +1034,12 @@ for ($protocolIndex = 0; $protocolIndex -lt $expectedGraphicsProtocols.Count; $p
     }
 }
 
-$vsyncObserver = $hooks.stateObservers[0]
-$msaaObserver = $hooks.stateObservers[1]
-$physxObserver = $hooks.stateObservers[2]
-$stereoObserver = $hooks.stateObservers[3]
-$applyObserver = $hooks.stateObservers[11]
-$rollbackObserver = $hooks.stateObservers[12]
+$vsyncObserver = $hooks.stateObservers[3]
+$msaaObserver = $hooks.stateObservers[4]
+$physxObserver = $hooks.stateObservers[5]
+$stereoObserver = $hooks.stateObservers[6]
+$applyObserver = $hooks.stateObservers[14]
+$rollbackObserver = $hooks.stateObservers[15]
 Assert-StrictJsonStringEquals -Value $applyObserver.id -Expected 'graphicsObserverApplySignal' -Context 'hooks.json apply observer id'
 Assert-StrictJsonStringEquals -Value $applyObserver.targetConfigKey -Expected 'applySignal' -Context 'hooks.json apply observer targetConfigKey'
 Assert-StrictJsonStringEquals -Value $applyObserver.command -Expected 'applyBatmanGraphicsDraft' -Context 'hooks.json apply observer command'

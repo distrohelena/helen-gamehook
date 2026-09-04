@@ -146,6 +146,7 @@ function ConvertTo-StrictGraphicsMappingArray {
 }
 
 $graphicsProtocol = @(
+    [ordered]@{ Id='graphicsObserverFullscreen'; Key='fullscreen'; Read=4670; Responses=@(4671,4672); Writes=@(4673,4674); Acks=@(4675,4676); Failure=4679; ConfigValues=@(0,1); Command='' },
     [ordered]@{ Id='graphicsObserverVsync'; Key='vsync'; Read=4200; Responses=@(4210,4211); Writes=@(4220,4221); Acks=@(4230,4231); Failure=4299; ConfigValues=@(0,1); Command='' },
     [ordered]@{ Id='graphicsObserverMsaa'; Key='msaa'; Read=4300; Responses=@(4310,4311,4312,4313,4314); Writes=@(4320,4321,4322,4323,4324); Acks=@(4330,4331,4332,4333,4334); Failure=4399; ConfigValues=@(0,1,2,3,5); Command='' },
     [ordered]@{ Id='graphicsObserverPhysx'; Key='physx'; Read=4400; Responses=@(4410,4411,4412); Writes=@(4420,4421,4422); Acks=@(4430,4431,4432); Failure=4499; ConfigValues=@(0,1,2); Command='' },
@@ -160,6 +161,15 @@ $graphicsProtocol = @(
 )
 
 $graphicsCommandValues = @(4960,4961,4969,4970,4971,4980,4981,4989,4990,4991)
+$dynamicCatalogRequests = @(for ($request = 4700; $request -le 4898; $request++) { [int]$request })
+$resolutionWriteRequests = @(for ($index = 0; $index -lt 98; $index++) { [int](5000 + $index) })
+$resolutionAcknowledgementRequests = @(for ($index = 0; $index -lt 98; $index++) { [int](5100 + $index) })
+$resolutionConfigValues = @(for ($index = 0; $index -lt 98; $index++) { [int]$index })
+$dynamicCatalogFailure = [int]4899
+$resolutionFailure = [int]5199
+# Dynamic provider scalars are encoded by the native observer transport as negative
+# ordinal-tagged magnitudes (ordinal * 32768 + value); these transient negatives
+# are intentionally absent from every static address-match union.
 
 function Assert-GraphicsProtocolTable {
     <#
@@ -235,6 +245,20 @@ function Assert-GraphicsProtocolTable {
 
 Assert-GraphicsProtocolTable -Protocol $graphicsProtocol -CommandValues $graphicsCommandValues
 
+if ($dynamicCatalogRequests.Count -ne 199 -or $dynamicCatalogRequests[0] -ne 4700 -or $dynamicCatalogRequests[-1] -ne 4898) {
+    throw 'Batman display catalog requests must be the ordered range 4700..4898.'
+}
+if ($resolutionWriteRequests.Count -ne 98 -or $resolutionAcknowledgementRequests.Count -ne 98 -or $resolutionConfigValues.Count -ne 98) {
+    throw 'Batman resolution protocol must contain exactly 98 generated mappings.'
+}
+for ($resolutionIndex = 0; $resolutionIndex -lt 98; $resolutionIndex++) {
+    if ($resolutionWriteRequests[$resolutionIndex] -ne 5000 + $resolutionIndex -or
+        $resolutionAcknowledgementRequests[$resolutionIndex] -ne 5100 + $resolutionIndex -or
+        $resolutionConfigValues[$resolutionIndex] -ne $resolutionIndex) {
+        throw "Batman resolution protocol mapping drifted at index $resolutionIndex."
+    }
+}
+
 function New-GraphicsCarrierObserver {
     <#
     Build one declarative observer for a graphics state code carried by the shared
@@ -244,18 +268,42 @@ function New-GraphicsCarrierObserver {
     #>
     param(
         [Parameter(Mandatory = $true)] [string]$Id,
-        [Parameter(Mandatory = $true)] [string]$TargetConfigKey,
+        [AllowEmptyString()] [string]$TargetConfigKey = '',
         [Parameter(Mandatory = $true)] [AllowNull()] [object[]]$AddressMatchValues,
-        [Parameter(Mandatory = $true)] [AllowNull()] [object[]]$Mappings,
+        [AllowNull()] [object[]]$Mappings = @(),
         [AllowNull()] [object]$ResponseRequestValue = $null,
         [AllowNull()] [object[]]$ResponseMappings = @(),
         [AllowNull()] [object[]]$AcknowledgementMappings = @(),
         [AllowNull()] [object]$FailureResponseValue = $null,
-        [AllowEmptyString()] [string]$Command = ''
+        [AllowEmptyString()] [string]$Command = '',
+        [AllowEmptyString()] [string]$DynamicResponseProvider = '',
+        [AllowNull()] [object[]]$DynamicResponseRequests = @(),
+        [int]$DynamicResponseMinimumValue = 0,
+        [int]$DynamicResponseMaximumValue = 0
     )
 
+    $dynamicResponseSupplied = $PSBoundParameters.ContainsKey('DynamicResponseProvider')
     $responseRequestSupplied = $PSBoundParameters.ContainsKey('ResponseRequestValue')
     $responseMappingsSupplied = $PSBoundParameters.ContainsKey('ResponseMappings')
+    $acknowledgementMappingsSupplied = $PSBoundParameters.ContainsKey('AcknowledgementMappings')
+    $failureResponseSupplied = $PSBoundParameters.ContainsKey('FailureResponseValue')
+    if ($dynamicResponseSupplied) {
+        if ([string]::IsNullOrWhiteSpace($DynamicResponseProvider) -or $null -eq $DynamicResponseRequests -or $DynamicResponseRequests.Count -eq 0) {
+            throw "Graphics carrier observer '$Id' dynamic response must declare a provider and requests."
+        }
+        if ($DynamicResponseMinimumValue -le 0 -or $DynamicResponseMaximumValue -lt $DynamicResponseMinimumValue) {
+            throw "Graphics carrier observer '$Id' dynamic response bounds are invalid."
+        }
+        if ($responseRequestSupplied -or $responseMappingsSupplied -or $acknowledgementMappingsSupplied -or $Mappings.Count -gt 0 -or -not [string]::IsNullOrWhiteSpace($TargetConfigKey)) {
+            throw "Graphics carrier observer '$Id' dynamic response cannot include static mappings or a target key."
+        }
+        $dynamicRequestValuesClone = @(ConvertTo-StrictGraphicsIntegerArray -Values $DynamicResponseRequests -Context "Graphics carrier observer '$Id' dynamic response requests")
+        $dynamicRequestSet = [Collections.Generic.HashSet[int]]::new()
+        foreach ($requestValue in $dynamicRequestValuesClone) {
+            if (-not $dynamicRequestSet.Add([int]$requestValue)) { throw "Graphics carrier observer '$Id' dynamic response requests contain duplicate value $requestValue." }
+        }
+        if ($null -eq $FailureResponseValue -or -not $failureResponseSupplied) { throw "Graphics carrier observer '$Id' dynamic response requires a failure response." }
+    }
     if ($responseRequestSupplied) {
         $responseRequest = ConvertTo-StrictGraphicsIntegralValue -Value $ResponseRequestValue -Context "Graphics carrier observer '$Id' response request"
     }
@@ -265,8 +313,6 @@ function New-GraphicsCarrierObserver {
     }
     if ($responseRequestSupplied -ne $responseMappingsSupplied) { throw "Graphics carrier observer '$Id' must declare a response request and response mappings together." }
 
-    $acknowledgementMappingsSupplied = $PSBoundParameters.ContainsKey('AcknowledgementMappings')
-    $failureResponseSupplied = $PSBoundParameters.ContainsKey('FailureResponseValue')
     if ($failureResponseSupplied) {
         $failureResponse = ConvertTo-StrictGraphicsIntegralValue -Value $FailureResponseValue -Context "Graphics carrier observer '$Id' failure response"
     }
@@ -274,11 +320,11 @@ function New-GraphicsCarrierObserver {
         if ($null -eq $AcknowledgementMappings -or $AcknowledgementMappings.Count -eq 0) { throw "Graphics carrier observer '$Id' declares empty acknowledgement mappings." }
         $acknowledgementMappingsClone = @(ConvertTo-StrictGraphicsMappingArray -Mappings $AcknowledgementMappings -Context "Graphics carrier observer '$Id' acknowledgement mappings")
     }
-    if ($acknowledgementMappingsSupplied -ne $failureResponseSupplied) { throw "Graphics carrier observer '$Id' must declare acknowledgement mappings and a failure response together." }
+    if (-not $dynamicResponseSupplied -and $acknowledgementMappingsSupplied -ne $failureResponseSupplied) { throw "Graphics carrier observer '$Id' must declare acknowledgement mappings and a failure response together." }
 
-    if ($null -eq $Mappings -or $Mappings.Count -eq 0) { throw "Graphics carrier observer '$Id' must declare non-empty mappings." }
+    if (-not $dynamicResponseSupplied -and ($null -eq $Mappings -or $Mappings.Count -eq 0)) { throw "Graphics carrier observer '$Id' must declare non-empty mappings." }
     $addressMatchValuesClone = @(ConvertTo-StrictGraphicsIntegerArray -Values $AddressMatchValues -Context "Graphics carrier observer '$Id' address match values")
-    $mappingsClone = @(ConvertTo-StrictGraphicsMappingArray -Mappings $Mappings -Context "Graphics carrier observer '$Id' mappings")
+    $mappingsClone = if ($dynamicResponseSupplied) { @() } else { @(ConvertTo-StrictGraphicsMappingArray -Mappings $Mappings -Context "Graphics carrier observer '$Id' mappings") }
 
     $observer = [ordered]@{
         id = $Id
@@ -288,10 +334,20 @@ function New-GraphicsCarrierObserver {
         scanStride = [int]4
         valueOffset = [int]12
         pollIntervalMs = [int]50
-        targetConfigKey = $TargetConfigKey
-        addressMatchValues = $addressMatchValuesClone
-        checks = @(New-GraphicsCarrierChecks)
-        mappings = $mappingsClone
+    }
+    if (-not $dynamicResponseSupplied) {
+        $observer.targetConfigKey = $TargetConfigKey
+    }
+    $observer.addressMatchValues = $addressMatchValuesClone
+    $observer.checks = @(New-GraphicsCarrierChecks)
+    if (-not $dynamicResponseSupplied) { $observer.mappings = $mappingsClone }
+    if ($dynamicResponseSupplied) {
+        $observer.dynamicResponse = [ordered]@{
+            provider = $DynamicResponseProvider
+            requests = $dynamicRequestValuesClone
+            minimumValue = [int]$DynamicResponseMinimumValue
+            maximumValue = [int]$DynamicResponseMaximumValue
+        }
     }
     if ($responseRequestSupplied) {
         $observer.responseRequestValue = [int]$responseRequest
@@ -299,6 +355,9 @@ function New-GraphicsCarrierObserver {
     }
     if ($acknowledgementMappingsSupplied) {
         $observer.acknowledgementMappings = $acknowledgementMappingsClone
+        $observer.failureResponseValue = [int]$failureResponse
+    }
+    elseif ($dynamicResponseSupplied) {
         $observer.failureResponseValue = [int]$failureResponse
     }
     if (-not [string]::IsNullOrWhiteSpace($Command)) { $observer.command = $Command }
@@ -668,14 +727,24 @@ try {
             $graphicsAddressMatchValues.Add([int]$addressValue)
         }
     }
+    foreach ($addressValue in $dynamicCatalogRequests + @($dynamicCatalogFailure) + $resolutionWriteRequests + $resolutionAcknowledgementRequests + @($resolutionFailure)) {
+        $graphicsAddressMatchValues.Add([int]$addressValue)
+    }
     foreach ($addressValue in $graphicsCommandValues) {
         $graphicsAddressMatchValues.Add([int]$addressValue)
     }
-    $graphicsAddressMatchValues = @($graphicsAddressMatchValues | Sort-Object -Unique | ForEach-Object { [int]$_ })
+    $graphicsAddressMatchSet = [Collections.Generic.HashSet[int]]::new()
+    foreach ($addressValue in $graphicsAddressMatchValues) {
+        if (-not $graphicsAddressMatchSet.Add([int]$addressValue)) {
+            throw "Batman graphics protocol contains duplicate positive carrier value $addressValue."
+        }
+    }
+    $graphicsAddressMatchValues = @($graphicsAddressMatchSet | Sort-Object | ForEach-Object { [int]$_ })
     $configKeys = @(
         'fullscreen',
         'resolutionWidth',
         'resolutionHeight',
+        'resolutionModeIndex',
         'vsync',
         'msaa',
         'detailLevel',
@@ -696,7 +765,7 @@ try {
             [ordered]@{
                 key = $configKey
                 type = 'int'
-                defaultValue = [int]0
+                defaultValue = if ($configKey -eq 'resolutionModeIndex') { [int]-1 } else { [int]0 }
             }
         }
     )
@@ -730,10 +799,19 @@ try {
             }
         )
     }
-    $commands = [ordered]@{
-        commands = @($loadGraphicsDraftCommand, $syncGraphicsDetailLevelCommand, $applyGraphicsDraftCommand)
+    $setGraphicsResolutionModeCommand = [ordered]@{
+        id = 'setBatmanGraphicsResolutionMode'
+        name = 'Set Batman Graphics Resolution Mode'
+        steps = @(
+            [ordered]@{
+                kind = 'set-batman-graphics-resolution-mode'
+            }
+        )
     }
-    $settingObservers = @(
+    $commands = [ordered]@{
+        commands = @($loadGraphicsDraftCommand, $syncGraphicsDetailLevelCommand, $setGraphicsResolutionModeCommand, $applyGraphicsDraftCommand)
+    }
+    $finiteSettingObservers = @(
         foreach ($protocol in $graphicsProtocol) {
             $settingMappings = @(
                 for ($mappingIndex = 0; $mappingIndex -lt @($protocol.Writes).Count; $mappingIndex++) {
@@ -753,6 +831,18 @@ try {
             New-GraphicsCarrierObserver -Id $protocol.Id -TargetConfigKey $protocol.Key -AddressMatchValues $graphicsAddressMatchValues -Mappings $settingMappings -ResponseRequestValue ([int]$protocol.Read) -ResponseMappings $settingResponseMappings -AcknowledgementMappings $settingAcknowledgementMappings -FailureResponseValue ([int]$protocol.Failure) -Command $protocol.Command
         }
     )
+    $dynamicCatalogObserver = New-GraphicsCarrierObserver -Id 'graphicsObserverDisplayModeCatalog' -AddressMatchValues $graphicsAddressMatchValues -DynamicResponseProvider 'batmanDisplayModes' -DynamicResponseRequests $dynamicCatalogRequests -DynamicResponseMinimumValue 1 -DynamicResponseMaximumValue 32767 -FailureResponseValue $dynamicCatalogFailure
+    $resolutionMappings = @(
+        for ($mappingIndex = 0; $mappingIndex -lt 98; $mappingIndex++) {
+            [ordered]@{ match = [int]$resolutionWriteRequests[$mappingIndex]; value = [int]$resolutionConfigValues[$mappingIndex] }
+        }
+    )
+    $resolutionAcknowledgementMappings = @(
+        for ($mappingIndex = 0; $mappingIndex -lt 98; $mappingIndex++) {
+            [ordered]@{ match = [int]$resolutionWriteRequests[$mappingIndex]; value = [int]$resolutionAcknowledgementRequests[$mappingIndex] }
+        }
+    )
+    $resolutionObserver = New-GraphicsCarrierObserver -Id 'graphicsObserverResolutionModeIndex' -TargetConfigKey 'resolutionModeIndex' -AddressMatchValues $graphicsAddressMatchValues -Mappings $resolutionMappings -AcknowledgementMappings $resolutionAcknowledgementMappings -FailureResponseValue $resolutionFailure -Command 'setBatmanGraphicsResolutionMode'
     $applyAcknowledgementMappings = @(
         [ordered]@{ match = [int]4990; value = [int]4980 },
         [ordered]@{ match = [int]4991; value = [int]4981 }
@@ -771,7 +861,7 @@ try {
     ) -AcknowledgementMappings $rollbackAcknowledgementMappings -FailureResponseValue ([int]4969) -Command 'loadBatmanGraphicsDraftIntoConfig'
     $hooks = [ordered]@{
         runtimeSlots = @()
-        stateObservers = @($settingObservers + @($applyObserver, $rollbackObserver))
+        stateObservers = @($finiteSettingObservers[0], $dynamicCatalogObserver, $resolutionObserver) + @($finiteSettingObservers[1..$($finiteSettingObservers.Count - 1)]) + @($applyObserver, $rollbackObserver)
         hooks = @()
     }
     $pack = [ordered]@{

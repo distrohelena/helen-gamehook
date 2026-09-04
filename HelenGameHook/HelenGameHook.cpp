@@ -34,6 +34,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <functional>
 #include <shlobj.h>
 #include <windows.h>
 
@@ -798,11 +799,56 @@ namespace
         }
 
         helen::Log(L"[runtime] active-pack init build runtime coordinator create begin.");
+        const std::shared_ptr<std::optional<helen::CommandIntPair>> display_catalog_current_pair =
+            std::make_shared<std::optional<helen::CommandIntPair>>();
+        const helen::MemoryStateObserverDynamicResponseCallback dynamic_response_callback =
+            [display_catalog_current_pair, &display_mode_service = *g_batman_display_mode_service, &command_dispatcher = *g_command_dispatcher](
+                const std::string& provider_id,
+                int raw_request) -> std::optional<int>
+        {
+            if (provider_id != "batmanDisplayModes")
+            {
+                return std::nullopt;
+            }
+
+            if (raw_request == 4700)
+            {
+                display_catalog_current_pair->reset();
+                const std::optional<helen::CommandIntPair> current_pair = command_dispatcher.TryGetIntPair(
+                    "resolutionWidth",
+                    "resolutionHeight");
+                if (!current_pair.has_value() || !display_mode_service.Refresh())
+                {
+                    return std::nullopt;
+                }
+
+                *display_catalog_current_pair = *current_pair;
+            }
+            else if (raw_request == 4897 || raw_request == 4898)
+            {
+                if (!display_catalog_current_pair->has_value())
+                {
+                    return std::nullopt;
+                }
+
+                if (raw_request == 4897)
+                {
+                    return (*display_catalog_current_pair)->FirstValue;
+                }
+
+                const int current_height = (*display_catalog_current_pair)->SecondValue;
+                display_catalog_current_pair->reset();
+                return current_height;
+            }
+
+            return display_mode_service.QueryCatalogScalar(raw_request);
+        };
         g_build_runtime_coordinator = std::make_unique<helen::BuildRuntimeCoordinator>(
             active_pack_set.StartupCommandIds,
             active_pack_set.StateObservers,
             *g_command_dispatcher,
-            *g_command_executor);
+            *g_command_executor,
+            dynamic_response_callback);
         helen::Log(L"[runtime] active-pack init build runtime coordinator created.");
         helen::Log(L"[runtime] active-pack init build runtime coordinator start begin.");
         if (!g_build_runtime_coordinator->Start())
