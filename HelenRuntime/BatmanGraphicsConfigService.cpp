@@ -1734,10 +1734,18 @@ namespace
      */
     bool TryReadDraftStateFromDispatcher(const helen::CommandDispatcher& dispatcher, BatmanGraphicsDraftState& state)
     {
+        const std::optional<helen::CommandIntPair> resolution_pair = dispatcher.TryGetIntPair(
+            "resolutionWidth",
+            "resolutionHeight");
+        if (!resolution_pair.has_value())
+        {
+            return false;
+        }
+
+        state.ResolutionWidth = resolution_pair->FirstValue;
+        state.ResolutionHeight = resolution_pair->SecondValue;
         return
             TryReadDispatcherValue(dispatcher, "fullscreen", state.Fullscreen) &&
-            TryReadDispatcherValue(dispatcher, "resolutionWidth", state.ResolutionWidth) &&
-            TryReadDispatcherValue(dispatcher, "resolutionHeight", state.ResolutionHeight) &&
             TryReadDispatcherValue(dispatcher, "vsync", state.Vsync) &&
             TryReadDispatcherValue(dispatcher, "msaa", state.Msaa) &&
             TryReadDispatcherValue(dispatcher, "detailLevel", state.DetailLevel) &&
@@ -1762,8 +1770,7 @@ namespace
     {
         return
             TryWriteDispatcherValue(dispatcher, "fullscreen", state.Fullscreen) &&
-            TryWriteDispatcherValue(dispatcher, "resolutionWidth", state.ResolutionWidth) &&
-            TryWriteDispatcherValue(dispatcher, "resolutionHeight", state.ResolutionHeight) &&
+            dispatcher.TrySetIntPair("resolutionWidth", state.ResolutionWidth, "resolutionHeight", state.ResolutionHeight) &&
             TryWriteDispatcherValue(dispatcher, "vsync", state.Vsync) &&
             TryWriteDispatcherValue(dispatcher, "msaa", state.Msaa) &&
             TryWriteDispatcherValue(dispatcher, "detailLevel", state.DetailLevel) &&

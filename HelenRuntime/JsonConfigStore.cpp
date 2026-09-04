@@ -201,8 +201,27 @@ namespace helen
         int_values_[key] = value;
     }
 
+    /**
+     * @brief Restores an already-present integer entry without allocating or throwing.
+     * @param key Existing flat config key whose value should be restored.
+     * @param value Integer value assigned to the existing entry.
+     * @return True when the key existed and was restored; otherwise false.
+     */
+    bool JsonConfigStore::TrySetExistingInt(const std::string& key, int value) noexcept
+    {
+        const auto found = int_values_.find(key);
+        if (found == int_values_.end())
+        {
+            return false;
+        }
+
+        found->second = value;
+        return true;
+    }
+
     void JsonConfigStore::Save() const
     {
+        ++save_count_;
         const std::filesystem::path directory = path_.has_parent_path()
             ? path_.parent_path()
             : std::filesystem::current_path();
@@ -228,6 +247,15 @@ namespace helen
             RemoveTemporaryFile(temporaryPath);
             throw std::runtime_error("Failed to replace the config file.");
         }
+    }
+
+    /**
+     * @brief Returns how many persistence attempts this store has made.
+     * @return Number of calls to Save, including attempts that failed before replacing the target file.
+     */
+    std::size_t JsonConfigStore::GetSaveCount() const noexcept
+    {
+        return save_count_;
     }
 
     void JsonConfigStore::Load()

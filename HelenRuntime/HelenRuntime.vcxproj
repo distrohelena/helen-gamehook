@@ -122,6 +122,7 @@
     <ClInclude Include="..\include\HelenHook\BuildDefinition.h" />
     <ClInclude Include="..\include\HelenHook\BuildMatchDefinition.h" />
     <ClInclude Include="..\include\HelenHook\CommandDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\CommandIntPair.h" />
     <ClInclude Include="..\include\HelenHook\CommandDispatcher.h" />
     <ClInclude Include="..\include\HelenHook\CommandExecutor.h" />
     <ClInclude Include="..\include\HelenHook\CommandMapEntryDefinition.h" />

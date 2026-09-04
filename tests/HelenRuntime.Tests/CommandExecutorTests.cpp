@@ -186,6 +186,51 @@ namespace
         Expect(dispatcher.TryGetInt("resolutionWidth") == 1920, "Out-of-range failure changed the resolution width.");
         Expect(dispatcher.TryGetInt("resolutionHeight") == 1080, "Out-of-range failure changed the resolution height.");
 
+        current_modes = {
+            helen::BatmanDisplayMode(1280, 720),
+            helen::BatmanDisplayMode(1920, 1080),
+            helen::BatmanDisplayMode(3440, 1440)
+        };
+        helen::CommandDispatcher missing_width_dispatcher;
+        missing_width_dispatcher.RegisterConfigInt("resolutionModeIndex", 1);
+        missing_width_dispatcher.RegisterConfigInt("resolutionHeight", 900);
+        helen::BatmanGraphicsConfigService missing_width_graphics_service(
+            std::filesystem::path("missing-resolution-width-test.ini"),
+            display_mode_service);
+        helen::CommandExecutor missing_width_executor(
+            missing_width_dispatcher,
+            runtime_values,
+            missing_width_graphics_service);
+        Expect(
+            missing_width_executor.RegisterCommand(CreateSetBatmanGraphicsResolutionModeCommand()),
+            "Failed to register the missing-width resolution command.");
+        Expect(
+            !missing_width_executor.RunCommand("setBatmanGraphicsResolutionMode"),
+            "Missing resolution width unexpectedly succeeded.");
+        Expect(
+            missing_width_dispatcher.TryGetInt("resolutionHeight") == 900,
+            "Missing-width failure changed the existing resolution height.");
+
+        helen::CommandDispatcher missing_height_dispatcher;
+        missing_height_dispatcher.RegisterConfigInt("resolutionModeIndex", 1);
+        missing_height_dispatcher.RegisterConfigInt("resolutionWidth", 1600);
+        helen::BatmanGraphicsConfigService missing_height_graphics_service(
+            std::filesystem::path("missing-resolution-height-test.ini"),
+            display_mode_service);
+        helen::CommandExecutor missing_height_executor(
+            missing_height_dispatcher,
+            runtime_values,
+            missing_height_graphics_service);
+        Expect(
+            missing_height_executor.RegisterCommand(CreateSetBatmanGraphicsResolutionModeCommand()),
+            "Failed to register the missing-height resolution command.");
+        Expect(
+            !missing_height_executor.RunCommand("setBatmanGraphicsResolutionMode"),
+            "Missing resolution height unexpectedly succeeded.");
+        Expect(
+            missing_height_dispatcher.TryGetInt("resolutionWidth") == 1600,
+            "Missing-height failure changed the existing resolution width.");
+
         helen::CommandDispatcher missing_index_dispatcher;
         missing_index_dispatcher.RegisterConfigInt("resolutionWidth", 1600);
         missing_index_dispatcher.RegisterConfigInt("resolutionHeight", 900);
@@ -963,6 +1008,14 @@ namespace
 }
 
 /**
+ * @brief Verifies that a selected supported resolution flows through the normal graphics Apply transaction.
+ *
+ * The resolution command stages the exact catalog pair in the dispatcher, after which the existing
+ * graphics Apply command must publish that pair and Fullscreen to both INI documents.
+ */
+void RunBatmanResolutionModeApplyIntegrationTest();
+
+/**
  * @brief Verifies that declarative commands update live runtime slots on success and roll back state when a later step fails.
  */
 void RunCommandExecutorTests()
@@ -1353,4 +1406,58 @@ void RunCommandExecutorTests()
 
     RunConcurrentBatmanGraphicsApplyTest("concurrent-publication");
     RunBatmanResolutionModeCommandTest();
+    RunBatmanResolutionModeApplyIntegrationTest();
+}
+
+/**
+ * @brief Verifies that a selected supported resolution flows through the normal graphics Apply transaction.
+ *
+ * The resolution command stages the exact catalog pair in the dispatcher, after which the existing
+ * graphics Apply command must publish that pair and Fullscreen to both INI documents.
+ */
+void RunBatmanResolutionModeApplyIntegrationTest()
+{
+    std::vector<helen::BatmanDisplayMode> current_modes = {
+        helen::BatmanDisplayMode(1280, 720),
+        helen::BatmanDisplayMode(1920, 1080),
+        helen::BatmanDisplayMode(3440, 1440)
+    };
+    const helen::BatmanDisplayModeService::EnumerationCallback enumeration_callback =
+        [&current_modes](std::wstring& display_device_name, std::vector<helen::BatmanDisplayMode>& modes)
+        {
+            display_device_name = L"DISPLAY1";
+            modes = current_modes;
+            return true;
+        };
+    helen::BatmanDisplayModeService display_mode_service(enumeration_callback);
+    Expect(display_mode_service.Refresh(), "Resolution Apply integration catalog did not refresh.");
+
+    const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath("resolution-apply-integration");
+    const std::filesystem::path user_ini_path = GetSiblingBatmanUserEngineIniPath(engine_ini_path);
+    WriteAllText(engine_ini_path, CreateBatmanGraphicsIniText());
+    WriteAsciiAsUtf16LittleEndianText(user_ini_path, CreateBatmanLauncherOwnedGraphicsIniText(true));
+
+    helen::CommandDispatcher dispatcher;
+    RegisterBatmanGraphicsConfigKeys(dispatcher);
+    dispatcher.RegisterConfigInt("resolutionModeIndex", 0);
+    helen::RuntimeValueStore runtime_values;
+    helen::BatmanGraphicsConfigService graphics_config_service(engine_ini_path, display_mode_service);
+    helen::CommandExecutor executor(dispatcher, runtime_values, graphics_config_service);
+    Expect(executor.RegisterCommand(CreateSetBatmanGraphicsResolutionModeCommand()), "Failed to register the resolution Apply integration command.");
+    Expect(executor.RegisterCommand(CreateApplyBatmanGraphicsDraftCommand()), "Failed to register the graphics Apply integration command.");
+    Expect(dispatcher.TrySetInt("resolutionModeIndex", 1), "Failed to seed the resolution Apply integration index.");
+    Expect(dispatcher.TrySetInt("fullscreen", 1), "Failed to seed fullscreen for the resolution Apply integration.");
+    Expect(executor.RunCommand("setBatmanGraphicsResolutionMode"), "Resolution Apply integration selection failed.");
+    Expect(dispatcher.TryGetInt("resolutionWidth") == 1920, "Resolution Apply integration selected the wrong width.");
+    Expect(dispatcher.TryGetInt("resolutionHeight") == 1080, "Resolution Apply integration selected the wrong height.");
+    Expect(executor.RunCommand("applyBatmanGraphicsDraft"), "Graphics Apply failed after selecting a supported resolution.");
+
+    const std::string engine_text = ReadAllText(engine_ini_path);
+    const std::string user_text = ReadAsciiFromUtf16LittleEndianText(user_ini_path);
+    ExpectBatmanIniBoolean(engine_text, "Fullscreen", 1, "Graphics Apply did not publish selected fullscreen to BmEngine.ini.");
+    ExpectBatmanIniBoolean(user_text, "Fullscreen", 1, "Graphics Apply did not publish selected fullscreen to UserEngine.ini.");
+    ExpectBatmanIniValue(engine_text, "SystemSettings", "ResX", "1920", "Graphics Apply did not publish selected ResX to BmEngine.ini.");
+    ExpectBatmanIniValue(user_text, "SystemSettings", "ResX", "1920", "Graphics Apply did not publish selected ResX to UserEngine.ini.");
+    ExpectBatmanIniValue(engine_text, "SystemSettings", "ResY", "1080", "Graphics Apply did not publish selected ResY to BmEngine.ini.");
+    ExpectBatmanIniValue(user_text, "SystemSettings", "ResY", "1080", "Graphics Apply did not publish selected ResY to UserEngine.ini.");
 }

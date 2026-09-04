@@ -13,6 +13,7 @@ namespace helen
 
     void CommandDispatcher::RegisterConfigInt(const std::string& key, int default_value)
     {
+        const std::lock_guard<std::mutex> lock(mutex_);
         if (int_values_.contains(key))
         {
             return;
@@ -32,6 +33,7 @@ namespace helen
 
     bool CommandDispatcher::TrySetInt(const std::string& key, int value)
     {
+        const std::lock_guard<std::mutex> lock(mutex_);
         const auto found = int_values_.find(key);
         if (found == int_values_.end())
         {
@@ -62,6 +64,7 @@ namespace helen
         const std::string& second_key,
         int second_value)
     {
+        const std::lock_guard<std::mutex> lock(mutex_);
         if (first_key == second_key)
         {
             return false;
@@ -90,8 +93,8 @@ namespace helen
             {
                 first->second = previous_first_value;
                 second->second = previous_second_value;
-                config_store_->SetInt(first_key, previous_first_value);
-                config_store_->SetInt(second_key, previous_second_value);
+                (void)config_store_->TrySetExistingInt(first_key, previous_first_value);
+                (void)config_store_->TrySetExistingInt(second_key, previous_second_value);
                 return false;
             }
         }
@@ -101,6 +104,7 @@ namespace helen
 
     std::optional<int> CommandDispatcher::TryGetInt(const std::string& key) const
     {
+        const std::lock_guard<std::mutex> lock(mutex_);
         const auto found = int_values_.find(key);
         if (found == int_values_.end())
         {
@@ -108,5 +112,31 @@ namespace helen
         }
 
         return found->second;
+    }
+
+    /**
+     * @brief Reads two distinct registered integer keys as one synchronized snapshot.
+     * @param first_key Registered key whose value becomes FirstValue.
+     * @param second_key Registered key whose value becomes SecondValue.
+     * @return A consistent pair when both keys exist and are distinct; otherwise no value.
+     */
+    std::optional<CommandIntPair> CommandDispatcher::TryGetIntPair(
+        const std::string& first_key,
+        const std::string& second_key) const
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        if (first_key == second_key)
+        {
+            return std::nullopt;
+        }
+
+        const auto first = int_values_.find(first_key);
+        const auto second = int_values_.find(second_key);
+        if (first == int_values_.end() || second == int_values_.end())
+        {
+            return std::nullopt;
+        }
+
+        return CommandIntPair{ first->second, second->second };
     }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <cstddef>
 #include <map>
 #include <string>
 
@@ -37,9 +38,23 @@ namespace helen
         void SetInt(const std::string& key, int value);
 
         /**
+         * @brief Restores an already-present integer entry without allocating or throwing.
+         * @param key Existing flat config key whose value should be restored.
+         * @param value Integer value assigned to the existing entry.
+         * @return True when the key existed and was restored; otherwise false.
+         */
+        bool TrySetExistingInt(const std::string& key, int value) noexcept;
+
+        /**
          * @brief Persists the current integer config map to the JSON file path owned by this store.
          */
         void Save() const;
+
+        /**
+         * @brief Returns how many persistence attempts this store has made.
+         * @return Number of calls to Save, including attempts that failed before replacing the target file.
+         */
+        std::size_t GetSaveCount() const noexcept;
 
     private:
         /**
@@ -51,5 +66,7 @@ namespace helen
         std::filesystem::path path_;
         /** @brief Flat map of integer config values keyed by their string identifiers. */
         std::map<std::string, int> int_values_;
+        /** @brief Number of Save calls made by this store, used to make transaction cardinality observable. */
+        mutable std::size_t save_count_{};
     };
 }

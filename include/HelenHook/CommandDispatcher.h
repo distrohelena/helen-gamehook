@@ -1,8 +1,11 @@
 #pragma once
 
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string>
+
+#include <HelenHook/CommandIntPair.h>
 
 namespace helen
 {
@@ -58,6 +61,16 @@ namespace helen
             int second_value);
 
         /**
+         * @brief Reads two distinct registered integer keys as one synchronized snapshot.
+         * @param first_key Registered key whose value becomes FirstValue.
+         * @param second_key Registered key whose value becomes SecondValue.
+         * @return A consistent pair when both keys exist and are distinct; otherwise no value.
+         */
+        std::optional<CommandIntPair> TryGetIntPair(
+            const std::string& first_key,
+            const std::string& second_key) const;
+
+        /**
          * @brief Returns the current value for a registered integer config key.
          * @param key Registered config key to query.
          * @return Stored value when the key exists; otherwise no value.
@@ -69,5 +82,7 @@ namespace helen
         JsonConfigStore* config_store_{};
         /** @brief Registered integer config values keyed by their exported string names. */
         std::map<std::string, int> int_values_;
+        /** @brief Synchronizes registration, dispatcher access, and persistent-store interaction as one state transition. */
+        mutable std::mutex mutex_;
     };
 }
