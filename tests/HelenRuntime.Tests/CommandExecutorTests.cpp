@@ -16,6 +16,7 @@
 #include <cmath>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <windows.h>
@@ -175,6 +176,103 @@ namespace
         dispatcher.RegisterConfigInt("physx", 0);
         dispatcher.RegisterConfigInt("stereo", 0);
     }
+
+    /**
+     * @brief Holds the seven normalized Batman quality leaves that determine the selected detail preset.
+     * @remarks Each field uses the menu convention where zero is disabled and one is enabled; spherical lighting is normalized before INI inversion.
+     */
+    struct BatmanQualityLeaves
+    {
+        /** @brief Normalized Bloom state. */
+        int Bloom;
+        /** @brief Normalized Dynamic Shadows state. */
+        int DynamicShadows;
+        /** @brief Normalized Motion Blur state. */
+        int MotionBlur;
+        /** @brief Normalized Distortion state. */
+        int Distortion;
+        /** @brief Normalized Fog Volumes state. */
+        int FogVolumes;
+        /** @brief Normalized spherical harmonic lighting state before persistence inversion. */
+        int SphericalHarmonicLighting;
+        /** @brief Normalized Ambient Occlusion state. */
+        int AmbientOcclusion;
+    };
+
+    /**
+     * @brief Writes one literal quality-leaf table row into the dispatcher draft.
+     * @param dispatcher Dispatcher that owns the Batman quality config keys.
+     * @param leaves Seven normalized values that should become the current draft.
+     */
+    void SetBatmanQualityLeaves(helen::CommandDispatcher& dispatcher, const BatmanQualityLeaves& leaves)
+    {
+        Expect(dispatcher.TrySetInt("bloom", leaves.Bloom), "Failed to set the Bloom quality leaf.");
+        Expect(dispatcher.TrySetInt("dynamicShadows", leaves.DynamicShadows), "Failed to set the Dynamic Shadows quality leaf.");
+        Expect(dispatcher.TrySetInt("motionBlur", leaves.MotionBlur), "Failed to set the Motion Blur quality leaf.");
+        Expect(dispatcher.TrySetInt("distortion", leaves.Distortion), "Failed to set the Distortion quality leaf.");
+        Expect(dispatcher.TrySetInt("fogVolumes", leaves.FogVolumes), "Failed to set the Fog Volumes quality leaf.");
+        Expect(dispatcher.TrySetInt("sphericalHarmonicLighting", leaves.SphericalHarmonicLighting), "Failed to set the spherical-lighting quality leaf.");
+        Expect(dispatcher.TrySetInt("ambientOcclusion", leaves.AmbientOcclusion), "Failed to set the Ambient Occlusion quality leaf.");
+    }
+
+    /**
+     * @brief Asserts that the dispatcher contains every literal quality leaf from one preset or custom derivation case.
+     * @param dispatcher Dispatcher whose current quality draft should be checked.
+     * @param leaves Expected normalized values for all seven quality keys.
+     */
+    void ExpectBatmanQualityLeaves(const helen::CommandDispatcher& dispatcher, const BatmanQualityLeaves& leaves)
+    {
+        Expect(dispatcher.TryGetInt("bloom") == leaves.Bloom, "Batman Bloom quality leaf did not match the literal case.");
+        Expect(dispatcher.TryGetInt("dynamicShadows") == leaves.DynamicShadows, "Batman Dynamic Shadows quality leaf did not match the literal case.");
+        Expect(dispatcher.TryGetInt("motionBlur") == leaves.MotionBlur, "Batman Motion Blur quality leaf did not match the literal case.");
+        Expect(dispatcher.TryGetInt("distortion") == leaves.Distortion, "Batman Distortion quality leaf did not match the literal case.");
+        Expect(dispatcher.TryGetInt("fogVolumes") == leaves.FogVolumes, "Batman Fog Volumes quality leaf did not match the literal case.");
+        Expect(dispatcher.TryGetInt("sphericalHarmonicLighting") == leaves.SphericalHarmonicLighting, "Batman spherical-lighting quality leaf did not match the literal case.");
+        Expect(dispatcher.TryGetInt("ambientOcclusion") == leaves.AmbientOcclusion, "Batman Ambient Occlusion quality leaf did not match the literal case.");
+    }
+
+    /**
+     * @brief Asserts one persisted boolean assignment in a decoded Batman INI document.
+     * @param text Decoded INI text whose assignment should be searched.
+     * @param key INI key whose boolean value is required.
+     * @param enabled Expected normalized boolean value, encoded as True when nonzero and False otherwise.
+     * @param message Failure message reported when the exact assignment is absent.
+     */
+    void ExpectBatmanIniBoolean(std::string_view text, const char* key, int enabled, const char* message)
+    {
+        const std::string expected_assignment = std::string(key) + "=" + (enabled != 0 ? "True" : "False");
+        Expect(text.find(expected_assignment) != std::string_view::npos, message);
+    }
+
+    /**
+     * @brief Asserts all seven normalized quality leaves in one persisted Batman INI, including spherical-lighting inversion.
+     * @param text Decoded INI text whose quality assignments should be checked.
+     * @param leaves Expected normalized quality values before INI encoding.
+     */
+    void ExpectBatmanPersistedQualityLeaves(std::string_view text, const BatmanQualityLeaves& leaves)
+    {
+        ExpectBatmanIniBoolean(text, "Bloom", leaves.Bloom, "Persisted Batman Bloom value did not match the normalized draft.");
+        ExpectBatmanIniBoolean(text, "DynamicShadows", leaves.DynamicShadows, "Persisted Batman Dynamic Shadows value did not match the normalized draft.");
+        ExpectBatmanIniBoolean(text, "MotionBlur", leaves.MotionBlur, "Persisted Batman Motion Blur value did not match the normalized draft.");
+        ExpectBatmanIniBoolean(text, "Distortion", leaves.Distortion, "Persisted Batman Distortion value did not match the normalized draft.");
+        ExpectBatmanIniBoolean(text, "FogVolumes", leaves.FogVolumes, "Persisted Batman Fog Volumes value did not match the normalized draft.");
+        ExpectBatmanIniBoolean(text, "DisableSphericalHarmonicLights", leaves.SphericalHarmonicLighting == 0 ? 1 : 0, "Persisted Batman spherical lighting value did not apply the required inverse.");
+        ExpectBatmanIniBoolean(text, "AmbientOcclusion", leaves.AmbientOcclusion, "Persisted Batman Ambient Occlusion value did not match the normalized draft.");
+    }
+
+    /**
+     * @brief Associates one literal seven-leaf draft with the detail level that synchronization must derive.
+     * @remarks The table includes the four canonical presets and two deliberately noncanonical combinations that must normalize to Custom (4).
+     */
+    struct BatmanQualityDetailCase
+    {
+        /** @brief Human-readable case label used when iterating the literal table. */
+        const char* Name;
+        /** @brief Literal normalized values seeded before detail-level synchronization. */
+        BatmanQualityLeaves Leaves;
+        /** @brief Detail level expected after running `syncBatmanGraphicsDetailLevel`. */
+        int ExpectedDetailLevel;
+    };
 
     /**
      * @brief Writes UTF-8 text to a test file, replacing any prior content.
@@ -816,23 +914,71 @@ void RunCommandExecutorTests()
         Expect(batman_dispatcher.TryGetInt("ambientOcclusion") == 1, "Batman graphics load read the wrong ambient-occlusion state.");
         Expect(batman_dispatcher.TryGetInt("physx") == 1, "Batman graphics load read the wrong PhysX state.");
         Expect(batman_dispatcher.TryGetInt("stereo") == 1, "Batman graphics load read the wrong stereo state.");
+        Expect(batman_dispatcher.TryGetInt("bloom") == 1, "Launcher Bloom was not loaded.");
+        Expect(batman_dispatcher.TryGetInt("dynamicShadows") == 1, "Launcher Dynamic Shadows were not loaded.");
+        Expect(batman_dispatcher.TryGetInt("motionBlur") == 1, "Launcher Motion Blur was not loaded.");
+        Expect(batman_dispatcher.TryGetInt("distortion") == 1, "Launcher Distortion was not loaded.");
+        Expect(batman_dispatcher.TryGetInt("fogVolumes") == 1, "Launcher Fog Volumes were not loaded.");
+        Expect(batman_dispatcher.TryGetInt("sphericalHarmonicLighting") == 1, "Launcher spherical lighting was not inverted correctly.");
+        Expect(batman_dispatcher.TryGetInt("ambientOcclusion") == 1, "Launcher Ambient Occlusion was not loaded.");
 
-        Expect(batman_dispatcher.TrySetInt("detailLevel", 1), "Failed to seed the Batman medium detail-level preset.");
-        Expect(batman_executor.RunCommand("syncBatmanGraphicsPreset"), "Batman preset-sync command unexpectedly failed.");
-        Expect(batman_dispatcher.TryGetInt("bloom") == 1, "Batman preset-sync did not keep Bloom enabled for Medium.");
-        Expect(batman_dispatcher.TryGetInt("dynamicShadows") == 1, "Batman preset-sync did not keep Dynamic Shadows enabled for Medium.");
-        Expect(batman_dispatcher.TryGetInt("motionBlur") == 0, "Batman preset-sync did not disable Motion Blur for Medium.");
-        Expect(batman_dispatcher.TryGetInt("distortion") == 0, "Batman preset-sync did not disable Distortion for Medium.");
-        Expect(batman_dispatcher.TryGetInt("fogVolumes") == 0, "Batman preset-sync did not disable Fog Volumes for Medium.");
-        Expect(batman_dispatcher.TryGetInt("sphericalHarmonicLighting") == 0, "Batman preset-sync did not disable spherical harmonic lighting for Medium.");
-        Expect(batman_dispatcher.TryGetInt("ambientOcclusion") == 0, "Batman preset-sync did not disable ambient occlusion for Medium.");
+        const std::array<BatmanQualityDetailCase, 6> quality_detail_cases = {
+            BatmanQualityDetailCase{
+                "Low",
+                BatmanQualityLeaves{ .Bloom = 0, .DynamicShadows = 0, .MotionBlur = 0, .Distortion = 0, .FogVolumes = 0, .SphericalHarmonicLighting = 0, .AmbientOcclusion = 0 },
+                0 },
+            BatmanQualityDetailCase{
+                "Medium",
+                BatmanQualityLeaves{ .Bloom = 1, .DynamicShadows = 1, .MotionBlur = 0, .Distortion = 0, .FogVolumes = 0, .SphericalHarmonicLighting = 0, .AmbientOcclusion = 0 },
+                1 },
+            BatmanQualityDetailCase{
+                "High",
+                BatmanQualityLeaves{ .Bloom = 1, .DynamicShadows = 1, .MotionBlur = 1, .Distortion = 1, .FogVolumes = 1, .SphericalHarmonicLighting = 1, .AmbientOcclusion = 0 },
+                2 },
+            BatmanQualityDetailCase{
+                "VeryHigh",
+                BatmanQualityLeaves{ .Bloom = 1, .DynamicShadows = 1, .MotionBlur = 1, .Distortion = 1, .FogVolumes = 1, .SphericalHarmonicLighting = 1, .AmbientOcclusion = 1 },
+                3 },
+            BatmanQualityDetailCase{
+                "CustomA",
+                BatmanQualityLeaves{ .Bloom = 0, .DynamicShadows = 1, .MotionBlur = 1, .Distortion = 0, .FogVolumes = 1, .SphericalHarmonicLighting = 0, .AmbientOcclusion = 1 },
+                4 },
+            BatmanQualityDetailCase{
+                "CustomB",
+                BatmanQualityLeaves{ .Bloom = 1, .DynamicShadows = 0, .MotionBlur = 0, .Distortion = 1, .FogVolumes = 0, .SphericalHarmonicLighting = 1, .AmbientOcclusion = 0 },
+                4 }
+        };
 
-        Expect(batman_dispatcher.TrySetInt("bloom", 0), "Failed to seed the Batman custom detail override.");
+        for (const BatmanQualityDetailCase& detail_case : quality_detail_cases)
+        {
+            SetBatmanQualityLeaves(batman_dispatcher, detail_case.Leaves);
+            Expect(batman_executor.RunCommand("syncBatmanGraphicsDetailLevel"), "Batman detail-sync command failed for a literal quality case.");
+            Expect(batman_dispatcher.TryGetInt("detailLevel") == detail_case.ExpectedDetailLevel, detail_case.Name);
+        }
+
+        for (int preset_detail_level = 0; preset_detail_level <= 3; ++preset_detail_level)
+        {
+            Expect(batman_dispatcher.TrySetInt("detailLevel", preset_detail_level), "Failed to select a literal Batman detail preset.");
+            Expect(batman_executor.RunCommand("syncBatmanGraphicsPreset"), "Batman preset-sync command failed for a literal quality preset.");
+            ExpectBatmanQualityLeaves(batman_dispatcher, quality_detail_cases[static_cast<std::size_t>(preset_detail_level)].Leaves);
+        }
+
+        const BatmanQualityLeaves custom_leaves = quality_detail_cases[4].Leaves;
+        SetBatmanQualityLeaves(batman_dispatcher, custom_leaves);
         Expect(batman_executor.RunCommand("syncBatmanGraphicsDetailLevel"), "Batman detail-sync command unexpectedly failed.");
         Expect(batman_dispatcher.TryGetInt("detailLevel") == 4, "Batman detail-sync did not derive the Custom detail state.");
-        Expect(batman_executor.RunCommand("applyBatmanGraphicsDraft"), "Batman graphics apply command failed for a custom Bloom draft.");
+        Expect(batman_executor.RunCommand("applyBatmanGraphicsDraft"), "Batman graphics apply command failed for the complete custom quality draft.");
         Expect(batman_dispatcher.TryGetInt("detailLevel") == 4, "Batman graphics apply did not preserve the Custom detail state.");
-        Expect(ReadAllText(batman_ini_path).find("Bloom=False") != std::string::npos, "Batman graphics apply did not persist a custom Bloom draft.");
+        ExpectBatmanQualityLeaves(batman_dispatcher, custom_leaves);
+
+        const std::string custom_engine_ini_text = ReadAllText(batman_ini_path);
+        const std::string custom_user_ini_text = ReadAsciiFromUtf16LittleEndianText(batman_user_ini_path);
+        Expect(custom_engine_ini_text.find("DetailMode=2") != std::string::npos, "Custom Batman apply did not normalize DetailMode in BmEngine.ini.");
+        Expect(custom_user_ini_text.find("DetailMode=2") != std::string::npos, "Custom Batman apply did not normalize DetailMode in UserEngine.ini.");
+        ExpectBatmanPersistedQualityLeaves(custom_engine_ini_text, custom_leaves);
+        ExpectBatmanPersistedQualityLeaves(custom_user_ini_text, custom_leaves);
+        Expect(custom_engine_ini_text.find("DisableSphericalHarmonicLights=True") != std::string::npos, "Custom apply did not invert spherical harmonic lighting in BmEngine.ini.");
+        Expect(custom_user_ini_text.find("DisableSphericalHarmonicLights=True") != std::string::npos, "Custom apply did not invert spherical harmonic lighting in UserEngine.ini.");
 
         Expect(batman_dispatcher.TrySetInt("detailLevel", 1), "Failed to restore the Batman medium detail-level preset.");
         Expect(batman_executor.RunCommand("syncBatmanGraphicsPreset"), "Batman preset-sync failed during apply setup.");

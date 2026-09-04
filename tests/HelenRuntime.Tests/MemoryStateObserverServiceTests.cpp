@@ -5,11 +5,14 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
+#include <string>
+#include <unordered_map>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -199,6 +202,52 @@ namespace
     };
 
     /**
+     * @brief Describes the complete request, response, acknowledgement, and failure allocation for one grouped Batman setting.
+     * @remarks The two-value response, write, and acknowledgement vectors are ordered as disabled then enabled, matching the normalized config values 0 and 1.
+     */
+    struct BatmanGroupedObserverProtocol
+    {
+        /** @brief Stable observer identifier used in emitted updates and diagnostics. */
+        const char* Id;
+        /** @brief Normalized Helen config key updated by the observer. */
+        const char* TargetConfigKey;
+        /** @brief Raw request value that asks HelenHook to return the current config value. */
+        int ReadRequestValue;
+        /** @brief Raw response values corresponding to disabled and enabled config values. */
+        std::vector<int> ResponseValues;
+        /** @brief Raw write request values corresponding to disabled and enabled config values. */
+        std::vector<int> WriteValues;
+        /** @brief Raw success acknowledgement values corresponding to disabled and enabled write requests. */
+        std::vector<int> AcknowledgementValues;
+        /** @brief Raw response written when the update callback rejects a write request. */
+        int FailureResponseValue;
+        /** @brief Optional command emitted after this observer changes its target config value. */
+        const char* CommandId;
+    };
+
+    /**
+     * @brief Builds the sorted raw-value union accepted by every member of the Batman frontend control group.
+     * @return Complete sorted protocol union for VSync, MSAA, PhysX, Stereo, and all seven quality observers.
+     * @remarks Keeping this list explicit makes omissions or accidental protocol reuse fail in the grouped fixture rather than being hidden by per-observer mappings.
+     */
+    std::vector<int> CreateCompleteBatmanGroupedProtocolUnion()
+    {
+        return {
+            4200, 4210, 4211, 4220, 4221, 4230, 4231, 4299,
+            4300, 4310, 4311, 4312, 4313, 4314, 4320, 4321, 4322, 4323, 4324, 4330, 4331, 4332, 4333, 4334, 4399,
+            4400, 4410, 4411, 4412, 4420, 4421, 4422, 4430, 4431, 4432, 4499,
+            4500, 4510, 4511, 4520, 4521, 4530, 4531, 4599,
+            4600, 4601, 4602, 4603, 4604, 4605, 4606, 4609,
+            4610, 4611, 4612, 4613, 4614, 4615, 4616, 4619,
+            4620, 4621, 4622, 4623, 4624, 4625, 4626, 4629,
+            4630, 4631, 4632, 4633, 4634, 4635, 4636, 4639,
+            4640, 4641, 4642, 4643, 4644, 4645, 4646, 4649,
+            4650, 4651, 4652, 4653, 4654, 4655, 4656, 4659,
+            4660, 4661, 4662, 4663, 4664, 4665, 4666, 4669
+        };
+    }
+
+    /**
      * @brief Builds one graphics carrier observer with a caller-selected disjoint mapping table.
      * @param id Stable observer identifier used by emitted updates.
      * @param scan_start Inclusive scan start address.
@@ -275,6 +324,62 @@ namespace
             enabled_response.Match = 1;
             enabled_response.Value = 4211;
             definition.ResponseMappings.push_back(enabled_response);
+        }
+
+        return definition;
+    }
+
+    /**
+     * @brief Creates one full-protocol observer definition for the shared Batman frontend control carrier.
+     * @param protocol Request, response, write, acknowledgement, failure, and command values for the setting.
+     * @param scan_start Inclusive address at which the bounded carrier search begins.
+     * @param scan_end Exclusive address at which the bounded carrier search ends.
+     * @param protocol_union Sorted raw values accepted as structurally valid carrier contents by every group member.
+     * @return Observer definition with grouped discovery and bidirectional transactional protocol behavior configured.
+     */
+    helen::MemoryStateObserverDefinition CreateFullBatmanGroupedObserverDefinition(
+        const BatmanGroupedObserverProtocol& protocol,
+        std::uintptr_t scan_start,
+        std::uintptr_t scan_end,
+        const std::vector<int>& protocol_union)
+    {
+        helen::MemoryStateObserverDefinition definition = CreateGraphicsCarrierObserverDefinition(
+            protocol.Id,
+            scan_start,
+            scan_end,
+            protocol.TargetConfigKey,
+            {});
+        definition.AddressGroup = "batmanFrontendControlType";
+        definition.AddressMatchValues = protocol_union;
+        definition.Mappings.clear();
+        definition.ResponseMappings.clear();
+        definition.AcknowledgementMappings.clear();
+        definition.FailureResponseValue = protocol.FailureResponseValue;
+        definition.ResponseRequestValue = protocol.ReadRequestValue;
+        definition.CommandId.reset();
+        if (protocol.CommandId != nullptr)
+        {
+            definition.CommandId = protocol.CommandId;
+        }
+
+        for (std::size_t value_index = 0; value_index < protocol.WriteValues.size(); ++value_index)
+        {
+            definition.Mappings.push_back(
+                helen::MemoryStateObserverMapEntryDefinition{
+                    .Match = protocol.WriteValues[value_index],
+                    .Value = static_cast<int>(value_index) });
+            definition.AcknowledgementMappings.push_back(
+                helen::MemoryStateObserverMapEntryDefinition{
+                    .Match = protocol.WriteValues[value_index],
+                    .Value = protocol.AcknowledgementValues[value_index] });
+        }
+
+        for (std::size_t value_index = 0; value_index < protocol.ResponseValues.size(); ++value_index)
+        {
+            definition.ResponseMappings.push_back(
+                helen::MemoryStateObserverMapEntryDefinition{
+                    .Match = static_cast<int>(value_index),
+                    .Value = protocol.ResponseValues[value_index] });
         }
 
         return definition;
@@ -1731,6 +1836,207 @@ namespace
     }
 
     /**
+     * @brief Proves late grouped discovery, complete protocol recognition, quality transactions, and atomic carrier rearming.
+     * @remarks The carrier is absent for the first pass, every quality mini-range receives a read, successful write, failed write, and retry, and a structurally invalidated carrier is replaced without duplicate group scans.
+     */
+    void RunGroupedBatmanGraphicsQualityCoverageTest()
+    {
+        SYSTEM_INFO system_info{};
+        GetSystemInfo(&system_info);
+        const std::size_t page_size = system_info.dwPageSize;
+        void* const allocation = VirtualAlloc(nullptr, page_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        Expect(allocation != nullptr, "Failed to allocate writable memory for the complete Batman graphics protocol test.");
+
+        const std::uintptr_t page_address = reinterpret_cast<std::uintptr_t>(allocation);
+        const std::uintptr_t carrier_a_address = page_address + 128;
+        const std::uintptr_t carrier_b_address = page_address + 256;
+        const std::vector<int> protocol_union = CreateCompleteBatmanGroupedProtocolUnion();
+        Expect(protocol_union.size() == 100, "The complete Batman graphics protocol union omitted one or more raw values.");
+        Expect(std::is_sorted(protocol_union.begin(), protocol_union.end()), "The complete Batman graphics protocol union was not sorted.");
+        const std::vector<BatmanGroupedObserverProtocol> protocols = {
+            { "graphicsObserverVsync", "vsync", 4200, { 4210, 4211 }, { 4220, 4221 }, { 4230, 4231 }, 4299, nullptr },
+            { "graphicsObserverMsaa", "msaa", 4300, { 4310, 4311, 4312, 4313, 4314 }, { 4320, 4321, 4322, 4323, 4324 }, { 4330, 4331, 4332, 4333, 4334 }, 4399, nullptr },
+            { "graphicsObserverPhysx", "physx", 4400, { 4410, 4411, 4412 }, { 4420, 4421, 4422 }, { 4430, 4431, 4432 }, 4499, nullptr },
+            { "graphicsObserverStereo", "stereo", 4500, { 4510, 4511 }, { 4520, 4521 }, { 4530, 4531 }, 4599, nullptr },
+            { "graphicsObserverBloom", "bloom", 4600, { 4601, 4602 }, { 4603, 4604 }, { 4605, 4606 }, 4609, "syncBatmanGraphicsDetailLevel" },
+            { "graphicsObserverDynamicShadows", "dynamicShadows", 4610, { 4611, 4612 }, { 4613, 4614 }, { 4615, 4616 }, 4619, "syncBatmanGraphicsDetailLevel" },
+            { "graphicsObserverMotionBlur", "motionBlur", 4620, { 4621, 4622 }, { 4623, 4624 }, { 4625, 4626 }, 4629, "syncBatmanGraphicsDetailLevel" },
+            { "graphicsObserverDistortion", "distortion", 4630, { 4631, 4632 }, { 4633, 4634 }, { 4635, 4636 }, 4639, "syncBatmanGraphicsDetailLevel" },
+            { "graphicsObserverFogVolumes", "fogVolumes", 4640, { 4641, 4642 }, { 4643, 4644 }, { 4645, 4646 }, 4649, "syncBatmanGraphicsDetailLevel" },
+            { "graphicsObserverSphericalHarmonicLighting", "sphericalHarmonicLighting", 4650, { 4651, 4652 }, { 4653, 4654 }, { 4655, 4656 }, 4659, "syncBatmanGraphicsDetailLevel" },
+            { "graphicsObserverAmbientOcclusion", "ambientOcclusion", 4660, { 4661, 4662 }, { 4663, 4664 }, { 4665, 4666 }, 4669, "syncBatmanGraphicsDetailLevel" }
+        };
+
+        std::vector<helen::MemoryStateObserverDefinition> definitions;
+        definitions.reserve(protocols.size());
+        for (const BatmanGroupedObserverProtocol& protocol : protocols)
+        {
+            helen::MemoryStateObserverDefinition definition = CreateFullBatmanGroupedObserverDefinition(
+                protocol,
+                page_address,
+                page_address + page_size,
+                protocol_union);
+            Expect(
+                definition.AddressGroup.has_value() && *definition.AddressGroup == "batmanFrontendControlType",
+                "A complete Batman graphics observer did not declare the shared address group.");
+            Expect(
+                definition.AddressMatchValues == protocol_union,
+                "A complete Batman graphics observer did not carry the exact sorted protocol union.");
+            definitions.push_back(std::move(definition));
+        }
+
+        std::unordered_map<std::string, int> config_values;
+        for (const BatmanGroupedObserverProtocol& protocol : protocols)
+        {
+            config_values.emplace(protocol.TargetConfigKey, 1);
+        }
+
+        std::vector<helen::MemoryStateObserverUpdate> updates;
+        std::string failing_config_key;
+        bool force_failure = false;
+        helen::MemoryStateObserverService service(
+            std::move(definitions),
+            [&updates, &failing_config_key, &force_failure](const helen::MemoryStateObserverUpdate& update)
+            {
+                updates.push_back(update);
+                return !(force_failure && update.ConfigKey == failing_config_key);
+            },
+            [&config_values](const std::string& config_key) -> std::optional<int>
+            {
+                const auto value = config_values.find(config_key);
+                if (value == config_values.end())
+                {
+                    return std::nullopt;
+                }
+
+                return value->second;
+            });
+
+        try
+        {
+            Expect(service.PollOnce(), "The unresolved grouped Batman carrier poll unexpectedly failed before it was seeded.");
+            std::vector<helen::MemoryStateObserverDebugView> debug_views = service.GetDebugViews();
+            Expect(debug_views.size() == protocols.size(), "Complete Batman grouped observer count mismatch before late discovery.");
+            Expect(debug_views[0].RescanCount == 1, "The grouped Batman leader did not perform the initial broad scan.");
+            for (std::size_t observer_index = 1; observer_index < debug_views.size(); ++observer_index)
+            {
+                Expect(
+                    debug_views[observer_index].RescanCount == 0,
+                    "A nonleader Batman observer duplicated the unresolved grouped broad scan.");
+                Expect(
+                    debug_views[observer_index].CachedAddress == 0,
+                    "An unresolved Batman observer invented a cached carrier address.");
+            }
+
+            ConfigureGraphicsCarrierStateBlock(carrier_a_address, protocols[0].ReadRequestValue);
+            Expect(service.PollOnce(), "The late grouped Batman carrier discovery pass unexpectedly failed.");
+            Expect(ReadInt32(carrier_a_address + 12) == protocols[0].ResponseValues[1], "The VSync read response did not use the exact enabled response code.");
+
+            debug_views = service.GetDebugViews();
+            Expect(debug_views[0].RescanCount >= 2, "The grouped Batman leader did not retry late carrier discovery.");
+            for (const helen::MemoryStateObserverDebugView& debug_view : debug_views)
+            {
+                Expect(debug_view.CachedAddress == carrier_a_address, "Late grouped Batman discovery did not share the carrier with every observer.");
+            }
+
+            for (std::size_t protocol_index = 4; protocol_index < protocols.size(); ++protocol_index)
+            {
+                const BatmanGroupedObserverProtocol& protocol = protocols[protocol_index];
+                const int read_config_value = static_cast<int>(protocol_index % 2);
+                config_values[protocol.TargetConfigKey] = read_config_value;
+                WriteInt32(carrier_a_address + 12, protocol.ReadRequestValue);
+                Expect(service.PollOnce(), "A quality observer read-response poll unexpectedly failed.");
+                Expect(
+                    ReadInt32(carrier_a_address + 12) == protocol.ResponseValues[read_config_value],
+                    "A quality observer read response wrote the wrong protocol value.");
+
+                const std::size_t successful_update_count = updates.size();
+                WriteInt32(carrier_a_address + 12, protocol.WriteValues[1]);
+                Expect(service.PollOnce(), "A quality observer enabled write unexpectedly failed.");
+                Expect(updates.size() == successful_update_count + 1, "A quality observer enabled write did not emit exactly one update.");
+                const helen::MemoryStateObserverUpdate& successful_update = updates.back();
+                Expect(successful_update.ObserverId == protocol.Id, "A quality observer enabled update targeted the wrong observer.");
+                Expect(successful_update.ConfigKey == protocol.TargetConfigKey, "A quality observer enabled update targeted the wrong config key.");
+                Expect(successful_update.RawValue == protocol.WriteValues[1] && successful_update.MappedValue == 1, "A quality observer enabled update carried the wrong values.");
+                Expect(
+                    successful_update.CommandId.has_value() && *successful_update.CommandId == "syncBatmanGraphicsDetailLevel",
+                    "A quality observer enabled update omitted the detail-level synchronization command.");
+                Expect(ReadInt32(carrier_a_address + 12) == protocol.AcknowledgementValues[1], "A quality observer enabled write did not receive its exact acknowledgement.");
+
+                const std::size_t failed_update_count = updates.size();
+                failing_config_key = protocol.TargetConfigKey;
+                force_failure = true;
+                WriteInt32(carrier_a_address + 12, protocol.WriteValues[0]);
+                Expect(service.PollOnce(), "A handled quality observer failure unexpectedly failed the poll.");
+                Expect(updates.size() == failed_update_count + 1, "A failed quality observer write did not emit exactly one update.");
+                const helen::MemoryStateObserverUpdate& failed_update = updates.back();
+                Expect(failed_update.ObserverId == protocol.Id && failed_update.ConfigKey == protocol.TargetConfigKey, "A failed quality observer update targeted the wrong setting.");
+                Expect(failed_update.RawValue == protocol.WriteValues[0] && failed_update.MappedValue == 0, "A failed quality observer update carried the wrong values.");
+                Expect(
+                    failed_update.CommandId.has_value() && *failed_update.CommandId == "syncBatmanGraphicsDetailLevel",
+                    "A failed quality observer update omitted the detail-level synchronization command.");
+                Expect(ReadInt32(carrier_a_address + 12) == protocol.FailureResponseValue, "A failed quality observer write did not receive its exact failure response.");
+
+                WriteInt32(carrier_a_address + 12, protocol.WriteValues[0]);
+                Expect(service.PollOnce(), "A rearmed quality observer failure unexpectedly failed the poll.");
+                Expect(updates.size() == failed_update_count + 2, "A quality observer failure request was not rearmed after its failure response.");
+                Expect(ReadInt32(carrier_a_address + 12) == protocol.FailureResponseValue, "A rearmed quality observer write did not repeat its exact failure response.");
+                force_failure = false;
+                failing_config_key.clear();
+            }
+
+            debug_views = service.GetDebugViews();
+            Expect(debug_views[0].RescanCount == 2, "The grouped Batman leader performed an unexpected extra scan during quality transactions.");
+            for (std::size_t observer_index = 1; observer_index < debug_views.size(); ++observer_index)
+            {
+                Expect(debug_views[observer_index].RescanCount == 0, "A nonleader Batman observer performed a duplicate broad scan during quality transactions.");
+            }
+
+            WriteInt32(carrier_a_address + 4, 7);
+            Expect(service.PollOnce(), "The grouped Batman carrier invalidation poll unexpectedly failed.");
+            debug_views = service.GetDebugViews();
+            Expect(debug_views[0].RescanCount == 3, "The grouped Batman leader did not perform one invalidation rescan.");
+            for (const helen::MemoryStateObserverDebugView& debug_view : debug_views)
+            {
+                Expect(debug_view.CachedAddress == 0, "Grouped Batman invalidation did not clear every observer cache atomically.");
+            }
+
+            ConfigureGraphicsCarrierStateBlock(carrier_b_address, protocols[4].ReadRequestValue);
+            Expect(service.PollOnce(), "The grouped Batman replacement carrier poll unexpectedly failed.");
+            Expect(ReadInt32(carrier_b_address + 12) == protocols[4].ResponseValues[config_values[protocols[4].TargetConfigKey]], "The replacement carrier did not rearm the Bloom read response.");
+            debug_views = service.GetDebugViews();
+            Expect(debug_views[0].RescanCount == 4, "The grouped Batman leader did not perform one replacement-carrier scan.");
+            for (std::size_t observer_index = 1; observer_index < debug_views.size(); ++observer_index)
+            {
+                Expect(debug_views[observer_index].RescanCount == 0, "A nonleader Batman observer scanned while the replacement carrier was resolved.");
+            }
+            for (const helen::MemoryStateObserverDebugView& debug_view : debug_views)
+            {
+                Expect(debug_view.CachedAddress == carrier_b_address, "The replacement grouped Batman carrier was not shared atomically.");
+            }
+
+            WriteInt32(carrier_b_address + 12, protocols.back().WriteValues[1]);
+            Expect(service.PollOnce(), "The replacement carrier did not accept a quality write after rearming.");
+            Expect(ReadInt32(carrier_b_address + 12) == protocols.back().AcknowledgementValues[1], "The replacement carrier quality write did not receive its exact acknowledgement.");
+
+            Expect(VirtualFree(allocation, 0, MEM_RELEASE) != FALSE, "Failed to release the complete Batman graphics protocol allocation.");
+        }
+        catch (...)
+        {
+            if (allocation != nullptr)
+            {
+                MEMORY_BASIC_INFORMATION memory_info{};
+                if (VirtualQuery(allocation, &memory_info, sizeof(memory_info)) != 0 && memory_info.State == MEM_COMMIT)
+                {
+                    VirtualFree(allocation, 0, MEM_RELEASE);
+                }
+            }
+
+            throw;
+        }
+    }
+
+    /**
      * @brief Verifies a manual poll waits for a worker poll pass whose update callback is still executing.
      * @remarks Condition variables make the overlap deterministic: the worker callback blocks first, then a started manual poll must remain incomplete until that callback is released.
      */
@@ -1908,6 +2214,7 @@ void RunMemoryStateObserverServiceTests()
     RunGroupedGraphicsCarrierSingleScanPerPassTest();
     RunGroupedGraphicsCarrierTimedSingleScanPerPassTest();
     RunGroupedGraphicsCarrierObserverStaleCacheTest();
+    RunGroupedBatmanGraphicsQualityCoverageTest();
     RunObserverPollPassSerializationTest();
 
     SYSTEM_INFO system_info{};
