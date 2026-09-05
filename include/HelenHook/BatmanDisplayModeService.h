@@ -1,6 +1,7 @@
 #pragma once
 
 #include <HelenHook/BatmanDisplayMode.h>
+#include <HelenHook/BatmanDisplayCatalog.h>
 #include <HelenHook/BatmanDisplayEnvironment.h>
 
 #include <cstddef>
@@ -82,6 +83,12 @@ namespace helen
          * @return True when monitor data and the requested catalog are valid; false leaves all prior snapshots intact.
          */
         bool Refresh(BatmanDisplayModeCatalogKind kind, int configured_width, int configured_height);
+
+        /** @brief Captures an independently owned catalog; future service refreshes cannot reinterpret its indices. */
+        std::optional<BatmanDisplayCatalog> CaptureCatalog(BatmanDisplayModeCatalogKind kind, int width, int height);
+
+        /** @brief Revalidates the exact pair from the supplied owned catalog, not the service's newest ordering. */
+        std::optional<BatmanDisplayMode> RevalidateMode(const BatmanDisplayCatalog& catalog, std::size_t index);
 
         /**
          * @brief Returns the number of display modes in the last successful catalog snapshot.
@@ -180,5 +187,10 @@ namespace helen
         std::optional<BatmanDisplayMode> windowed_custom_mode_;
         /** @brief Last catalog kind successfully refreshed through the legacy API. */
         BatmanDisplayModeCatalogKind active_catalog_kind_{ BatmanDisplayModeCatalogKind::Fullscreen };
+
+        /** @brief Shares exact-pair revalidation between legacy catalogs and immutable session-owned catalogs. */
+        std::optional<BatmanDisplayMode> RevalidateCapturedMode(BatmanDisplayModeCatalogKind kind,
+            const std::vector<BatmanDisplayMode>& modes, const std::wstring& device_name,
+            const std::optional<BatmanDisplayMode>& configured_mode, std::size_t index);
     };
 }

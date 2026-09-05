@@ -237,10 +237,28 @@ namespace helen
         }
     }
 
-    /**
-     * @brief Replaces the catalog with a validated normalized snapshot from the enumeration source.
-     * @return True when refresh succeeds; otherwise false while preserving the previous catalog.
-     */
+    /** @brief Copies validated captured facts into independently owned session storage. */
+    std::optional<BatmanDisplayCatalog> BatmanDisplayModeService::CaptureCatalog(BatmanDisplayModeCatalogKind kind, int width, int height) {
+        if ((kind != BatmanDisplayModeCatalogKind::Windowed && kind != BatmanDisplayModeCatalogKind::Fullscreen) ||
+            !Refresh(kind, width, height)) {
+            return std::nullopt;
+        }
+        const std::optional<BatmanDisplayMode> desktop = GetDesktopMode(kind);
+        if (!desktop.has_value()) {
+            return std::nullopt;
+        }
+        const bool windowed = kind == BatmanDisplayModeCatalogKind::Windowed;
+        return BatmanDisplayCatalog(kind,
+            windowed ? windowed_display_device_name_ : fullscreen_display_device_name_,
+            windowed ? windowed_modes_ : fullscreen_modes_, BatmanDisplayMode(width, height), *desktop);
+    }
+
+    /** @brief Revalidates a session's exact original pair even if service scratch catalogs were replaced. */
+    std::optional<BatmanDisplayMode> BatmanDisplayModeService::RevalidateMode(const BatmanDisplayCatalog& catalog, std::size_t index) {
+        return RevalidateCapturedMode(catalog.GetKind(), catalog.GetModes(), catalog.GetDeviceName(), catalog.GetConfiguredMode(), index);
+    }
+
+    /** @brief Refreshes legacy catalog storage using current monitor enumeration without fabricating modes. */
     bool BatmanDisplayModeService::Refresh()
     {
         if (enumeration_callback_ == nullptr)
@@ -534,15 +552,15 @@ namespace helen
     }
 
     std::optional<BatmanDisplayMode> BatmanDisplayModeService::RevalidateMode(
-        BatmanDisplayModeCatalogKind kind,
-        std::size_t index)
-    {
-        const std::vector<BatmanDisplayMode>& modes = kind == BatmanDisplayModeCatalogKind::Windowed
-            ? windowed_modes_
-            : fullscreen_modes_;
-        const std::wstring& device_name = kind == BatmanDisplayModeCatalogKind::Windowed
-            ? windowed_display_device_name_
-            : fullscreen_display_device_name_;
+        BatmanDisplayModeCatalogKind kind, std::size_t index) {
+        const bool windowed = kind == BatmanDisplayModeCatalogKind::Windowed;
+        return RevalidateCapturedMode(kind, windowed ? windowed_modes_ : fullscreen_modes_,
+            windowed ? windowed_display_device_name_ : fullscreen_display_device_name_, windowed_custom_mode_, index);
+    }
+
+    std::optional<BatmanDisplayMode> BatmanDisplayModeService::RevalidateCapturedMode(
+        BatmanDisplayModeCatalogKind kind, const std::vector<BatmanDisplayMode>& modes,
+        const std::wstring& device_name, const std::optional<BatmanDisplayMode>& configured_mode, std::size_t index) {
         if (index >= modes.size())
         {
             return std::nullopt;
@@ -584,8 +602,8 @@ namespace helen
         std::vector<BatmanDisplayMode> normalized_modes;
         if (kind == BatmanDisplayModeCatalogKind::Windowed)
         {
-            if (!windowed_custom_mode_.has_value() ||
-                !TryBuildWindowedModes(environment, windowed_custom_mode_->GetWidth(), windowed_custom_mode_->GetHeight(), normalized_modes))
+            if (!configured_mode.has_value() ||
+                !TryBuildWindowedModes(environment, configured_mode->GetWidth(), configured_mode->GetHeight(), normalized_modes))
             {
                 return std::nullopt;
             }

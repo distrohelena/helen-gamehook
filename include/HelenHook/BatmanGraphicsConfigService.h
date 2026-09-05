@@ -2,11 +2,13 @@
 
 #include <filesystem>
 #include <HelenHook/BatmanGraphicsSnapshot.h>
+#include <HelenHook/BatmanGraphicsApplyResult.h>
 
 namespace helen
 {
     class BatmanDisplayModeService;
     class CommandDispatcher;
+    class BatmanGraphicsFileOperations;
 
     /**
      * @brief Reads, writes, and normalizes Batman Arkham Asylum graphics settings.
@@ -26,6 +28,10 @@ namespace helen
          */
         BatmanGraphicsConfigService(std::filesystem::path ini_path, BatmanDisplayModeService& display_mode_service);
 
+        /** @brief Binds explicit publication operations whose lifetime must exceed this service; reads and parsing remain native. */
+        BatmanGraphicsConfigService(std::filesystem::path ini_path, BatmanDisplayModeService& display_mode_service,
+            BatmanGraphicsFileOperations& file_operations);
+
         /**
          * @brief Reads the current Batman graphics settings from the authoritative launcher-owned sibling `UserEngine.ini` into registered config keys.
          * @param dispatcher Config dispatcher that receives the normalized graphics draft values.
@@ -42,6 +48,12 @@ namespace helen
          * @return True when both files contain every required setting and are written successfully; otherwise false.
          */
         bool ApplyFromDispatcher(const CommandDispatcher& dispatcher) const;
+
+        /** @brief Persists an isolated validated draft through the shared two-file writer and returns its verified outcome. */
+        BatmanGraphicsApplyResult ApplyDraft(const BatmanGraphicsDraftState& draft) const;
+
+        /** @brief Reports process-lifetime uncertainty from a failed graphics publication; reopening a menu cannot clear it. */
+        bool IsApplyLocked() const noexcept;
 
         /**
          * @brief Writes the current normalized subtitle-size config value back into the active subtitle INI.
@@ -89,5 +101,7 @@ namespace helen
         std::filesystem::path ini_path_;
         /** @brief Required display-mode catalog service used to revalidate selected resolution pairs at apply time. */
         BatmanDisplayModeService& display_mode_service_;
+        /** @brief Required filesystem boundary used consistently for publication, recovery, and owned-file cleanup. */
+        BatmanGraphicsFileOperations& file_operations_;
     };
 }

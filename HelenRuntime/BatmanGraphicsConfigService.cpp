@@ -1,5 +1,6 @@
 #include <HelenHook/BatmanGraphicsConfigService.h>
 #include <HelenHook/BatmanDisplayModeService.h>
+#include <HelenHook/BatmanGraphicsFileOperations.h>
 
 #include <HelenHook/Log.h>
 #include <HelenHook/CommandDispatcher.h>
@@ -33,6 +34,9 @@ namespace
      * interleaving snapshots or touching one another's sibling transaction files.
      */
     std::mutex BatmanGraphicsApplyMutex;
+
+    /** @brief Sticky process-wide lockout after unverified publication; no session recreation can clear it. */
+    std::atomic<bool> BatmanGraphicsIntegrityUncertain{false};
 
     /**
      * @brief Supplies a monotonic per-process identity component for sibling transaction paths.
@@ -671,33 +675,6 @@ namespace
         return std::filesystem::path(transaction_path);
     }
 
-    /**
-     * @brief Attempts to replace an existing target with a closed same-volume sibling file using Win32 replacement semantics.
-     * @param target_path Existing file that should be replaced.
-     * @param replacement_path Closed sibling file containing the new bytes.
-     * @param error_code Receives the Win32 error when the operation reports failure.
-     * @return True when `ReplaceFileW` reports success; otherwise false, with target state reconciled by the caller.
-     */
-    bool TryReplaceSiblingFile(
-        const std::filesystem::path& target_path,
-        const std::filesystem::path& replacement_path,
-        DWORD& error_code)
-    {
-        if (ReplaceFileW(
-            target_path.c_str(),
-            replacement_path.c_str(),
-            nullptr,
-            0,
-            nullptr,
-            nullptr) != FALSE)
-        {
-            error_code = ERROR_SUCCESS;
-            return true;
-        }
-
-        error_code = GetLastError();
-        return false;
-    }
 
     /**
      * @brief Stages exact recovery bytes into a newly-created sibling candidate without overwriting any existing path.
@@ -731,68 +708,20 @@ namespace
         return true;
     }
 
-    /**
-     * @brief Moves a closed recovery candidate over a target, handling both absent and existing targets.
-     * @param target_path Target path that should receive the recovery bytes.
-     * @param candidate_path Closed sibling candidate containing exact original bytes.
-     * @param error_code Receives the Win32 error when the move reports failure.
-     * @return True when `MoveFileExW` reports success; otherwise false, with verification still required.
-     */
-    bool TryMoveRecoveryFile(
-        const std::filesystem::path& target_path,
-        const std::filesystem::path& candidate_path,
-        DWORD& error_code)
-    {
-        if (MoveFileExW(
-                candidate_path.c_str(),
-                target_path.c_str(),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE)
-        {
-            error_code = ERROR_SUCCESS;
-            return true;
-        }
 
-        error_code = GetLastError();
-        return false;
-    }
-
-    /**
-     * @brief Removes one owned transaction file while treating an already-removed path as successful cleanup.
-     * @param path Owned stage or recovery path that should be deleted.
-     * @return True when the path is absent after this call; otherwise false.
-     */
-    bool TryDeleteTransactionFile(const std::filesystem::path& path)
-    {
-        if (DeleteFileW(path.c_str()) != FALSE)
-        {
-            return true;
-        }
-
-        const DWORD error_code = GetLastError();
-        if (error_code == ERROR_FILE_NOT_FOUND)
-        {
-            return true;
-        }
-
-        helen::Logf(
-            L"[graphics] Apply failed: unable to clean transaction file path=%ls error=%lu.",
-            path.wstring().c_str(),
-            static_cast<unsigned long>(error_code));
-        return false;
-    }
 
     /**
      * @brief Cleans every transaction path successfully created by one dual-INI publication attempt.
      * @param owned_transaction_files Paths created by this attempt; paths not in this collection are never deleted.
      * @return True when all owned paths are absent after cleanup; otherwise false, with each failure logged by path.
      */
-    bool CleanupBatmanGraphicsTransactionFiles(
+    bool CleanupBatmanGraphicsTransactionFiles(const helen::BatmanGraphicsFileOperations& file_operations,
         const std::vector<std::filesystem::path>& owned_transaction_files)
     {
         bool cleanup_succeeded = true;
         for (const std::filesystem::path& transaction_file : owned_transaction_files)
         {
-            if (!TryDeleteTransactionFile(transaction_file))
+            if (!file_operations.Remove(transaction_file))
             {
                 cleanup_succeeded = false;
             }
@@ -810,7 +739,7 @@ namespace
      * @param target_label Human-readable target label used by hard-compensation diagnostics.
      * @return True when the target was already equal or was restored and verified byte-for-byte; otherwise false.
      */
-    bool TryReconcileBatmanGraphicsIniTarget(
+    bool TryReconcileBatmanGraphicsIniTarget(const helen::BatmanGraphicsFileOperations& file_operations,
         const std::filesystem::path& target_path,
         const std::filesystem::path& recovery_path,
         const std::filesystem::path& restore_candidate_path,
@@ -839,7 +768,7 @@ namespace
         DWORD move_error = ERROR_SUCCESS;
         if (copied_recovery)
         {
-            TryMoveRecoveryFile(target_path, restore_candidate_path, move_error);
+            file_operations.Restore(target_path, restore_candidate_path, move_error);
         }
 
         const std::optional<std::string> verified_bytes = TryReadFileBytes(target_path);
@@ -878,7 +807,7 @@ namespace
      * @param original_user_bytes Exact launcher bytes captured before preparation.
      * @return True only when both targets are proven byte-for-byte equal to their original snapshots.
      */
-    bool TryReconcileBatmanGraphicsIniPair(
+    bool TryReconcileBatmanGraphicsIniPair(const helen::BatmanGraphicsFileOperations& file_operations,
         const std::filesystem::path& generated_path,
         const std::filesystem::path& user_path,
         const std::filesystem::path& generated_recovery_path,
@@ -889,14 +818,14 @@ namespace
         std::string_view original_generated_bytes,
         std::string_view original_user_bytes)
     {
-        const bool generated_reconciled = TryReconcileBatmanGraphicsIniTarget(
+        const bool generated_reconciled = TryReconcileBatmanGraphicsIniTarget(file_operations,
             generated_path,
             generated_recovery_path,
             generated_restore_candidate_path,
             owned_transaction_files,
             original_generated_bytes,
             L"generated INI");
-        const bool user_reconciled = TryReconcileBatmanGraphicsIniTarget(
+        const bool user_reconciled = TryReconcileBatmanGraphicsIniTarget(file_operations,
             user_path,
             user_recovery_path,
             user_restore_candidate_path,
@@ -914,9 +843,9 @@ namespace
      * @param user_bytes Newly encoded launcher INI bytes.
      * @param original_generated_bytes Exact generated bytes captured before preparation for compensation.
      * @param original_user_bytes Exact launcher bytes captured before preparation for recovery and cleanup ownership.
-     * @return True only when both target replacements and transaction cleanup succeed; otherwise false.
+     * @return Verified publication outcome and retained evidence paths; uncertain reconciliation never discards recovery artifacts.
      */
-    bool PublishBatmanGraphicsIniPair(
+    helen::BatmanGraphicsApplyResult PublishBatmanGraphicsIniPair(const helen::BatmanGraphicsFileOperations& file_operations,
         const std::filesystem::path& generated_path,
         const std::filesystem::path& user_path,
         std::string_view generated_bytes,
@@ -940,14 +869,14 @@ namespace
                 owned_transaction_files.push_back(generated_stage_path);
             }
 
-            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(owned_transaction_files);
+            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(file_operations, owned_transaction_files);
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after generated staging failed.");
             }
 
             helen::Logf(L"[graphics] Apply failed: unable to stage generated INI path=%ls.", generated_path.wstring().c_str());
-            return false;
+            return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
         }
         owned_transaction_files.push_back(generated_stage_path);
 
@@ -958,14 +887,14 @@ namespace
                 owned_transaction_files.push_back(user_stage_path);
             }
 
-            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(owned_transaction_files);
+            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(file_operations, owned_transaction_files);
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after launcher staging failed.");
             }
 
             helen::Logf(L"[graphics] Apply failed: unable to stage launcher INI path=%ls.", user_path.wstring().c_str());
-            return false;
+            return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
         }
         owned_transaction_files.push_back(user_stage_path);
 
@@ -976,14 +905,14 @@ namespace
                 owned_transaction_files.push_back(generated_recovery_path);
             }
 
-            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(owned_transaction_files);
+            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(file_operations, owned_transaction_files);
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after generated recovery staging failed.");
             }
 
             helen::Logf(L"[graphics] Apply failed: unable to stage generated INI recovery bytes path=%ls.", generated_path.wstring().c_str());
-            return false;
+            return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
         }
         owned_transaction_files.push_back(generated_recovery_path);
 
@@ -994,21 +923,21 @@ namespace
                 owned_transaction_files.push_back(user_recovery_path);
             }
 
-            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(owned_transaction_files);
+            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(file_operations, owned_transaction_files);
             if (!cleanup_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after launcher recovery staging failed.");
             }
 
             helen::Logf(L"[graphics] Apply failed: unable to stage launcher INI recovery bytes path=%ls.", user_path.wstring().c_str());
-            return false;
+            return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
         }
         owned_transaction_files.push_back(user_recovery_path);
 
         DWORD generated_publication_error = ERROR_SUCCESS;
-        if (!TryReplaceSiblingFile(generated_path, generated_stage_path, generated_publication_error))
+        if (!file_operations.Replace(generated_path, generated_stage_path, generated_publication_error))
         {
-            const bool reconciliation_succeeded = TryReconcileBatmanGraphicsIniPair(
+            const bool reconciliation_succeeded = TryReconcileBatmanGraphicsIniPair(file_operations,
                 generated_path,
                 user_path,
                 generated_recovery_path,
@@ -1018,7 +947,7 @@ namespace
                 owned_transaction_files,
                 original_generated_bytes,
                 original_user_bytes);
-            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(owned_transaction_files);
+            const bool cleanup_succeeded = reconciliation_succeeded && CleanupBatmanGraphicsTransactionFiles(file_operations, owned_transaction_files);
             if (!reconciliation_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to prove both INI targets were restored after generated publication failure.");
@@ -1032,13 +961,15 @@ namespace
                 L"[graphics] Apply failed: unable to publish generated INI path=%ls error=%lu.",
                 generated_path.wstring().c_str(),
                 static_cast<unsigned long>(generated_publication_error));
-            return false;
+            return {reconciliation_succeeded ? helen::BatmanGraphicsApplyOutcome::NotApplied :
+                helen::BatmanGraphicsApplyOutcome::IntegrityUncertain,
+                cleanup_succeeded ? std::vector<std::filesystem::path>{} : std::move(owned_transaction_files)};
         }
 
         DWORD user_publication_error = ERROR_SUCCESS;
-        if (!TryReplaceSiblingFile(user_path, user_stage_path, user_publication_error))
+        if (!file_operations.Replace(user_path, user_stage_path, user_publication_error))
         {
-            const bool reconciliation_succeeded = TryReconcileBatmanGraphicsIniPair(
+            const bool reconciliation_succeeded = TryReconcileBatmanGraphicsIniPair(file_operations,
                 generated_path,
                 user_path,
                 generated_recovery_path,
@@ -1048,7 +979,7 @@ namespace
                 owned_transaction_files,
                 original_generated_bytes,
                 original_user_bytes);
-            const bool cleanup_succeeded = CleanupBatmanGraphicsTransactionFiles(owned_transaction_files);
+            const bool cleanup_succeeded = reconciliation_succeeded && CleanupBatmanGraphicsTransactionFiles(file_operations, owned_transaction_files);
             if (!reconciliation_succeeded)
             {
                 helen::Logf(L"[graphics] Apply failed: unable to prove both INI targets were restored after launcher publication failure.");
@@ -1069,16 +1000,24 @@ namespace
                     generated_path.wstring().c_str());
             }
 
-            return false;
+            return {reconciliation_succeeded ? helen::BatmanGraphicsApplyOutcome::NotApplied :
+                helen::BatmanGraphicsApplyOutcome::IntegrityUncertain,
+                cleanup_succeeded ? std::vector<std::filesystem::path>{} : std::move(owned_transaction_files)};
         }
 
-        if (!CleanupBatmanGraphicsTransactionFiles(owned_transaction_files))
-        {
-            helen::Logf(L"[graphics] Apply failed: unable to clean transaction files after both INI publications succeeded.");
-            return false;
+        const std::optional<std::string> verified_generated = TryReadFileBytes(generated_path);
+        const std::optional<std::string> verified_user = TryReadFileBytes(user_path);
+        if (!verified_generated.has_value() || !verified_user.has_value() ||
+            *verified_generated != generated_bytes || *verified_user != user_bytes) {
+            helen::Logf(L"[graphics] Apply integrity uncertain: published targets could not be verified; retaining recovery files.");
+            return {helen::BatmanGraphicsApplyOutcome::IntegrityUncertain, std::move(owned_transaction_files)};
         }
 
-        return true;
+        if (!CleanupBatmanGraphicsTransactionFiles(file_operations, owned_transaction_files)) {
+            helen::Logf(L"[graphics] Apply committed, but transaction cleanup failed.");
+            return {helen::BatmanGraphicsApplyOutcome::CommittedCleanupFailed, std::move(owned_transaction_files)};
+        }
+        return {helen::BatmanGraphicsApplyOutcome::Committed, {}};
     }
 
     /**
@@ -2018,6 +1957,79 @@ namespace
         failed_setting.clear();
         return true;
     }
+    /** @brief Serializes a complete legacy-shaped draft through the shared publisher without using dispatcher storage. */
+    helen::BatmanGraphicsApplyResult ApplyGraphicsDraftState(const helen::BatmanGraphicsFileOperations& file_operations,
+        const std::filesystem::path& ini_path, LegacyBatmanGraphicsDraftState state) {
+        const std::lock_guard<std::mutex> transaction_lock(BatmanGraphicsApplyMutex);
+        if (BatmanGraphicsIntegrityUncertain.load()) {
+            return {helen::BatmanGraphicsApplyOutcome::IntegrityUncertain, {}};
+        }
+        if (state.DetailLevel != 4 && !ApplyDetailPresetToDraftState(state))
+        {
+            helen::Logf(L"[graphics] Apply failed: unsupported detailLevel=%d.", state.DetailLevel);
+            return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
+        }
+
+        const std::filesystem::path user_ini_path = ini_path.parent_path() / "UserEngine.ini";
+        const std::optional<std::string> original_engine_bytes = TryReadFileBytes(ini_path);
+        const std::optional<IniTextDocument> existing_user_document = TryReadIniDocument(user_ini_path);
+        if (!original_engine_bytes.has_value())
+        {
+            helen::Logf(L"[graphics] Apply failed: unable to read generated INI path=%ls.", ini_path.wstring().c_str());
+            return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
+        }
+
+        if (!existing_user_document.has_value())
+        {
+            helen::Logf(L"[graphics] Apply failed: unable to read launcher INI path=%ls.", user_ini_path.wstring().c_str());
+            return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
+        }
+
+        std::vector<std::string> engine_lines = SplitIniTextIntoLines(*original_engine_bytes);
+        IniTextDocument user_document = *existing_user_document;
+        std::wstring failed_setting;
+        if (!TryApplyDraftStateToIniLines(state, engine_lines, failed_setting))
+        {
+            helen::Logf(L"[graphics] Apply failed: generated INI rejected setting=%ls path=%ls.", failed_setting.c_str(), ini_path.wstring().c_str());
+            return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
+        }
+
+        if (!TryApplyDraftStateToIniLines(state, user_document.Lines, failed_setting))
+        {
+            helen::Logf(L"[graphics] Apply failed: launcher INI rejected setting=%ls path=%ls.", failed_setting.c_str(), user_ini_path.wstring().c_str());
+            return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
+        }
+
+        IniTextDocument generated_document;
+        generated_document.Lines = std::move(engine_lines);
+        const std::optional<std::string> generated_bytes = TryEncodeIniDocument(generated_document);
+        if (!generated_bytes.has_value())
+        {
+            helen::Logf(L"[graphics] Apply failed: unable to encode generated INI path=%ls.", ini_path.wstring().c_str());
+            return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
+        }
+
+        const std::optional<std::string> user_bytes = TryEncodeIniDocument(user_document);
+        if (!user_bytes.has_value())
+        {
+            helen::Logf(L"[graphics] Apply failed: unable to encode launcher INI path=%ls.", user_ini_path.wstring().c_str());
+            return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
+        }
+
+        // Conservatively retain the process lockout if publication throws before returning its verified outcome.
+        BatmanGraphicsIntegrityUncertain.store(true);
+        try {
+            helen::BatmanGraphicsApplyResult result = PublishBatmanGraphicsIniPair(file_operations,
+                ini_path, user_ini_path, *generated_bytes, *user_bytes, *original_engine_bytes, user_document.RawBytes);
+            BatmanGraphicsIntegrityUncertain.store(result.Outcome == helen::BatmanGraphicsApplyOutcome::IntegrityUncertain);
+            helen::Logf(L"[graphics] Apply completed outcome=%d vsync=%d.", static_cast<int>(result.Outcome), state.Vsync);
+            return result;
+        } catch (...) {
+            helen::Logf(L"[graphics] Apply integrity uncertain: exception during publication; retained transaction evidence.");
+            return {helen::BatmanGraphicsApplyOutcome::IntegrityUncertain, {}};
+        }
+    }
+
 }
 
 namespace helen
@@ -2031,8 +2043,15 @@ namespace helen
     BatmanGraphicsConfigService::BatmanGraphicsConfigService(
         std::filesystem::path ini_path,
         BatmanDisplayModeService& display_mode_service)
+        : BatmanGraphicsConfigService(std::move(ini_path), display_mode_service, BatmanGraphicsFileOperations::Native()) {
+    }
+
+    BatmanGraphicsConfigService::BatmanGraphicsConfigService(
+        std::filesystem::path ini_path, BatmanDisplayModeService& display_mode_service,
+        BatmanGraphicsFileOperations& file_operations)
         : ini_path_(std::move(ini_path)),
-          display_mode_service_(display_mode_service)
+          display_mode_service_(display_mode_service),
+          file_operations_(file_operations)
     {
         if (ini_path_.empty())
         {
@@ -2076,81 +2095,38 @@ namespace helen
      * @param dispatcher Config dispatcher that supplies the normalized graphics draft values.
      * @return True when both files contain every required setting and are written successfully; otherwise false.
      */
-    bool BatmanGraphicsConfigService::ApplyFromDispatcher(const CommandDispatcher& dispatcher) const
-    {
-        const std::lock_guard<std::mutex> transaction_lock(BatmanGraphicsApplyMutex);
+    BatmanGraphicsApplyResult BatmanGraphicsConfigService::ApplyDraft(const BatmanGraphicsDraftState& draft) const {
         LegacyBatmanGraphicsDraftState state;
-        if (!TryReadDraftStateFromDispatcher(dispatcher, state))
-        {
-            Logf(L"[graphics] Apply failed: one or more graphics draft keys are missing from the dispatcher.");
+        state.Fullscreen = draft.Get(BatmanGraphicsField::Fullscreen);
+        state.ResolutionWidth = draft.Get(BatmanGraphicsField::PersistedWidth);
+        state.ResolutionHeight = draft.Get(BatmanGraphicsField::PersistedHeight);
+        state.Vsync = draft.Get(BatmanGraphicsField::Vsync);
+        state.Msaa = draft.Get(BatmanGraphicsField::Msaa);
+        state.Bloom = draft.Get(BatmanGraphicsField::Bloom);
+        state.DynamicShadows = draft.Get(BatmanGraphicsField::DynamicShadows);
+        state.MotionBlur = draft.Get(BatmanGraphicsField::MotionBlur);
+        state.Distortion = draft.Get(BatmanGraphicsField::Distortion);
+        state.FogVolumes = draft.Get(BatmanGraphicsField::FogVolumes);
+        state.SphericalHarmonicLighting = draft.Get(BatmanGraphicsField::SphericalHarmonicLighting);
+        state.AmbientOcclusion = draft.Get(BatmanGraphicsField::AmbientOcclusion);
+        state.Physx = draft.Get(BatmanGraphicsField::Physx);
+        state.Stereo = draft.Get(BatmanGraphicsField::Stereo);
+        const std::optional<BatmanGraphicsPresetDefinition> preset = TryResolvePresetFromDraft(state);
+        state.DetailLevel = preset.has_value() ? preset->DetailLevel : 4;
+        return ApplyGraphicsDraftState(file_operations_, ini_path_, state);
+    }
+
+    bool BatmanGraphicsConfigService::IsApplyLocked() const noexcept {
+        return BatmanGraphicsIntegrityUncertain.load();
+    }
+
+    bool BatmanGraphicsConfigService::ApplyFromDispatcher(const CommandDispatcher& dispatcher) const {
+        LegacyBatmanGraphicsDraftState state;
+        if (!TryReadDraftStateFromDispatcher(dispatcher, state)) {
+            Logf(L"[graphics] Apply failed: missing dispatcher draft values.");
             return false;
         }
-
-        if (state.DetailLevel != 4 && !ApplyDetailPresetToDraftState(state))
-        {
-            Logf(L"[graphics] Apply failed: unsupported detailLevel=%d.", state.DetailLevel);
-            return false;
-        }
-
-        const std::filesystem::path user_ini_path = ini_path_.parent_path() / "UserEngine.ini";
-        const std::optional<std::string> original_engine_bytes = TryReadFileBytes(ini_path_);
-        const std::optional<IniTextDocument> existing_user_document = TryReadIniDocument(user_ini_path);
-        if (!original_engine_bytes.has_value())
-        {
-            Logf(L"[graphics] Apply failed: unable to read generated INI path=%ls.", ini_path_.wstring().c_str());
-            return false;
-        }
-
-        if (!existing_user_document.has_value())
-        {
-            Logf(L"[graphics] Apply failed: unable to read launcher INI path=%ls.", user_ini_path.wstring().c_str());
-            return false;
-        }
-
-        std::vector<std::string> engine_lines = SplitIniTextIntoLines(*original_engine_bytes);
-        IniTextDocument user_document = *existing_user_document;
-        std::wstring failed_setting;
-        if (!TryApplyDraftStateToIniLines(state, engine_lines, failed_setting))
-        {
-            Logf(L"[graphics] Apply failed: generated INI rejected setting=%ls path=%ls.", failed_setting.c_str(), ini_path_.wstring().c_str());
-            return false;
-        }
-
-        if (!TryApplyDraftStateToIniLines(state, user_document.Lines, failed_setting))
-        {
-            Logf(L"[graphics] Apply failed: launcher INI rejected setting=%ls path=%ls.", failed_setting.c_str(), user_ini_path.wstring().c_str());
-            return false;
-        }
-
-        IniTextDocument generated_document;
-        generated_document.Lines = std::move(engine_lines);
-        const std::optional<std::string> generated_bytes = TryEncodeIniDocument(generated_document);
-        if (!generated_bytes.has_value())
-        {
-            Logf(L"[graphics] Apply failed: unable to encode generated INI path=%ls.", ini_path_.wstring().c_str());
-            return false;
-        }
-
-        const std::optional<std::string> user_bytes = TryEncodeIniDocument(user_document);
-        if (!user_bytes.has_value())
-        {
-            Logf(L"[graphics] Apply failed: unable to encode launcher INI path=%ls.", user_ini_path.wstring().c_str());
-            return false;
-        }
-
-        if (!PublishBatmanGraphicsIniPair(
-                ini_path_,
-                user_ini_path,
-                *generated_bytes,
-                *user_bytes,
-                *original_engine_bytes,
-                user_document.RawBytes))
-        {
-            return false;
-        }
-
-        Logf(L"[graphics] Apply persisted generated and launcher INIs vsync=%d.", state.Vsync);
-        return true;
+        return ApplyGraphicsDraftState(file_operations_, ini_path_, state).Outcome == BatmanGraphicsApplyOutcome::Committed;
     }
 
     /**

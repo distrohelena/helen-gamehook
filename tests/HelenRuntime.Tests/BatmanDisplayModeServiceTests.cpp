@@ -42,6 +42,29 @@ namespace
 void RunBatmanDisplayModeServiceTests()
 {
     {
+        std::vector<helen::BatmanDisplayMode> modes{{1280, 720}, {1920, 1080}};
+        std::wstring device = L"DISPLAY1";
+        helen::BatmanDisplayModeService service([&]() -> std::optional<helen::BatmanDisplayEnvironment> {
+            return helen::BatmanDisplayEnvironment(device, modes, {1920, 1040}, {1920, 1080});
+        });
+        const auto first = service.CaptureCatalog(helen::BatmanDisplayModeCatalogKind::Fullscreen, 1280, 720);
+        Expect(first.has_value(), "Owned catalog capture failed.");
+        ExpectMode(first->GetModes().at(0), 1280, 720, "Captured index zero is not the original pair.");
+        modes = {{800, 600}, {1280, 720}, {1920, 1080}};
+        const auto second = service.CaptureCatalog(helen::BatmanDisplayModeCatalogKind::Fullscreen, 1280, 720);
+        Expect(second.has_value(), "Replacement catalog capture failed.");
+        ExpectMode(second->GetModes().at(0), 800, 600, "Second catalog fixture did not change ordering.");
+        const auto selected = service.RevalidateMode(*first, 0);
+        Expect(selected.has_value(), "Still-supported original selection was rejected.");
+        ExpectMode(*selected, 1280, 720, "Old catalog index was reinterpreted using refreshed ordering.");
+        modes = {{800, 600}, {1920, 1080}};
+        Expect(!service.RevalidateMode(*first, 0), "Removed original pair was silently replaced.");
+        modes = {{1280, 720}, {1920, 1080}};
+        device = L"DISPLAY2";
+        Expect(!service.RevalidateMode(*first, 0), "Catalog accepted a different monitor identity.");
+    }
+
+    {
         helen::BatmanDisplayModeService service(
             []() -> std::optional<helen::BatmanDisplayEnvironment>
             {

@@ -165,6 +165,9 @@ void RunWindowBehaviorHookSetTests();
 /** @brief Runs read-only graphics snapshot coverage against real temporary launcher INIs. */
 void RunBatmanGraphicsSnapshotTests();
 
+/** @brief Runs final process-lockout checks; no graphics writes may follow this suite. */
+void RunBatmanGraphicsIntegrityFailureTests();
+
 /** @brief Runs native tests with console-only failure reporting and no Windows crash dialogs. */
 int main()
 {
@@ -204,6 +207,7 @@ int main()
         RunDebugTraceServiceTests();
         RunWindowBehaviorConfigTests();
         RunWindowBehaviorHookSetTests();
+        RunBatmanGraphicsIntegrityFailureTests();
         std::cout << "PASS\n";
         return 0;
     }

@@ -1,4 +1,5 @@
 #include <HelenHook/BatmanGraphicsConfigService.h>
+#include "FaultingBatmanGraphicsFileOperations.h"
 #include <HelenHook/BatmanDisplayModeService.h>
 #include <HelenHook/CommandDefinition.h>
 #include <HelenHook/CommandDispatcher.h>
@@ -1080,6 +1081,62 @@ void RunBatmanResolutionModeApplyIntegrationTest();
  */
 void RunCommandExecutorTests()
 {
+    {
+        const std::filesystem::path engine = CreateTemporaryBatmanGraphicsIniPath("direct-cleanup-failure");
+        const std::filesystem::path user = GetSiblingBatmanUserEngineIniPath(engine);
+        WriteAllText(engine, CreateBatmanGraphicsIniText());
+        WriteAsciiAsUtf16LittleEndianText(user, CreateBatmanLauncherOwnedGraphicsIniText(true));
+        FaultingBatmanGraphicsFileOperations files(false, true);
+        helen::BatmanGraphicsConfigService service(engine, GetGraphicsTestDisplayModeService(), files);
+        std::optional<helen::BatmanGraphicsDraftState> draft = service.CaptureReadSnapshot().TryCreateDraft();
+        Expect(draft.has_value() && draft->TrySet(helen::BatmanGraphicsField::Vsync, 1), "Cleanup fixture draft invalid.");
+        const helen::BatmanGraphicsApplyResult result = service.ApplyDraft(*draft);
+        Expect(result.Outcome == helen::BatmanGraphicsApplyOutcome::CommittedCleanupFailed,
+            "Cleanup failure after publication was not distinguished from failed Apply.");
+        Expect(ReadAllText(engine).find("UseVsync=True") != std::string::npos &&
+            ReadAsciiFromUtf16LittleEndianText(user).find("UseVsync=True") != std::string::npos,
+            "Cleanup-failed commit did not retain both published targets.");
+        Expect(!result.RecoveryPaths.empty() && !service.IsApplyLocked(), "Cleanup failure lost evidence or falsely locked integrity.");
+        for (const std::filesystem::path& path : result.RecoveryPaths) {
+            Expect(path.parent_path() == engine.parent_path(), "Recovery evidence escaped test fixture.");
+            Expect(helen::BatmanGraphicsFileOperations::Native().Remove(path), "Test artifact cleanup failed.");
+        }
+    }
+
+    for (int blocked_target : {0, 1, 2}) {
+        const std::filesystem::path engine_path = CreateTemporaryBatmanGraphicsIniPath(
+            "direct-persistence-" + std::to_string(blocked_target));
+        const std::filesystem::path user_path = GetSiblingBatmanUserEngineIniPath(engine_path);
+        WriteAllText(engine_path, CreateBatmanGraphicsIniText());
+        WriteAsciiAsUtf16LittleEndianText(user_path, CreateBatmanLauncherOwnedGraphicsIniText(true));
+        const std::string original_engine = ReadAllBytes(engine_path);
+        const std::string original_user = ReadAllBytes(user_path);
+        helen::BatmanGraphicsConfigService service(engine_path, GetGraphicsTestDisplayModeService());
+        std::optional<helen::BatmanGraphicsDraftState> draft = service.CaptureReadSnapshot().TryCreateDraft();
+        Expect(draft.has_value(), "Direct persistence fixture could not create a complete draft.");
+        Expect(draft->TrySet(helen::BatmanGraphicsField::Vsync, 1), "Direct persistence draft edit failed.");
+        const HANDLE blocked_handle = blocked_target == 0 ? INVALID_HANDLE_VALUE :
+            OpenBatmanIniDenyingWriteDeleteSharing(blocked_target == 1 ? engine_path : user_path);
+        const helen::BatmanGraphicsApplyResult result = service.ApplyDraft(*draft);
+        if (blocked_handle != INVALID_HANDLE_VALUE) {
+            Expect(CloseHandle(blocked_handle) != FALSE, "Failed to close direct publication blocker.");
+        }
+        if (blocked_target == 0) {
+            Expect(result.Outcome == helen::BatmanGraphicsApplyOutcome::Committed, "Direct draft did not report verified commit.");
+            Expect(ReadAllText(engine_path).find("UseVsync=True") != std::string::npos,
+                "Direct draft failed to persist generated VSync.");
+            Expect(ReadAsciiFromUtf16LittleEndianText(user_path).find("UseVsync=True") != std::string::npos,
+                "Direct draft failed to persist launcher VSync or preserve encoding.");
+        } else {
+            Expect(result.Outcome == helen::BatmanGraphicsApplyOutcome::NotApplied,
+                "Reconciled publication failure reported the wrong outcome.");
+            Expect(ReadAllBytes(engine_path) == original_engine && ReadAllBytes(user_path) == original_user,
+                "NotApplied result did not preserve exact original files.");
+        }
+        Expect(!service.IsApplyLocked(), "Known consistent publication locked future Apply.");
+        ExpectNoBatmanGraphicsTransactionArtifacts(engine_path.parent_path());
+    }
+
     helen::CommandDispatcher dispatcher;
     dispatcher.RegisterConfigInt("ui.subtitleSize", 1);
     Expect(dispatcher.TrySetInt("ui.subtitleSize", 2), "Failed to seed the subtitle size config for the command executor tests.");
@@ -1525,4 +1582,46 @@ void RunBatmanResolutionModeApplyIntegrationTest()
     ExpectBatmanIniValue(user_text, "SystemSettings", "ResX", "1920", "Graphics Apply did not publish selected ResX to UserEngine.ini.");
     ExpectBatmanIniValue(engine_text, "SystemSettings", "ResY", "1080", "Graphics Apply did not publish selected ResY to BmEngine.ini.");
     ExpectBatmanIniValue(user_text, "SystemSettings", "ResY", "1080", "Graphics Apply did not publish selected ResY to UserEngine.ini.");
+}
+
+/** @brief Runs last because uncertain publication deliberately locks every graphics writer for the remainder of the process. */
+void RunBatmanGraphicsIntegrityFailureTests() {
+    const std::filesystem::path engine = CreateTemporaryBatmanGraphicsIniPath("direct-integrity-failure");
+    const std::filesystem::path user = GetSiblingBatmanUserEngineIniPath(engine);
+    WriteAllText(engine, CreateBatmanGraphicsIniText());
+    WriteAsciiAsUtf16LittleEndianText(user, CreateBatmanLauncherOwnedGraphicsIniText(true));
+    const std::string original_engine = ReadAllBytes(engine);
+    const std::string original_user = ReadAllBytes(user);
+    FaultingBatmanGraphicsFileOperations files(true, false);
+    helen::BatmanGraphicsConfigService service(engine, GetGraphicsTestDisplayModeService(), files);
+    std::optional<helen::BatmanGraphicsDraftState> draft = service.CaptureReadSnapshot().TryCreateDraft();
+    Expect(draft.has_value(), "Integrity failure fixture invalid.");
+    Expect(draft->TrySet(helen::BatmanGraphicsField::Vsync, 1), "Failed to set integrity test draft.");
+    const helen::BatmanGraphicsApplyResult result = service.ApplyDraft(*draft);
+    Expect(result.Outcome == helen::BatmanGraphicsApplyOutcome::IntegrityUncertain,
+        "Failed reconciliation was presented as verified rollback.");
+    Expect(ReadAllBytes(engine) != original_engine && ReadAllBytes(user) == original_user,
+        "Integrity test did not actually produce a partial publication.");
+    Expect(service.IsApplyLocked() && !result.RecoveryPaths.empty(), "Uncertain publication lost lockout or evidence.");
+    bool original_engine_retained = false;
+    bool original_user_retained = false;
+    for (const std::filesystem::path& path : result.RecoveryPaths) {
+        Expect(path.parent_path() == engine.parent_path(), "Integrity evidence escaped test fixture.");
+        if (std::filesystem::exists(path)) {
+            const std::string bytes = ReadAllBytes(path);
+            original_engine_retained = original_engine_retained || bytes == original_engine;
+            original_user_retained = original_user_retained || bytes == original_user;
+        }
+    }
+    Expect(original_engine_retained && original_user_retained, "Original recovery bytes were deleted after failed reconciliation.");
+    const std::string partial_engine = ReadAllBytes(engine);
+    helen::BatmanGraphicsConfigService reopened(engine, GetGraphicsTestDisplayModeService());
+    Expect(reopened.IsApplyLocked(), "Recreating the service cleared process integrity lockout.");
+    Expect(reopened.ApplyDraft(*draft).Outcome == helen::BatmanGraphicsApplyOutcome::IntegrityUncertain,
+        "A recreated writer accepted Apply after uncertain publication.");
+    Expect(ReadAllBytes(engine) == partial_engine && ReadAllBytes(user) == original_user,
+        "Locked writer attempted hidden repair or another publication.");
+    for (const std::filesystem::path& path : result.RecoveryPaths) {
+        Expect(helen::BatmanGraphicsFileOperations::Native().Remove(path), "Unable to clean test-owned integrity evidence.");
+    }
 }
