@@ -64,12 +64,16 @@ namespace
     }
 
     /**
-     * @brief Resolves the expected build output path for the Win32 debug Helen runtime DLL that Batman loads.
+     * @brief Resolves the DLL built beside this test executable, never a hardcoded configuration's stale output.
      * @return Absolute path to the built `HelenGameHook.dll` binary.
      */
     std::filesystem::path GetBuiltModulePath()
     {
-        return GetRepositoryRoot() / "bin" / "Win32" / "Debug" / "HelenGameHook.dll";
+        std::wstring executable_path(32768, L'\0');
+        const DWORD length = GetModuleFileNameW(nullptr, executable_path.data(), static_cast<DWORD>(executable_path.size()));
+        Expect(length > 0 && length < executable_path.size(), "Failed to resolve the active test executable path.");
+        executable_path.resize(length);
+        return std::filesystem::path(executable_path).parent_path().parent_path() / "HelenGameHook.dll";
     }
 
     /**
@@ -135,6 +139,7 @@ void RunHelenGameHookExportTests()
         "HelenGameHook.def does not export HelenSetConfigIntA.");
 
     const HMODULE module = LoadModule(module_path);
+    GetRequiredExport(module, "@HelenGraphicsDispatch@24");
 
     const FARPROC get_int_export = GetRequiredExport(module, "Helen_GetInt");
     const FARPROC get_int_a_export = GetRequiredExport(module, "HelenGetIntA");

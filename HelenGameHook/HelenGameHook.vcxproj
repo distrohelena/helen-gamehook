@@ -82,6 +82,10 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="HelenGameHook.cpp" />
+    <ClCompile Include="BatmanGraphicsPrimitiveCodec.cpp" />
+    <ClCompile Include="BatmanGraphicsExternalInterface.cpp" />
+    <ClCompile Include="BatmanGraphicsRuntime.cpp" />
+    <ClCompile Include="BatmanGraphicsRuntimeContext.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="HelenGameHook.def" />
@@ -94,6 +98,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\include\HelenHook\BatmanGraphicsConfigService.h" />
+    <ClInclude Include="BatmanGraphicsPrimitiveResult.h" />
+    <ClInclude Include="BatmanGraphicsPrimitiveCodec.h" />
+    <ClInclude Include="BatmanGraphicsExternalInterface.h" />
+    <ClInclude Include="BatmanGraphicsRuntime.h" />
+    <ClInclude Include="BatmanGraphicsRuntimeContext.h" />
     <ClInclude Include="..\include\HelenHook\BuildHookInstaller.h" />
     <ClInclude Include="..\include\HelenHook\CommandDispatcher.h" />
     <ClInclude Include="..\include\HelenHook\CommandExecutor.h" />

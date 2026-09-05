@@ -24,6 +24,7 @@
 #include <HelenHook/VirtualFileService.h>
 #include <HelenHook/WindowBehaviorConfig.h>
 #include <HelenHook/WindowBehaviorHookSet.h>
+#include "BatmanGraphicsRuntime.h"
 
 #include <exception>
 #include <array>
@@ -776,6 +777,7 @@ namespace
         }
 
         g_build_hooks = std::make_unique<helen::BuildHookInstaller>();
+        helen::InitializeBatmanGraphicsRuntime(*batman_engine_ini_path);
         helen::Log(L"[runtime] active-pack init build hook installer created.");
         if (!g_build_hooks->Install(active_pack_set.Hooks, *g_runtime_values))
         {
@@ -881,6 +883,7 @@ namespace
         g_d3d9_texture_hooks.reset();
         g_file_hooks.reset();
         g_build_hooks.reset();
+        helen::ResetBatmanGraphicsRuntime();
         g_virtual_files.reset();
         g_external_bindings.reset();
         g_command_executor.reset();

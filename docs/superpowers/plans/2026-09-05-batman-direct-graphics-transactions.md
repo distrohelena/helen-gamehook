@@ -10,6 +10,29 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-05-batman-direct-graphics-transactions-design.md`, approved commit `d2b32ca`.
 
+## Execution checkpoint: direct test candidate installed, 2026-09-05
+
+The native session/transaction service, allowlisted primitive adapter, owned runtime binding, and synchronous frontend are implemented. Native aggregate tests pass, including same-thread/concurrent session rejection, duplicate transaction consumption, stock x86 forwarding, stock exception propagation and runtime retirement. The DLL export test now resolves the DLL beside the active test executable instead of accidentally loading an older Debug output. MSVC `/EHsc` required explicit `noexcept(false)` on the C-linkage dispatch boundary to preserve the stock exception test.
+
+Actual emitted and compiled/FFDec-decompiled ActionScript pass `Test-BatmanDirectGraphicsFrontend.js`: no graphics timer/carrier calls, strict scalar decoding, normalized MSAA, directional edits, catalog switching, successful/failed/uncertain commit states, missing callbacks, rejected staging cancellation and native close ownership. The numeric codec and all nine static executable byte contracts passed again. These are automated tests, not live gameplay acceptance.
+
+An isolated test-candidate path was added rather than activating the legacy release package while its validators are still being migrated:
+
+- `Build-BatmanDirectGraphicsCandidate.ps1` recompiles managed builders, generates into a unique directory, patches the verified retail frontend and creates fresh manifests/delta; it takes an explicitly separately built native DLL/library.
+- `Test-BatmanDirectGraphicsPackage.ps1` uses the production native parser and delta reader, checks the exact eight-file pack, one production dispatch hook/export, and absence of graphics observers/commands/config/slots or unrelated behavior.
+- Rejection tests passed for duplicate hooks, a probe export, a wrong signature, stale delta metadata and legacy commands.
+- `Deploy-BatmanDirectGraphicsCandidate.ps1` reuses the existing rollback-safe four-artifact deployment helper. Its regression suite passed. It requires explicit GameBin and preserves the subtitle pack, proxy and enabled-pack config hashes.
+
+Clean native outputs: `output/batman-direct-transactions-20260905/native/`. The linker command log confirms the candidate DLL linked that directory's freshly rebuilt `HelenRuntime.lib`. The clean build reported existing C4244 warnings in generic `Hook.cpp` and a project-reference intermediate-directory warning; no compilation/link failure occurred.
+
+Installed candidate: `output/batman-direct-graphics/candidate-03187d8e3aef470f965c8caa8e91d6a0/`.
+Installed DLL SHA256: `A9A5FA68B61E943A77DB97F51EC2E7ADF16E48B222A21AD45FF62D95601E0CA2`.
+Exact reconstructed frontend SHA256: `F73FD07D5205EAE39D58495E1FCC395761E5E99C9E083A519133220FA133474C`.
+Durable pre-install backup: `output/batman-direct-graphics/rollback-3dd583e991d9412594b9e32a58d86779/`.
+Only subtitles and graphics remain enabled. Batman was closed at installation. Installed files passed exact hash/snapshot verification; temporary deployment staging was verified empty and removed.
+
+Still pending: user gameplay tests and logs; migration of the original stable pack/rebuild/release validators; shared generated field/outcome constants; remaining exhaustive failure/identity/capture-count coverage listed below. Do not interpret this checkpoint as completion of every checkbox or a release-ready package. Do not use the old stable rebuild/deploy route to reproduce this direct test candidate.
+
 ## Global Constraints
 
 - No graphics request polling, response toggles, scan discovery, sleeps, retry timers, or timeout-based ownership remains.

@@ -79,6 +79,10 @@
     <ClCompile Include="ActivePackSetBuilderTests.cpp" />
     <ClCompile Include="BatmanDisplayModeServiceTests.cpp" />
     <ClCompile Include="BatmanGraphicsSnapshotTests.cpp" />
+    <ClCompile Include="..\..\HelenGameHook\BatmanGraphicsExternalInterface.cpp" />
+    <ClCompile Include="..\..\HelenGameHook\BatmanGraphicsRuntime.cpp" />
+    <ClCompile Include="..\..\HelenGameHook\BatmanGraphicsRuntimeContext.cpp" />
+    <ClCompile Include="..\..\HelenGameHook\BatmanGraphicsPrimitiveCodec.cpp" />
     <ClCompile Include="BuildHookInstallerTests.cpp" />
     <ClCompile Include="BuildRuntimeCoordinatorTests.cpp" />
     <ClCompile Include="CommandExecutorTests.cpp" />

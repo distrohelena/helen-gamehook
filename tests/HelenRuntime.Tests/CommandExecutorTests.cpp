@@ -1,5 +1,11 @@
 #include <HelenHook/BatmanGraphicsConfigService.h>
 #include "FaultingBatmanGraphicsFileOperations.h"
+#include "CallbackBatmanGraphicsFileOperations.h"
+#include "../../HelenGameHook/BatmanGraphicsExternalInterface.h"
+#include "../../HelenGameHook/BatmanGraphicsRuntime.h"
+#include "BatmanStockDispatchCapture.h"
+#include <cstring>
+#include <HelenHook/BatmanGraphicsSessionService.h>
 #include <HelenHook/BatmanDisplayModeService.h>
 #include <HelenHook/CommandDefinition.h>
 #include <HelenHook/CommandDispatcher.h>
@@ -1081,6 +1087,158 @@ void RunBatmanResolutionModeApplyIntegrationTest();
  */
 void RunCommandExecutorTests()
 {
+    {
+        BatmanStockDispatchCapture handler;
+        std::array<unsigned char, 16> first_movie{};
+        std::array<unsigned char, 16> second_movie{};
+        std::array<unsigned char, 64> arguments{};
+        const char* first_name = "FE_GetControlType";
+        HelenGraphicsDispatch(&handler, nullptr, first_movie.data(), first_name, arguments.data(), 4);
+        Expect(handler.Calls == 1 && handler.Movie == first_movie.data() && handler.Name == first_name &&
+            handler.Arguments == arguments.data() && handler.Count == 4, "Production dispatch changed stock thiscall arguments.");
+        const char* second_name = "Helen_Graphics_GetV1Extra";
+        HelenGraphicsDispatch(&handler, nullptr, second_movie.data(), second_name, nullptr, 0);
+        Expect(handler.Calls == 2 && handler.Movie == second_movie.data() && handler.Name == second_name &&
+            handler.Arguments == nullptr && handler.Count == 0, "Unknown name reused another movie's stock call.");
+        handler.ThrowOnCall = true;
+        bool stock_exception_escaped = false;
+        try {
+            HelenGraphicsDispatch(&handler, nullptr, first_movie.data(), nullptr, nullptr, 0);
+        } catch (const std::logic_error&) {
+            stock_exception_escaped = true;
+        }
+        Expect(stock_exception_escaped && handler.Name == nullptr, "Graphics dispatch swallowed or changed a stock exception.");
+    }
+    {
+        const std::filesystem::path engine = CreateTemporaryBatmanGraphicsIniPath("direct-runtime");
+        WriteAllText(engine, CreateBatmanGraphicsIniText());
+        WriteAsciiAsUtf16LittleEndianText(GetSiblingBatmanUserEngineIniPath(engine), CreateBatmanLauncherOwnedGraphicsIniText(true));
+        std::array<unsigned char, 0x9DC + sizeof(helen::BatmanGraphicsPrimitiveResult)> movie{};
+        HelenGraphicsDispatch(nullptr, nullptr, movie.data(), "Helen_Graphics_OpenV1", nullptr, 0);
+        Expect(movie[0x9DC] == 0, "Unbound owned dispatch fabricated a result.");
+        helen::InitializeBatmanGraphicsRuntime(engine);
+        HelenGraphicsDispatch(nullptr, nullptr, movie.data(), "Helen_Graphics_OpenV1", nullptr, 0);
+        Expect(movie[0x9DC] == 3, "Bound production dispatch did not write the verified movie return slot.");
+        bool duplicate_rejected = false;
+        try {
+            helen::InitializeBatmanGraphicsRuntime(engine);
+        } catch (const std::logic_error&) {
+            duplicate_rejected = true;
+        }
+        Expect(duplicate_rejected, "Runtime silently replaced active native ownership.");
+        helen::ResetBatmanGraphicsRuntime();
+        movie[0x9DC] = 0;
+        HelenGraphicsDispatch(nullptr, nullptr, movie.data(), "Helen_Graphics_OpenV1", nullptr, 0);
+        Expect(movie[0x9DC] == 0, "Retired runtime still accepted new graphics work.");
+    }
+    {
+        const std::filesystem::path engine = CreateTemporaryBatmanGraphicsIniPath("direct-callback");
+        const std::filesystem::path user = GetSiblingBatmanUserEngineIniPath(engine);
+        WriteAllText(engine, CreateBatmanGraphicsIniText());
+        WriteAsciiAsUtf16LittleEndianText(user, CreateBatmanLauncherOwnedGraphicsIniText(true));
+        helen::BatmanDisplayModeService display;
+        helen::BatmanGraphicsConfigService config(engine, display);
+        helen::BatmanGraphicsSessionService sessions(config, display);
+        helen::BatmanGraphicsExternalInterface adapter(sessions);
+        helen::BatmanGraphicsPrimitiveResult result{};
+        Expect(adapter.TryHandle("Helen_Graphics_OpenV1", nullptr, 0, result), "Direct Open was not owned.");
+        double identity = 0;
+        std::memcpy(&identity, result.Payload, sizeof(identity));
+        Expect(result.Type == 3 && identity > 0, "Direct Open did not return a numeric session identity.");
+        std::array<unsigned char, 32> arguments{};
+        const std::uint32_t numeric_type = 3;
+        const double field = 2;
+        std::memcpy(arguments.data(), &numeric_type, sizeof(numeric_type));
+        std::memcpy(arguments.data() + 8, &identity, sizeof(identity));
+        std::memcpy(arguments.data() + 16, &numeric_type, sizeof(numeric_type));
+        std::memcpy(arguments.data() + 24, &field, sizeof(field));
+        result.Type = 0;
+        Expect(adapter.TryHandle("Helen_Graphics_GetV1", arguments.data(), 2, result), "Direct getter fell through to stock.");
+        double state = -1;
+        std::memcpy(&state, result.Payload, sizeof(state));
+        Expect(result.Type == 3 && state == 3, "Direct getter did not return the fixture's normalized 8x MSAA.");
+        result.Type = 0;
+        Expect(adapter.TryHandle("Helen_Graphics_GetV1", arguments.data(), 1, result) && result.Type == 0,
+            "Wrong-arity owned getter was accepted or forwarded.");
+        arguments[0] = 2;
+        Expect(adapter.TryHandle("Helen_Graphics_GetV1", arguments.data(), 2, result) && result.Type == 0,
+            "Boolean session identity was coerced or forwarded.");
+        const auto before = result;
+        Expect(!adapter.TryHandle("FE_GetControlType", arguments.data(), 2, result) &&
+            std::memcmp(&before, &result, sizeof(result)) == 0, "Stock call result was changed by direct adapter.");
+        Expect(!adapter.TryHandle("Helen_Graphics_GetV1Extra", nullptr, 0, result), "Prefix match intercepted an unknown call.");
+    }
+
+    {
+        const std::filesystem::path engine = CreateTemporaryBatmanGraphicsIniPath("direct-session");
+        const std::filesystem::path user = GetSiblingBatmanUserEngineIniPath(engine);
+        WriteAllText(engine, CreateBatmanGraphicsIniText());
+        WriteAsciiAsUtf16LittleEndianText(user, CreateBatmanLauncherOwnedGraphicsIniText(true));
+        helen::BatmanDisplayModeService display([]() -> std::optional<helen::BatmanDisplayEnvironment> {
+            return helen::BatmanDisplayEnvironment(L"DISPLAY1", {{1280, 720}, {1920, 1080}}, {1920, 1040}, {1920, 1080});
+        });
+        std::optional<helen::BatmanGraphicsSessionService> owned_sessions;
+        std::uint32_t active_session = 0;
+        std::uint32_t active_transaction = 0;
+        unsigned publication_entries = 0;
+        CallbackBatmanGraphicsFileOperations files([&]() {
+            Expect(owned_sessions.has_value(), "Test session lifetime was not established before publication.");
+            ++publication_entries;
+            Expect(!owned_sessions->Open() && !owned_sessions->Close(active_session) &&
+                !owned_sessions->CancelApply(active_session, active_transaction),
+                "Reentrant entry replaced or canceled the committing session.");
+            bool concurrent_rejected = false;
+            std::thread contender([&]() {
+                concurrent_rejected = !owned_sessions->Open().has_value();
+            });
+            contender.join();
+            Expect(concurrent_rejected, "Concurrent Open replaced the committing session.");
+        });
+        helen::BatmanGraphicsConfigService config(engine, display, files);
+        owned_sessions.emplace(config, display);
+        helen::BatmanGraphicsSessionService& sessions = *owned_sessions;
+        const auto opened = sessions.Open();
+        Expect(opened.has_value(), "Direct session Open failed.");
+        active_session = *opened;
+        Expect(sessions.ModeCount(*opened, helen::BatmanDisplayModeCatalogKind::Fullscreen) == 2,
+            "Session did not expose captured mode count.");
+        Expect(sessions.ModeWidth(*opened, helen::BatmanDisplayModeCatalogKind::Fullscreen, 0) == 1280 &&
+            sessions.ModeHeight(*opened, helen::BatmanDisplayModeCatalogKind::Fullscreen, 0) == 720,
+            "Session mode getter changed the exact captured pair.");
+        Expect(!sessions.ModeWidth(*opened, helen::BatmanDisplayModeCatalogKind::Fullscreen, 2),
+            "Session accepted an out-of-range resolution index.");
+        Expect(sessions.Get(*opened, helen::BatmanGraphicsField::CanApply) == 1, "Complete session incorrectly disabled Apply.");
+        Expect(!sessions.BeginApply(*opened), "Apply was allowed during read transfer.");
+        Expect(sessions.EndRead(*opened), "EndRead failed.");
+        Expect(!sessions.Get(*opened, helen::BatmanGraphicsField::Vsync), "EndRead left transfer getters active.");
+        const auto transaction = sessions.BeginApply(*opened);
+        Expect(transaction.has_value(), "EndRead released baseline needed by BeginApply.");
+        active_transaction = *transaction;
+        Expect(!sessions.BeginApply(*opened), "Second staged transaction was accepted.");
+        const std::string before = ReadAllBytes(user);
+        Expect(sessions.SetField(*opened, *transaction, helen::BatmanGraphicsField::Vsync, 1), "Session draft edit failed.");
+        Expect(ReadAllBytes(user) == before, "Staging edited the launcher file.");
+        const auto result = sessions.Commit(*opened, *transaction);
+        Expect(result.has_value() && result->Outcome == helen::BatmanGraphicsApplyOutcome::Committed, "Session commit failed.");
+        Expect(publication_entries == 2, "Commit did not exercise both real publication boundaries.");
+        Expect(!sessions.Commit(*opened, *transaction), "Duplicate Commit was accepted.");
+        const auto staged = sessions.BeginApply(*opened);
+        Expect(staged.has_value(), "Successful commit did not permit a new transaction.");
+        Expect(sessions.SetField(*opened, *staged, helen::BatmanGraphicsField::Fullscreen, 1), "Fullscreen staging failed.");
+        Expect(!sessions.SetResolution(*opened, *staged, helen::BatmanDisplayModeCatalogKind::Windowed, 0),
+            "Resolution kind mismatch was accepted.");
+        Expect(sessions.SetResolution(*opened, *staged, helen::BatmanDisplayModeCatalogKind::Fullscreen, 0),
+            "Session could not stage a catalog selection after EndRead.");
+        Expect(!sessions.SetField(*opened, *staged, helen::BatmanGraphicsField::Fullscreen, 0),
+            "Fullscreen edit invalidated an already staged resolution selection.");
+        Expect(sessions.CancelApply(*opened, *staged), "Uncommitted transaction could not be discarded.");
+        const auto replacement = sessions.Open();
+        Expect(replacement.has_value() && *replacement != *opened, "Open reused a session identity.");
+        Expect(!sessions.Close(*opened) && !sessions.SetField(*opened, *staged, helen::BatmanGraphicsField::Vsync, 0),
+            "Stale session affected a replacement editor.");
+        Expect(sessions.Close(*replacement), "Current idle session could not close.");
+    }
+
     {
         const std::filesystem::path engine = CreateTemporaryBatmanGraphicsIniPath("direct-cleanup-failure");
         const std::filesystem::path user = GetSiblingBatmanUserEngineIniPath(engine);

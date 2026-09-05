@@ -78,6 +78,7 @@
     <ClCompile Include="BatmanDisplayCatalog.cpp" />
     <ClCompile Include="BatmanGraphicsConfigService.cpp" />
     <ClCompile Include="BatmanGraphicsSnapshot.cpp" />
+    <ClCompile Include="BatmanGraphicsSessionService.cpp" />
     <ClCompile Include="BatmanGraphicsDraftState.cpp" />
     <ClCompile Include="BatmanGraphicsFileOperations.cpp" />
     <ClCompile Include="BuildRuntimeCoordinator.cpp" />
@@ -131,6 +132,11 @@
     <ClInclude Include="..\include\HelenHook\BatmanGraphicsApplyResult.h" />
     <ClInclude Include="..\include\HelenHook\BatmanGraphicsApplyOutcome.h" />
     <ClInclude Include="..\include\HelenHook\BatmanGraphicsFileOperations.h" />
+    <ClInclude Include="..\include\HelenHook\BatmanGraphicsOperationGuard.h" />
+    <ClInclude Include="..\include\HelenHook\BatmanGraphicsResolutionSelection.h" />
+    <ClInclude Include="..\include\HelenHook\BatmanGraphicsSession.h" />
+    <ClInclude Include="..\include\HelenHook\BatmanGraphicsSessionService.h" />
+    <ClInclude Include="..\include\HelenHook\BatmanGraphicsTransaction.h" />
     <ClInclude Include="..\include\HelenHook\BuildRuntimeCoordinator.h" />
     <ClInclude Include="..\include\HelenHook\BuildHookInstaller.h" />
     <ClInclude Include="..\include\HelenHook\BuildDefinition.h" />
