@@ -12,6 +12,11 @@ void RunActivePackSetBuilderTests();
 void RunBatmanDisplayModeServiceTests();
 
 /**
+ * @brief Runs Batman dynamic display-provider sequence isolation tests.
+ */
+void RunBatmanDisplayModeResponseProviderTests();
+
+/**
  * @brief Runs the build runtime coordinator coverage for startup commands and state-observer driven command dispatch.
  */
 void RunBuildRuntimeCoordinatorTests();
@@ -165,6 +170,7 @@ int main()
     {
         RunActivePackSetBuilderTests();
         RunBatmanDisplayModeServiceTests();
+        RunBatmanDisplayModeResponseProviderTests();
         RunBuildHookInstallerTests();
         RunRuntimeLayoutTests();
         RunJsonConfigStoreTests();

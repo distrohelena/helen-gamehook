@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ExpectedGraphicsShellSha256 = '74C7453CD4D4F194C28E5BC3B689AC1F47BB97B2C3F296345E32B01E438D5679'
+$ExpectedGraphicsShellSha256 = 'A75AA895C00F39D27D24AB566DD9B55356C172F776C6C387F924BEAB6585D515'
 
 . (Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1')
 . (Join-Path $PSScriptRoot 'BatmanPackVerificationHelpers.ps1')
@@ -390,26 +390,30 @@ function Assert-CurrentGraphicsSourceProvenance {
 }
 
 function Assert-BatmanRuntimeDisplayProviderContract {
-    <# Validate the runtime provider as a multi-part source contract so lifetime and snapshot semantics cannot drift independently. #>
+    <# Validate the runtime/provider split as a multi-part source contract so lifetime and snapshot semantics cannot drift independently. #>
     param([Parameter(Mandatory = $true)] [string]$RuntimeSourcePath)
     if (-not (Test-Path -LiteralPath $RuntimeSourcePath -PathType Leaf)) { throw "Batman runtime source was not found: $RuntimeSourcePath" }
     $source = Get-Content -LiteralPath $RuntimeSourcePath -Raw
+    $runtimeDirectory = Split-Path -Parent $RuntimeSourcePath
+    $providerSourcePath = [IO.Path]::GetFullPath((Join-Path $runtimeDirectory '..\HelenRuntime\BatmanDisplayModeResponseProvider.cpp'))
+    $providerHeaderPath = [IO.Path]::GetFullPath((Join-Path $runtimeDirectory '..\include\HelenHook\BatmanDisplayModeResponseProvider.h'))
+    if (-not (Test-Path -LiteralPath $providerSourcePath -PathType Leaf)) { throw "Batman display response-provider source was not found: $providerSourcePath" }
+    if (-not (Test-Path -LiteralPath $providerHeaderPath -PathType Leaf)) { throw "Batman display response-provider header was not found: $providerHeaderPath" }
+    $providerSource = Get-Content -LiteralPath $providerSourcePath -Raw
+    $providerHeader = Get-Content -LiteralPath $providerHeaderPath -Raw
     $displayConstruction = $source.IndexOf('g_batman_display_mode_service = std::make_unique<helen::BatmanDisplayModeService>()', [StringComparison]::Ordinal)
     $graphicsConstruction = $source.IndexOf('g_batman_graphics_config_service = std::make_unique<helen::BatmanGraphicsConfigService>', [StringComparison]::Ordinal)
     if ($displayConstruction -lt 0 -or $graphicsConstruction -lt 0 -or $displayConstruction -ge $graphicsConstruction) { throw 'Batman display service must be constructed before the graphics config service.' }
-    $callbackMatch = [regex]::Match($source, '(?s)const\s+helen::MemoryStateObserverDynamicResponseCallback\s+dynamic_response_callback\s*=\s*(?<body>.*?);\s*g_build_runtime_coordinator\s*=')
-    if (-not $callbackMatch.Success) { throw 'Batman runtime dynamic provider callback could not be isolated.' }
-    $callback = $callbackMatch.Groups['body'].Value
-    foreach ($required in @('provider_id != BatmanDisplayModeProviderId', 'raw_request == BatmanDisplayModeCatalogRequest', 'TryGetIntPair', 'display_mode_service.Refresh()', 'raw_request == BatmanDisplayModeCurrentWidthRequest || raw_request == BatmanDisplayModeCurrentHeightRequest', 'raw_request == BatmanDisplayModeCurrentWidthRequest', 'QueryCatalogScalar')) {
-        Assert-ContainsOrdinal -Text $callback -Token $required -Context "Batman runtime dynamic provider callback ($required)"
+    foreach ($required in @('#include <HelenHook/BatmanDisplayModeResponseProvider.h>', 'std::make_shared<helen::BatmanDisplayModeResponseProvider>', 'display_mode_response_provider->Resolve(provider_id, raw_request)')) {
+        Assert-ContainsOrdinal -Text $source -Token $required -Context "Batman runtime provider wiring ($required)"
     }
-    foreach ($required in @('const std::optional<int> catalog_value = display_mode_service.QueryCatalogScalar(raw_request)', 'if (!catalog_value.has_value())', 'display_catalog_current_pair->reset()')) {
-        Assert-ContainsOrdinal -Text $callback -Token $required -Context "Batman runtime dynamic provider failure cleanup ($required)"
+    foreach ($required in @('provider_id != ProviderId', 'TryGetIntPair', 'display_mode_service_.Refresh()', 'current_pair_.reset()', 'origin_request_.reset()', 'desktop_mode_.reset()', 'QueryCatalogScalar')) {
+        Assert-ContainsOrdinal -Text $providerSource -Token $required -Context "Batman display response provider ($required)"
     }
-    foreach ($required in @('BatmanDisplayModeProviderId = "batmanDisplayModes"', 'BatmanDisplayModeCatalogRequest = 4700', 'BatmanDisplayModeCurrentWidthRequest = 4897', 'BatmanDisplayModeCurrentHeightRequest = 4898')) {
-        Assert-ContainsOrdinal -Text $source -Token $required -Context "Batman runtime display protocol constant ($required)"
+    foreach ($required in @('ProviderId = "batmanDisplayModes"', 'LegacyCatalogRequest = 4700', 'LegacyCurrentWidthRequest = 4897', 'LegacyCurrentHeightRequest = 4898', 'WindowedCatalogRequest = 5200', 'WindowedCurrentHeightRequest = 5398', 'FullscreenCatalogRequest = 5400', 'FullscreenCurrentHeightRequest = 5598', 'DesktopWidthRequest = 5600', 'DesktopHeightRequest = 5601')) {
+        Assert-ContainsOrdinal -Text $providerHeader -Token $required -Context "Batman display protocol constant ($required)"
     }
-    if (([regex]::Matches($callback, 'display_catalog_current_pair->reset\(\)')).Count -lt 2 -or $source.IndexOf('std::make_shared<std::optional<helen::CommandIntPair>>()', [StringComparison]::Ordinal) -lt 0) { throw 'Batman runtime dynamic provider must clear the owned current-pair snapshot on refresh and after the height response.' }
+    if (([regex]::Matches($providerSource, 'current_pair_\.reset\(\)')).Count -lt 3 -or ([regex]::Matches($providerSource, 'desktop_mode_\.reset\(\)')).Count -lt 3) { throw 'Batman display response provider must clear pair and desktop snapshots on refresh and invalidation.' }
     $coordinatorMatch = [regex]::Match($source, '(?s)g_build_runtime_coordinator\s*=\s*std::make_unique<helen::BuildRuntimeCoordinator>\(.*?\);')
     if (-not $coordinatorMatch.Success -or $coordinatorMatch.Value.IndexOf('dynamic_response_callback', [StringComparison]::Ordinal) -lt 0) { throw 'Batman runtime coordinator must receive the dynamic provider callback.' }
     $resetMatch = [regex]::Match($source, '(?s)void ResetPackRuntimeState\(\).*?\n    \}')
@@ -1003,7 +1007,7 @@ $expectedAddressMatchValues = @(
     4650, 4651, 4652, 4653, 4654, 4655, 4656, 4659,
     4660, 4661, 4662, 4663, 4664, 4665, 4666, 4669
 )
-$expectedAddressMatchValues = @($expectedAddressMatchValues + (4700..4899) + (5000..5097) + (5100..5197) | Sort-Object -Unique)
+$expectedAddressMatchValues = @($expectedAddressMatchValues + (4700..4899) + (5200..5398) + (5400..5598) + @(5600, 5601) + (5000..5097) + (5100..5197) | Sort-Object -Unique)
 for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observerIndex++) {
     $observer = $hooks.stateObservers[$observerIndex]
     $expectedProperties = if ($observerIndex -eq 1) { $expectedDynamicObserverProperties } elseif ($observerIndex -eq 2) { $expectedResolutionObserverProperties } elseif ($observerIndex -eq 0 -or $observerIndex -ge 3 -and $observerIndex -le 6) { $expectedObserverProperties } elseif ($observerIndex -ge 7 -and $observerIndex -le 13) { $expectedCommandSettingObserverProperties } else { $expectedCommandObserverProperties }
@@ -1049,7 +1053,7 @@ foreach ($forbiddenCatalogProperty in @('targetConfigKey', 'mappings', 'response
 }
 Assert-ExactOrderedProperties -Object $catalogObserver.dynamicResponse -Names @('provider', 'requests', 'minimumValue', 'maximumValue') -Context 'hooks.json catalog dynamicResponse'
 Assert-StrictJsonStringEquals -Value $catalogObserver.dynamicResponse.provider -Expected 'batmanDisplayModes' -Context 'hooks.json catalog provider'
-Assert-StrictJsonIntegerArrayEquals -Values $catalogObserver.dynamicResponse.requests -Expected @(4700..4898) -Context 'hooks.json catalog requests'
+Assert-StrictJsonIntegerArrayEquals -Values $catalogObserver.dynamicResponse.requests -Expected @((4700..4898) + (5200..5398) + (5400..5598) + @(5600, 5601)) -Context 'hooks.json catalog requests'
 Assert-StrictJsonIntegerEquals -Value $catalogObserver.dynamicResponse.minimumValue -Expected 1 -Context 'hooks.json catalog minimumValue'
 Assert-StrictJsonIntegerEquals -Value $catalogObserver.dynamicResponse.maximumValue -Expected 32767 -Context 'hooks.json catalog maximumValue'
 Assert-StrictJsonIntegerEquals -Value $catalogObserver.failureResponseValue -Expected 4899 -Context 'hooks.json catalog failureResponseValue'

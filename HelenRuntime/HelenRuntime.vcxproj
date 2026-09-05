@@ -73,6 +73,7 @@
   <ItemGroup>
     <ClCompile Include="ActivePackSetBuilder.cpp" />
     <ClCompile Include="BatmanDisplayMode.cpp" />
+    <ClCompile Include="BatmanDisplayModeResponseProvider.cpp" />
     <ClCompile Include="BatmanDisplayModeService.cpp" />
     <ClCompile Include="BatmanGraphicsConfigService.cpp" />
     <ClCompile Include="BuildRuntimeCoordinator.cpp" />
@@ -115,7 +116,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\include\HelenHook\BatmanDisplayMode.h" />
+    <ClInclude Include="..\include\HelenHook\BatmanDisplayEnvironment.h" />
     <ClInclude Include="..\include\HelenHook\BatmanDisplayModeService.h" />
+    <ClInclude Include="..\include\HelenHook\BatmanDisplayModeResponseProvider.h" />
     <ClInclude Include="..\include\HelenHook\BatmanGraphicsConfigService.h" />
     <ClInclude Include="..\include\HelenHook\BuildRuntimeCoordinator.h" />
     <ClInclude Include="..\include\HelenHook\BuildHookInstaller.h" />

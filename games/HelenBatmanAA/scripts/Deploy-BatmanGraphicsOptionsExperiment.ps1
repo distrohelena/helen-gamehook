@@ -327,7 +327,7 @@ function Assert-BatmanGraphicsVsyncHooks {
         4660, 4661, 4662, 4663, 4664, 4665, 4666, 4669,
         4960, 4961, 4969, 4970, 4971, 4980, 4981, 4989, 4990, 4991
     )
-    $expectedAddressMatchValues = @($expectedAddressMatchValues + (4700..4899) + (5000..5097) + (5100..5197) | Sort-Object -Unique)
+    $expectedAddressMatchValues = @($expectedAddressMatchValues + (4700..4899) + (5200..5398) + (5400..5598) + @(5600, 5601) + (5000..5097) + (5100..5197) | Sort-Object -Unique)
     $expectedObservers = @(
         [pscustomobject]@{ Id = 'graphicsObserverFullscreen'; Target = 'fullscreen'; Matches = @(4673, 4674); ConfigValues = @(0, 1); Responses = @(4671, 4672); Acks = @(4675, 4676); Read = 4670; Failure = 4679; Command = '' },
         [pscustomobject]@{ Id = 'graphicsObserverDisplayModeCatalog'; Target = ''; Matches = @(); ConfigValues = @(); Responses = @(); Acks = @(); Read = $null; Failure = 4899; Command = '' },
@@ -369,7 +369,8 @@ function Assert-BatmanGraphicsVsyncHooks {
             foreach ($forbidden in @('targetConfigKey', 'mappings', 'responseRequestValue', 'responseMappings', 'acknowledgementMappings', 'command')) {
                 if ($observer.PSObject.Properties.Name -contains $forbidden) { throw "$Context dynamic observer contains forbidden '$forbidden'." }
             }
-            if ($observer.dynamicResponse.provider -cne 'batmanDisplayModes' -or (@($observer.dynamicResponse.requests) -join ',' -cne ((4700..4898) -join ',') -or $observer.dynamicResponse.minimumValue -ne 1 -or $observer.dynamicResponse.maximumValue -ne 32767)) { throw "$Context dynamic catalog declaration drifted." }
+            $expectedDynamicRequests = @((4700..4898) + (5200..5398) + (5400..5598) + @(5600, 5601))
+            if ($observer.dynamicResponse.provider -cne 'batmanDisplayModes' -or (@($observer.dynamicResponse.requests) -join ',' -cne ($expectedDynamicRequests -join ',') -or $observer.dynamicResponse.minimumValue -ne 1 -or $observer.dynamicResponse.maximumValue -ne 32767)) { throw "$Context dynamic catalog declaration drifted." }
         } elseif ($observerIndex -eq 2) {
             if (@($observer.mappings).Count -ne 98 -or @($observer.acknowledgementMappings).Count -ne 98 -or $observer.command -cne 'setBatmanGraphicsResolutionMode' -or $observer.failureResponseValue -ne 5199) { throw "$Context resolution observer drifted." }
             for ($mappingIndex = 0; $mappingIndex -lt 98; $mappingIndex++) {

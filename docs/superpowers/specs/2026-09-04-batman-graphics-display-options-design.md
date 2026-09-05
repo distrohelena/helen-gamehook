@@ -1,5 +1,22 @@
 # Batman Graphics Fullscreen and Supported Resolution Design
 
+## Approved correction after windowed live testing
+
+The following requirements supersede the original fullscreen-only catalog and all-or-nothing initialization assumptions below. The launcher legitimately configures window sizes that are absent from the monitor's fullscreen mode list; the observed case is Windowed `2560 x 1600`.
+
+- Launcher-owned `Fullscreen`, `ResX`, and `ResY` remain authoritative. Windowed initialization preserves the exact configured pair, including a custom size larger than the usable desktop area.
+- The Windowed selection catalog includes that exact configured size and common window sizes that fit the game monitor's usable work area. Fullscreen selections come only from that monitor's supported display modes.
+- Changing Fullscreen switches the local Resolution catalog. Preserve the selected pair when valid in the destination catalog. For an unsupported transition into Fullscreen, use the monitor's actual current display mode as a visible pending selection; never manufacture a nearest mode or write the INIs before Apply.
+- A failure in either new row must not discard or disable the previously working settings. Initialization must continue for existing rows, and Apply must include only available, changed selections.
+- Apply validation must use the selected Windowed/Fullscreen semantics and the exact catalog associated with the queued resolution. Applying an unrelated setting must preserve an unchanged launcher resolution.
+- Back and failed Apply must retain or restore the original mode and exact size. Opening the screen again reads the persisted launcher state.
+
+Regression coverage must exercise the real launcher-set custom window size, both mode transitions, pending carrier echoes, catalog failure with usable existing options, and Apply/rollback without unintended resolution changes.
+
+The mode-specific extension keeps one dynamic observer and its failure response `4899`. Its ordered request list is the existing `4700..4898`, followed by Windowed `5200..5398`, Fullscreen `5400..5598`, then desktop width/height `5600,5601`. The first request of each catalog bank returns its count, the next 196 slots hold up to 98 width/height pairs, and the last two return the exact configured width/height captured when that bank began. Only the count request refreshes a catalog. Desktop responses are separate from configured dimensions and cannot redefine the saved baseline. Negative-response ordinals index this complete ordered list.
+
+Resolution writes retain `5000 + index` and acknowledgements `5100 + index`. Apply orders a changed Fullscreen scalar before the resolution operation, and native code resolves that index in the corresponding mode-specific snapshot. Local dirty detection compares exact dimensions, not positions within different catalogs.
+
 ## Summary
 
 Activate the final two placeholder rows in Batman: Arkham Asylum GOTY's in-game Graphics Options screen. Fullscreen becomes a normal Windowed/Fullscreen setting. Resolution is populated at runtime from the display modes Windows reports for the monitor containing Batman's process-owned game window.

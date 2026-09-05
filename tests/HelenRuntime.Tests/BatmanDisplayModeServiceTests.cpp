@@ -1,4 +1,6 @@
 #include <HelenHook/BatmanDisplayModeService.h>
+#include <HelenHook/BatmanDisplayModeResponseProvider.h>
+#include <HelenHook/CommandDispatcher.h>
 
 #include <cstddef>
 #include <optional>
@@ -39,6 +41,108 @@ namespace
  */
 void RunBatmanDisplayModeServiceTests()
 {
+    {
+        helen::BatmanDisplayModeService service(
+            []() -> std::optional<helen::BatmanDisplayEnvironment>
+            {
+                return helen::BatmanDisplayEnvironment(
+                    L"DISPLAY1",
+                    { helen::BatmanDisplayMode(1920, 1080), helen::BatmanDisplayMode(1280, 720) },
+                    helen::BatmanDisplayMode(1920, 1040),
+                    helen::BatmanDisplayMode(1920, 1080));
+            });
+
+        Expect(
+            service.Refresh(helen::BatmanDisplayModeCatalogKind::Windowed, 2560, 1600),
+            "Expected the windowed catalog to accept a configured custom size.");
+        Expect(
+            service.FindModeIndex(helen::BatmanDisplayModeCatalogKind::Windowed, 2560, 1600).has_value(),
+            "Expected the windowed catalog to retain the configured 2560x1600 pair.");
+        Expect(
+            service.FindModeIndex(helen::BatmanDisplayModeCatalogKind::Windowed, 1280, 720).has_value(),
+            "Expected the windowed catalog to include a common fitting size.");
+        Expect(
+            service.QueryCatalogScalar(helen::BatmanDisplayModeCatalogKind::Windowed, 5200).has_value(),
+            "Expected the windowed catalog count request to resolve.");
+        Expect(
+            !service.FindModeIndex(helen::BatmanDisplayModeCatalogKind::Windowed, 3440, 1440).has_value(),
+            "Expected the windowed catalog to reject a size larger than the usable work area.");
+
+        Expect(
+            service.Refresh(helen::BatmanDisplayModeCatalogKind::Fullscreen, 2560, 1600),
+            "Expected the fullscreen catalog to refresh from supported monitor modes.");
+        Expect(
+            !service.FindModeIndex(helen::BatmanDisplayModeCatalogKind::Fullscreen, 2560, 1600).has_value(),
+            "Expected fullscreen to exclude an unsupported custom windowed size.");
+        Expect(
+            service.QueryCatalogScalar(helen::BatmanDisplayModeCatalogKind::Fullscreen, 5400).has_value(),
+            "Expected the fullscreen catalog count request to resolve.");
+        const std::optional<helen::BatmanDisplayMode> fullscreen_current = service.GetCurrentMode(
+            helen::BatmanDisplayModeCatalogKind::Fullscreen);
+        Expect(
+            fullscreen_current.has_value() && *fullscreen_current == helen::BatmanDisplayMode(2560, 1600),
+            "Expected fullscreen catalog terminal values to retain the exact persisted pair.");
+        const std::optional<helen::BatmanDisplayMode> fullscreen_desktop = service.GetDesktopMode(
+            helen::BatmanDisplayModeCatalogKind::Fullscreen);
+        Expect(
+            fullscreen_desktop.has_value() && *fullscreen_desktop == helen::BatmanDisplayMode(1920, 1080),
+            "Expected fullscreen desktop fallback to remain separately available.");
+    }
+
+    {
+        helen::BatmanDisplayModeService service(
+            []() -> std::optional<helen::BatmanDisplayEnvironment>
+            {
+                return helen::BatmanDisplayEnvironment(
+                    L"DISPLAY1",
+                    { helen::BatmanDisplayMode(1920, 1080) },
+                    helen::BatmanDisplayMode(1920, 1080),
+                    helen::BatmanDisplayMode(1920, 1080));
+            });
+        Expect(
+            service.Refresh(helen::BatmanDisplayModeCatalogKind::Fullscreen, 1920, 1080),
+            "Expected the initial fullscreen catalog to refresh.");
+        const std::size_t original_count = service.GetModeCount(helen::BatmanDisplayModeCatalogKind::Fullscreen);
+        Expect(
+            !service.Refresh(helen::BatmanDisplayModeCatalogKind::Windowed, 0, 0),
+            "Expected an invalid windowed custom pair to fail catalog refresh.");
+        Expect(
+            service.GetModeCount(helen::BatmanDisplayModeCatalogKind::Fullscreen) == original_count,
+            "Expected a failed catalog refresh to preserve the existing fullscreen catalog.");
+    }
+
+    {
+        helen::BatmanDisplayMode work_area(1920, 1040);
+        helen::BatmanDisplayModeService service(
+            [&work_area]() -> std::optional<helen::BatmanDisplayEnvironment>
+            {
+                return helen::BatmanDisplayEnvironment(
+                    L"DISPLAY1",
+                    { helen::BatmanDisplayMode(1920, 1080) },
+                    work_area,
+                    helen::BatmanDisplayMode(1920, 1080));
+            });
+        Expect(
+            service.Refresh(helen::BatmanDisplayModeCatalogKind::Windowed, 2560, 1600),
+            "Expected the initial windowed catalog to refresh for revalidation.");
+        const std::optional<std::size_t> common_index = service.FindModeIndex(
+            helen::BatmanDisplayModeCatalogKind::Windowed,
+            1280,
+            720);
+        const std::optional<std::size_t> custom_index = service.FindModeIndex(
+            helen::BatmanDisplayModeCatalogKind::Windowed,
+            2560,
+            1600);
+        Expect(common_index.has_value() && custom_index.has_value(), "Expected both common and custom windowed modes.");
+        work_area = helen::BatmanDisplayMode(1000, 700);
+        Expect(
+            !service.RevalidateMode(helen::BatmanDisplayModeCatalogKind::Windowed, *common_index).has_value(),
+            "Expected a common windowed mode outside the fresh work area to fail revalidation.");
+        Expect(
+            service.RevalidateMode(helen::BatmanDisplayModeCatalogKind::Windowed, *custom_index).has_value(),
+            "Expected the original configured custom windowed mode to remain exempt from work-area filtering.");
+    }
+
     {
         helen::BatmanDisplayModeService service(
             [](std::wstring& device_name, std::vector<helen::BatmanDisplayMode>& modes)
@@ -180,4 +284,91 @@ void RunBatmanDisplayModeServiceTests()
         const std::optional<helen::BatmanDisplayMode> revalidated_mode = service.RevalidateMode(0);
         Expect(!revalidated_mode.has_value(), "Expected a matching pair on a different display device to fail revalidation.");
     }
+}
+
+/**
+ * @brief Verifies provider count ownership rejects cross-bank and stale terminal responses.
+ */
+void RunBatmanDisplayModeResponseProviderTests()
+{
+    bool environment_available = true;
+    helen::BatmanDisplayModeService service(
+        [&environment_available]() -> std::optional<helen::BatmanDisplayEnvironment>
+        {
+            if (!environment_available)
+            {
+                return std::nullopt;
+            }
+            return helen::BatmanDisplayEnvironment(
+                L"DISPLAY1",
+                { helen::BatmanDisplayMode(1280, 720), helen::BatmanDisplayMode(1920, 1080) },
+                helen::BatmanDisplayMode(1920, 1080),
+                helen::BatmanDisplayMode(1920, 1080));
+        });
+    helen::CommandDispatcher dispatcher;
+    dispatcher.RegisterConfigInt("resolutionWidth", 2560);
+    dispatcher.RegisterConfigInt("resolutionHeight", 1600);
+    helen::BatmanDisplayModeResponseProvider provider(service, dispatcher);
+
+    Expect(
+        !provider.Resolve("wrongProvider", helen::BatmanDisplayModeResponseProvider::WindowedCatalogRequest).has_value(),
+        "Unknown display provider unexpectedly resolved a request.");
+    Expect(
+        provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::WindowedCatalogRequest).has_value(),
+        "Windowed catalog count did not resolve.");
+    Expect(
+        !provider.Resolve("wrongProvider", helen::BatmanDisplayModeResponseProvider::WindowedCurrentWidthRequest).has_value(),
+        "Unknown provider unexpectedly mutated an owned catalog sequence.");
+    Expect(
+        provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::WindowedCurrentWidthRequest) == std::optional<int>(2560),
+        "Unknown provider changed the active windowed catalog sequence.");
+    environment_available = false;
+    Expect(
+        !provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::FullscreenCatalogRequest).has_value(),
+        "Failed fullscreen count unexpectedly succeeded after monitor discovery failed.");
+    Expect(
+        !provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::WindowedCurrentHeightRequest).has_value(),
+        "Failed fullscreen count left the prior windowed terminal sequence usable.");
+    environment_available = true;
+    Expect(
+        provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::WindowedCatalogRequest).has_value(),
+        "Windowed catalog did not recover after monitor discovery resumed.");
+    Expect(
+        !provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::FullscreenCurrentWidthRequest).has_value(),
+        "Fullscreen terminal width crossed from a windowed catalog sequence.");
+    Expect(
+        provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::WindowedCatalogRequest).has_value(),
+        "Windowed catalog did not restart after a cross-bank request invalidated its sequence.");
+    Expect(
+        provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::WindowedCurrentWidthRequest) == std::optional<int>(2560),
+        "Windowed terminal width did not retain the exact persisted pair.");
+    Expect(
+        provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::WindowedCurrentHeightRequest) == std::optional<int>(1600),
+        "Windowed terminal height did not retain the exact persisted pair.");
+    Expect(
+        !provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::WindowedCurrentHeightRequest).has_value(),
+        "Consumed windowed terminal height was reused after its sequence completed.");
+
+    Expect(
+        provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::FullscreenCatalogRequest).has_value(),
+        "Fullscreen catalog count did not resolve.");
+    Expect(
+        provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::FullscreenCurrentWidthRequest) == std::optional<int>(2560),
+        "Fullscreen terminal width did not retain the exact persisted pair.");
+    Expect(
+        provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::FullscreenCurrentHeightRequest) == std::optional<int>(1600),
+        "Fullscreen terminal height did not retain the exact persisted pair.");
+    Expect(
+        provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::DesktopWidthRequest) == std::optional<int>(1920),
+        "Desktop fallback width did not resolve from the monitor snapshot.");
+    Expect(
+        provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::DesktopHeightRequest) == std::optional<int>(1080),
+        "Desktop fallback height did not resolve from the monitor snapshot.");
+    environment_available = false;
+    Expect(
+        !provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::FullscreenCatalogRequest).has_value(),
+        "Failed fullscreen count unexpectedly succeeded in the desktop provenance test.");
+    Expect(
+        !provider.Resolve(helen::BatmanDisplayModeResponseProvider::ProviderId, helen::BatmanDisplayModeResponseProvider::DesktopWidthRequest).has_value(),
+        "Failed fullscreen count left a stale desktop pair available.");
 }

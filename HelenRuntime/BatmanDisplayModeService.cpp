@@ -29,33 +29,47 @@ namespace
     }
 
     /**
-     * @brief Enumerates the display modes for the one monitor containing the current process window.
-     * @param display_device_name Receives the monitor device name selected from the process window.
-     * @param modes Receives every raw mode returned by EnumDisplaySettingsExW.
-     * @return True when exactly one qualifying process window and its monitor could be identified and enumerated.
+     * @brief Enumerates the monitor environment for the one monitor containing the current process window.
+     * @return A complete monitor environment when exactly one qualifying process window and its monitor could
+     * be identified and enumerated; no value when monitor discovery is ambiguous or incomplete.
      */
-    bool EnumerateCurrentDisplayModes(std::wstring& display_device_name, std::vector<helen::BatmanDisplayMode>& modes)
+    std::optional<helen::BatmanDisplayEnvironment> EnumerateCurrentDisplayEnvironment()
     {
         std::vector<HWND> windows;
         if (EnumWindows(&CollectQualifyingProcessWindow, reinterpret_cast<LPARAM>(&windows)) == FALSE || windows.size() != 1)
         {
-            return false;
+            return std::nullopt;
         }
 
         const HMONITOR monitor = MonitorFromWindow(windows.front(), MONITOR_DEFAULTTONULL);
         if (monitor == nullptr)
         {
-            return false;
+            return std::nullopt;
         }
 
         MONITORINFOEXW monitor_info{};
         monitor_info.cbSize = sizeof(monitor_info);
         if (GetMonitorInfoW(monitor, &monitor_info) == FALSE)
         {
-            return false;
+            return std::nullopt;
         }
 
-        display_device_name = monitor_info.szDevice;
+        std::wstring display_device_name = monitor_info.szDevice;
+        const int work_area_width = monitor_info.rcWork.right - monitor_info.rcWork.left;
+        const int work_area_height = monitor_info.rcWork.bottom - monitor_info.rcWork.top;
+        if (work_area_width <= 0 || work_area_height <= 0)
+        {
+            return std::nullopt;
+        }
+
+        DEVMODEW current_mode{};
+        current_mode.dmSize = sizeof(current_mode);
+        if (EnumDisplaySettingsExW(display_device_name.c_str(), ENUM_CURRENT_SETTINGS, &current_mode, 0) == FALSE ||
+            current_mode.dmPelsWidth == 0 || current_mode.dmPelsHeight == 0)
+        {
+            return std::nullopt;
+        }
+        std::vector<helen::BatmanDisplayMode> supported_modes;
         for (DWORD mode_index = 0;; ++mode_index)
         {
             DEVMODEW mode{};
@@ -65,14 +79,24 @@ namespace
                 break;
             }
 
-            modes.emplace_back(static_cast<int>(mode.dmPelsWidth), static_cast<int>(mode.dmPelsHeight));
+            supported_modes.emplace_back(static_cast<int>(mode.dmPelsWidth), static_cast<int>(mode.dmPelsHeight));
             if (mode_index == MAXDWORD)
             {
-                return false;
+                return std::nullopt;
             }
         }
 
-        return !modes.empty();
+        if (supported_modes.empty())
+        {
+            return std::nullopt;
+        }
+        return helen::BatmanDisplayEnvironment(
+            std::move(display_device_name),
+            std::move(supported_modes),
+            helen::BatmanDisplayMode(work_area_width, work_area_height),
+            helen::BatmanDisplayMode(
+                static_cast<int>(current_mode.dmPelsWidth),
+                static_cast<int>(current_mode.dmPelsHeight)));
     }
 
     /**
@@ -126,6 +150,58 @@ namespace
             normalized_modes.end());
         return !normalized_modes.empty() && normalized_modes.size() <= helen::BatmanDisplayModeService::MaximumModeCount;
     }
+
+    /**
+     * @brief Builds the windowed catalog from common fitting sizes plus the exact configured pair.
+     * @param environment Valid monitor facts used for filtering and identity.
+     * @param configured_width Width read from the launcher draft.
+     * @param configured_height Height read from the launcher draft.
+     * @param normalized_modes Receives the staged windowed catalog.
+     * @return True when every required dimension is valid and the bounded catalog normalizes successfully.
+     */
+    bool TryBuildWindowedModes(
+        const helen::BatmanDisplayEnvironment& environment,
+        int configured_width,
+        int configured_height,
+        std::vector<helen::BatmanDisplayMode>& normalized_modes)
+    {
+        if (configured_width <= 0 || configured_height <= 0 ||
+            environment.WorkArea.GetWidth() <= 0 || environment.WorkArea.GetHeight() <= 0)
+        {
+            return false;
+        }
+
+        std::vector<helen::BatmanDisplayMode> candidate_modes;
+        const helen::BatmanDisplayMode common_sizes[] = {
+            helen::BatmanDisplayMode(640, 480),
+            helen::BatmanDisplayMode(800, 600),
+            helen::BatmanDisplayMode(1024, 768),
+            helen::BatmanDisplayMode(1280, 720),
+            helen::BatmanDisplayMode(1280, 800),
+            helen::BatmanDisplayMode(1280, 1024),
+            helen::BatmanDisplayMode(1366, 768),
+            helen::BatmanDisplayMode(1600, 900),
+            helen::BatmanDisplayMode(1680, 1050),
+            helen::BatmanDisplayMode(1920, 1080),
+            helen::BatmanDisplayMode(1920, 1200),
+            helen::BatmanDisplayMode(2560, 1080),
+            helen::BatmanDisplayMode(2560, 1440),
+            helen::BatmanDisplayMode(2560, 1600),
+            helen::BatmanDisplayMode(3440, 1440),
+            helen::BatmanDisplayMode(3840, 2160)
+        };
+
+        for (const helen::BatmanDisplayMode& common_size : common_sizes)
+        {
+            if (common_size.GetWidth() <= environment.WorkArea.GetWidth() &&
+                common_size.GetHeight() <= environment.WorkArea.GetHeight())
+            {
+                candidate_modes.push_back(common_size);
+            }
+        }
+        candidate_modes.emplace_back(configured_width, configured_height);
+        return TryNormalizeModes(environment.DisplayDeviceName, candidate_modes, normalized_modes);
+    }
 }
 
 namespace helen
@@ -134,7 +210,7 @@ namespace helen
      * @brief Constructs a service using the default Win32 current-game-display enumeration source.
      */
     BatmanDisplayModeService::BatmanDisplayModeService()
-        : enumeration_callback_(EnumerateCurrentDisplayModes)
+        : environment_enumeration_callback_(EnumerateCurrentDisplayEnvironment)
     {
     }
 
@@ -152,27 +228,129 @@ namespace helen
         }
     }
 
+    BatmanDisplayModeService::BatmanDisplayModeService(EnvironmentEnumerationCallback enumeration_callback)
+        : environment_enumeration_callback_(std::move(enumeration_callback))
+    {
+        if (!environment_enumeration_callback_)
+        {
+            throw std::invalid_argument("Batman display mode service requires an environment enumeration callback.");
+        }
+    }
+
     /**
      * @brief Replaces the catalog with a validated normalized snapshot from the enumeration source.
      * @return True when refresh succeeds; otherwise false while preserving the previous catalog.
      */
     bool BatmanDisplayModeService::Refresh()
     {
+        if (enumeration_callback_ == nullptr)
+        {
+            if (environment_enumeration_callback_ == nullptr)
+            {
+                return false;
+            }
+            const std::optional<BatmanDisplayEnvironment> environment_result = environment_enumeration_callback_();
+            if (!environment_result.has_value())
+            {
+                return false;
+            }
+            const BatmanDisplayEnvironment& environment = *environment_result;
+            std::vector<BatmanDisplayMode> normalized_modes;
+            if (!TryNormalizeModes(environment.DisplayDeviceName, environment.SupportedModes, normalized_modes) ||
+                environment.CurrentDesktopMode.GetWidth() <= 0 || environment.CurrentDesktopMode.GetHeight() <= 0 ||
+                std::find(normalized_modes.begin(), normalized_modes.end(), environment.CurrentDesktopMode) == normalized_modes.end())
+            {
+                return false;
+            }
+            fullscreen_modes_ = normalized_modes;
+            fullscreen_display_device_name_ = environment.DisplayDeviceName;
+            fullscreen_current_mode_.reset();
+            fullscreen_desktop_mode_ = environment.CurrentDesktopMode;
+            active_catalog_kind_ = BatmanDisplayModeCatalogKind::Fullscreen;
+            modes_ = std::move(normalized_modes);
+            display_device_name_ = environment.DisplayDeviceName;
+            return true;
+        }
+
         std::wstring display_device_name;
         std::vector<BatmanDisplayMode> raw_modes;
         if (!enumeration_callback_(display_device_name, raw_modes))
         {
             return false;
         }
-
         std::vector<BatmanDisplayMode> normalized_modes;
         if (!TryNormalizeModes(display_device_name, raw_modes, normalized_modes))
         {
             return false;
         }
-
         display_device_name_ = std::move(display_device_name);
         modes_ = std::move(normalized_modes);
+        active_catalog_kind_ = BatmanDisplayModeCatalogKind::Fullscreen;
+        return true;
+    }
+
+    bool BatmanDisplayModeService::Refresh(
+        BatmanDisplayModeCatalogKind kind,
+        int configured_width,
+        int configured_height)
+    {
+        if (environment_enumeration_callback_ == nullptr)
+        {
+            return false;
+        }
+
+        const std::optional<BatmanDisplayEnvironment> environment_result = environment_enumeration_callback_();
+        if (!environment_result.has_value())
+        {
+            return false;
+        }
+        const BatmanDisplayEnvironment& environment = *environment_result;
+
+        std::vector<BatmanDisplayMode> normalized_modes;
+        if (kind == BatmanDisplayModeCatalogKind::Windowed)
+        {
+            if (!TryBuildWindowedModes(environment, configured_width, configured_height, normalized_modes))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            if (!TryNormalizeModes(environment.DisplayDeviceName, environment.SupportedModes, normalized_modes) ||
+                environment.CurrentDesktopMode.GetWidth() <= 0 || environment.CurrentDesktopMode.GetHeight() <= 0)
+            {
+                return false;
+            }
+        }
+
+        if (configured_width <= 0 || configured_height <= 0)
+        {
+            return false;
+        }
+        const BatmanDisplayMode configured_mode(configured_width, configured_height);
+        if (environment.CurrentDesktopMode.GetWidth() <= 0 || environment.CurrentDesktopMode.GetHeight() <= 0 ||
+            (kind == BatmanDisplayModeCatalogKind::Fullscreen &&
+             std::find(normalized_modes.begin(), normalized_modes.end(), environment.CurrentDesktopMode) == normalized_modes.end()))
+        {
+            return false;
+        }
+
+        if (kind == BatmanDisplayModeCatalogKind::Windowed)
+        {
+            windowed_modes_ = std::move(normalized_modes);
+            windowed_display_device_name_ = environment.DisplayDeviceName;
+            windowed_current_mode_ = configured_mode;
+            windowed_desktop_mode_ = environment.CurrentDesktopMode;
+            windowed_custom_mode_ = configured_mode;
+        }
+        else
+        {
+            fullscreen_modes_ = std::move(normalized_modes);
+            fullscreen_display_device_name_ = environment.DisplayDeviceName;
+            fullscreen_current_mode_ = configured_mode;
+            fullscreen_desktop_mode_ = environment.CurrentDesktopMode;
+        }
+        active_catalog_kind_ = kind;
         return true;
     }
 
@@ -185,6 +363,11 @@ namespace helen
         return modes_.size();
     }
 
+    std::size_t BatmanDisplayModeService::GetModeCount(BatmanDisplayModeCatalogKind kind) const noexcept
+    {
+        return kind == BatmanDisplayModeCatalogKind::Windowed ? windowed_modes_.size() : fullscreen_modes_.size();
+    }
+
     /**
      * @brief Returns one catalog mode by its stable index.
      * @param index Zero-based index into the last successful catalog snapshot.
@@ -194,6 +377,16 @@ namespace helen
     const BatmanDisplayMode& BatmanDisplayModeService::GetMode(std::size_t index) const
     {
         return modes_.at(index);
+    }
+
+    const BatmanDisplayMode& BatmanDisplayModeService::GetMode(
+        BatmanDisplayModeCatalogKind kind,
+        std::size_t index) const
+    {
+        const std::vector<BatmanDisplayMode>& modes = kind == BatmanDisplayModeCatalogKind::Windowed
+            ? windowed_modes_
+            : fullscreen_modes_;
+        return modes.at(index);
     }
 
     /**
@@ -212,6 +405,24 @@ namespace helen
             }
         }
 
+        return std::nullopt;
+    }
+
+    std::optional<std::size_t> BatmanDisplayModeService::FindModeIndex(
+        BatmanDisplayModeCatalogKind kind,
+        int width,
+        int height) const noexcept
+    {
+        const std::vector<BatmanDisplayMode>& modes = kind == BatmanDisplayModeCatalogKind::Windowed
+            ? windowed_modes_
+            : fullscreen_modes_;
+        for (std::size_t index = 0; index < modes.size(); ++index)
+        {
+            if (modes[index].GetWidth() == width && modes[index].GetHeight() == height)
+            {
+                return index;
+            }
+        }
         return std::nullopt;
     }
 
@@ -244,6 +455,43 @@ namespace helen
             : modes_[mode_index].GetHeight();
     }
 
+    std::optional<int> BatmanDisplayModeService::QueryCatalogScalar(
+        BatmanDisplayModeCatalogKind kind,
+        int raw_request_value) const
+    {
+        const std::vector<BatmanDisplayMode>& modes = kind == BatmanDisplayModeCatalogKind::Windowed
+            ? windowed_modes_
+            : fullscreen_modes_;
+        const int count_request = kind == BatmanDisplayModeCatalogKind::Windowed ? 5200 : 5400;
+        const int first_pair_request = count_request + 1;
+        if (raw_request_value == count_request)
+        {
+            return static_cast<int>(modes.size());
+        }
+        if (raw_request_value < first_pair_request || raw_request_value >= first_pair_request + static_cast<int>(modes.size()) * 2)
+        {
+            return std::nullopt;
+        }
+        const int offset = raw_request_value - first_pair_request;
+        const std::size_t mode_index = static_cast<std::size_t>(offset / 2);
+        return offset % 2 == 0 ? modes[mode_index].GetWidth() : modes[mode_index].GetHeight();
+    }
+
+    std::optional<BatmanDisplayMode> BatmanDisplayModeService::GetCurrentMode(BatmanDisplayModeCatalogKind kind) const noexcept
+    {
+        return kind == BatmanDisplayModeCatalogKind::Windowed ? windowed_current_mode_ : fullscreen_current_mode_;
+    }
+
+    std::optional<BatmanDisplayMode> BatmanDisplayModeService::GetDesktopMode(BatmanDisplayModeCatalogKind kind) const noexcept
+    {
+        return kind == BatmanDisplayModeCatalogKind::Windowed ? windowed_desktop_mode_ : fullscreen_desktop_mode_;
+    }
+
+    BatmanDisplayModeCatalogKind BatmanDisplayModeService::GetActiveCatalogKind() const noexcept
+    {
+        return active_catalog_kind_;
+    }
+
     /**
      * @brief Rechecks whether a previously selected exact pair remains supported after fresh enumeration.
      * @param index Index in the original catalog whose pair should be revalidated.
@@ -251,6 +499,10 @@ namespace helen
      */
     std::optional<BatmanDisplayMode> BatmanDisplayModeService::RevalidateMode(std::size_t index)
     {
+        if (enumeration_callback_ == nullptr)
+        {
+            return RevalidateMode(active_catalog_kind_, index);
+        }
         if (index >= modes_.size())
         {
             return std::nullopt;
@@ -277,6 +529,72 @@ namespace helen
 
         const auto selected_mode_iterator = std::find(normalized_modes.begin(), normalized_modes.end(), selected_mode);
         return selected_mode_iterator == normalized_modes.end()
+            ? std::nullopt
+            : std::optional<BatmanDisplayMode>(selected_mode);
+    }
+
+    std::optional<BatmanDisplayMode> BatmanDisplayModeService::RevalidateMode(
+        BatmanDisplayModeCatalogKind kind,
+        std::size_t index)
+    {
+        const std::vector<BatmanDisplayMode>& modes = kind == BatmanDisplayModeCatalogKind::Windowed
+            ? windowed_modes_
+            : fullscreen_modes_;
+        const std::wstring& device_name = kind == BatmanDisplayModeCatalogKind::Windowed
+            ? windowed_display_device_name_
+            : fullscreen_display_device_name_;
+        if (index >= modes.size())
+        {
+            return std::nullopt;
+        }
+
+        const BatmanDisplayMode selected_mode = modes[index];
+        std::optional<BatmanDisplayEnvironment> environment_result;
+        if (environment_enumeration_callback_ != nullptr)
+        {
+            environment_result = environment_enumeration_callback_();
+            if (!environment_result.has_value() || environment_result->DisplayDeviceName != device_name)
+            {
+                return std::nullopt;
+            }
+        }
+        else
+        {
+            if (kind == BatmanDisplayModeCatalogKind::Windowed)
+            {
+                return std::nullopt;
+            }
+            std::wstring refreshed_device_name;
+            std::vector<BatmanDisplayMode> raw_modes;
+            if (enumeration_callback_ == nullptr || !enumeration_callback_(refreshed_device_name, raw_modes) || refreshed_device_name != device_name)
+            {
+                return std::nullopt;
+            }
+            std::vector<BatmanDisplayMode> normalized_modes;
+            if (!TryNormalizeModes(refreshed_device_name, raw_modes, normalized_modes) ||
+                std::find(normalized_modes.begin(), normalized_modes.end(), selected_mode) == normalized_modes.end())
+            {
+                return std::nullopt;
+            }
+            return selected_mode;
+        }
+
+        const BatmanDisplayEnvironment& environment = *environment_result;
+
+        std::vector<BatmanDisplayMode> normalized_modes;
+        if (kind == BatmanDisplayModeCatalogKind::Windowed)
+        {
+            if (!windowed_custom_mode_.has_value() ||
+                !TryBuildWindowedModes(environment, windowed_custom_mode_->GetWidth(), windowed_custom_mode_->GetHeight(), normalized_modes))
+            {
+                return std::nullopt;
+            }
+        }
+        else if (!TryNormalizeModes(environment.DisplayDeviceName, environment.SupportedModes, normalized_modes))
+        {
+            return std::nullopt;
+        }
+        return std::find(normalized_modes.begin(), normalized_modes.end(), selected_mode) == normalized_modes.end()
             ? std::nullopt
             : std::optional<BatmanDisplayMode>(selected_mode);
     }

@@ -143,17 +143,22 @@ namespace
             helen::BatmanDisplayMode(1920, 1080),
             helen::BatmanDisplayMode(3440, 1440)
         };
-        const helen::BatmanDisplayModeService::EnumerationCallback enumeration_callback =
-            [&current_modes](std::wstring& display_device_name, std::vector<helen::BatmanDisplayMode>& modes)
+        const helen::BatmanDisplayModeService::EnvironmentEnumerationCallback enumeration_callback =
+            [&current_modes]() -> std::optional<helen::BatmanDisplayEnvironment>
             {
-                display_device_name = L"DISPLAY1";
-                modes = current_modes;
-                return true;
+                return helen::BatmanDisplayEnvironment(
+                    L"DISPLAY1",
+                    current_modes,
+                    helen::BatmanDisplayMode(3440, 1440),
+                    helen::BatmanDisplayMode(1920, 1080));
             };
         helen::BatmanDisplayModeService display_mode_service(enumeration_callback);
-        Expect(display_mode_service.Refresh(), "Resolution test display catalog did not refresh.");
+        Expect(
+            display_mode_service.Refresh(helen::BatmanDisplayModeCatalogKind::Fullscreen, 1920, 1080),
+            "Resolution test display catalog did not refresh.");
 
         helen::CommandDispatcher dispatcher;
+        dispatcher.RegisterConfigInt("fullscreen", 1);
         dispatcher.RegisterConfigInt("resolutionModeIndex", 0);
         dispatcher.RegisterConfigInt("resolutionWidth", 1024);
         dispatcher.RegisterConfigInt("resolutionHeight", 768);
@@ -253,6 +258,61 @@ namespace
         Expect(
             missing_index_dispatcher.TryGetInt("resolutionHeight") == 900,
             "Missing-index failure changed the resolution height.");
+    }
+
+    /**
+     * @brief Verifies that a selected resolution index is never interpreted against the wrong mode catalog.
+     */
+    void RunBatmanResolutionCatalogKindGuardTest()
+    {
+        helen::BatmanDisplayModeService service(
+            []() -> std::optional<helen::BatmanDisplayEnvironment>
+            {
+                return helen::BatmanDisplayEnvironment(
+                    L"DISPLAY1",
+                    { helen::BatmanDisplayMode(1280, 720), helen::BatmanDisplayMode(1920, 1080) },
+                    helen::BatmanDisplayMode(1920, 1080),
+                    helen::BatmanDisplayMode(1920, 1080));
+            });
+        Expect(
+            service.Refresh(helen::BatmanDisplayModeCatalogKind::Windowed, 1920, 1080),
+            "Windowed catalog guard fixture did not refresh.");
+        Expect(
+            service.Refresh(helen::BatmanDisplayModeCatalogKind::Fullscreen, 1920, 1080),
+            "Fullscreen catalog guard fixture did not refresh.");
+
+        helen::CommandDispatcher dispatcher;
+        dispatcher.RegisterConfigInt("fullscreen", 0);
+        dispatcher.RegisterConfigInt("resolutionModeIndex", 0);
+        dispatcher.RegisterConfigInt("resolutionWidth", 1920);
+        dispatcher.RegisterConfigInt("resolutionHeight", 1080);
+        helen::BatmanGraphicsConfigService config_service(
+            std::filesystem::path("resolution-catalog-kind-guard.ini"),
+            service);
+        Expect(
+            config_service.ApplySelectedResolutionModeToDispatcher(dispatcher),
+            "Resolution apply rejected the matching windowed catalog after fullscreen refresh.");
+        Expect(dispatcher.TryGetInt("resolutionWidth") == 640, "Windowed catalog index zero selected the wrong width.");
+        Expect(dispatcher.TryGetInt("resolutionHeight") == 480, "Windowed catalog index zero selected the wrong height.");
+        Expect(dispatcher.TrySetInt("fullscreen", 1), "Failed to switch catalog-kind guard fixture to fullscreen.");
+        Expect(
+            config_service.ApplySelectedResolutionModeToDispatcher(dispatcher),
+            "Resolution apply rejected the matching fullscreen catalog after windowed selection.");
+        Expect(dispatcher.TryGetInt("resolutionWidth") == 1280, "Fullscreen catalog index zero selected the wrong width.");
+        Expect(dispatcher.TryGetInt("resolutionHeight") == 720, "Fullscreen catalog index zero selected the wrong height.");
+
+        helen::CommandDispatcher missing_mode_dispatcher;
+        missing_mode_dispatcher.RegisterConfigInt("resolutionModeIndex", 0);
+        missing_mode_dispatcher.RegisterConfigInt("resolutionWidth", 1600);
+        missing_mode_dispatcher.RegisterConfigInt("resolutionHeight", 900);
+        helen::BatmanGraphicsConfigService missing_mode_config_service(
+            std::filesystem::path("resolution-catalog-kind-missing-mode.ini"),
+            service);
+        Expect(
+            !missing_mode_config_service.ApplySelectedResolutionModeToDispatcher(missing_mode_dispatcher),
+            "Resolution apply unexpectedly accepted a dispatcher without fullscreen mode.");
+        Expect(missing_mode_dispatcher.TryGetInt("resolutionWidth") == 1600, "Missing mode changed resolution width.");
+        Expect(missing_mode_dispatcher.TryGetInt("resolutionHeight") == 900, "Missing mode changed resolution height.");
     }
 
     /**
@@ -1406,6 +1466,7 @@ void RunCommandExecutorTests()
 
     RunConcurrentBatmanGraphicsApplyTest("concurrent-publication");
     RunBatmanResolutionModeCommandTest();
+    RunBatmanResolutionCatalogKindGuardTest();
     RunBatmanResolutionModeApplyIntegrationTest();
 }
 
@@ -1422,15 +1483,19 @@ void RunBatmanResolutionModeApplyIntegrationTest()
         helen::BatmanDisplayMode(1920, 1080),
         helen::BatmanDisplayMode(3440, 1440)
     };
-    const helen::BatmanDisplayModeService::EnumerationCallback enumeration_callback =
-        [&current_modes](std::wstring& display_device_name, std::vector<helen::BatmanDisplayMode>& modes)
+    const helen::BatmanDisplayModeService::EnvironmentEnumerationCallback enumeration_callback =
+        [&current_modes]() -> std::optional<helen::BatmanDisplayEnvironment>
         {
-            display_device_name = L"DISPLAY1";
-            modes = current_modes;
-            return true;
+            return helen::BatmanDisplayEnvironment(
+                L"DISPLAY1",
+                current_modes,
+                helen::BatmanDisplayMode(3440, 1440),
+                helen::BatmanDisplayMode(1920, 1080));
         };
     helen::BatmanDisplayModeService display_mode_service(enumeration_callback);
-    Expect(display_mode_service.Refresh(), "Resolution Apply integration catalog did not refresh.");
+    Expect(
+        display_mode_service.Refresh(helen::BatmanDisplayModeCatalogKind::Fullscreen, 1920, 1080),
+        "Resolution Apply integration catalog did not refresh.");
 
     const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath("resolution-apply-integration");
     const std::filesystem::path user_ini_path = GetSiblingBatmanUserEngineIniPath(engine_ini_path);

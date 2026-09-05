@@ -254,6 +254,9 @@ try {
     $mutatedQualityHooksPath = Join-Path $StagedPackRoot 'builds\steam-goty-1.0\hooks.json'
     $protocolMutations = @(
         [pscustomobject]@{ Name = 'catalog request omission'; Mutate = { param($hooks) $hooks.stateObservers[1].dynamicResponse.requests = @($hooks.stateObservers[1].dynamicResponse.requests | Select-Object -SkipLast 1) } },
+        [pscustomobject]@{ Name = 'windowed catalog boundary'; Mutate = { param($hooks) $hooks.stateObservers[1].dynamicResponse.requests[199] = 5201 } },
+        [pscustomobject]@{ Name = 'fullscreen catalog boundary'; Mutate = { param($hooks) $hooks.stateObservers[1].dynamicResponse.requests[596] = 5597 } },
+        [pscustomobject]@{ Name = 'desktop catalog request'; Mutate = { param($hooks) $hooks.stateObservers[1].dynamicResponse.requests[598] = 5602 } },
         [pscustomobject]@{ Name = 'duplicate resolution write code'; Mutate = { param($hooks) $hooks.stateObservers[2].mappings[0].match = $hooks.stateObservers[2].mappings[1].match } },
         [pscustomobject]@{ Name = 'dynamic scalar bound'; Mutate = { param($hooks) $hooks.stateObservers[1].dynamicResponse.minimumValue = 0 } },
         [pscustomobject]@{ Name = 'resolution acknowledgement'; Mutate = { param($hooks) $hooks.stateObservers[2].acknowledgementMappings[0].value = 5199 } },

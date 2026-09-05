@@ -2284,8 +2284,17 @@ namespace helen
             return false;
         }
 
-        const std::optional<BatmanDisplayMode> selected_mode = display_mode_service_.RevalidateMode(
-            static_cast<std::size_t>(*index_value));
+        const std::optional<int> fullscreen_value = dispatcher.TryGetInt("fullscreen");
+        if (!fullscreen_value.has_value() || (*fullscreen_value != 0 && *fullscreen_value != 1))
+        {
+            return false;
+        }
+        const BatmanDisplayModeCatalogKind expected_catalog_kind = fullscreen_value.has_value() && *fullscreen_value != 0
+            ? BatmanDisplayModeCatalogKind::Fullscreen
+            : BatmanDisplayModeCatalogKind::Windowed;
+        const std::optional<BatmanDisplayMode> selected_mode = display_mode_service_.GetModeCount(expected_catalog_kind) == 0
+            ? std::nullopt
+            : display_mode_service_.RevalidateMode(expected_catalog_kind, static_cast<std::size_t>(*index_value));
         if (!selected_mode.has_value())
         {
             return false;

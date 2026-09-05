@@ -1,6 +1,7 @@
 #include <HelenHook/ActivePackSet.h>
 #include <HelenHook/ActivePackSetBuilder.h>
 #include <HelenHook/BatmanDisplayModeService.h>
+#include <HelenHook/BatmanDisplayModeResponseProvider.h>
 #include <HelenHook/BatmanGraphicsConfigService.h>
 #include <HelenHook/BuildRuntimeCoordinator.h>
 #include <HelenHook/BuildHookInstaller.h>
@@ -128,6 +129,18 @@ namespace
      * an old width/height pair after the catalog response sequence has completed.
      */
     constexpr int BatmanDisplayModeCurrentHeightRequest = 4898;
+    /** @brief First dynamic request reserved for the mode-specific windowed catalog. */
+    constexpr int BatmanWindowedCatalogRequest = 5200;
+    /** @brief Last dynamic request reserved for the windowed catalog's current pair. */
+    constexpr int BatmanWindowedCatalogCurrentHeightRequest = 5398;
+    /** @brief First dynamic request reserved for the mode-specific fullscreen catalog. */
+    constexpr int BatmanFullscreenCatalogRequest = 5400;
+    /** @brief Last dynamic request reserved for the fullscreen catalog's current pair. */
+    constexpr int BatmanFullscreenCatalogCurrentHeightRequest = 5598;
+    /** @brief Dynamic request returning the actual current desktop width for explicit fullscreen fallback. */
+    constexpr int BatmanDesktopWidthRequest = 5600;
+    /** @brief Dynamic request returning the actual current desktop height for explicit fullscreen fallback. */
+    constexpr int BatmanDesktopHeightRequest = 5601;
 
     /** @brief Runtime config key that enables the main-module LoadLibrary routing hooks. */
     constexpr std::string_view ModuleLoadRoutingLoadLibraryHooksEnabledKey = "moduleLoadRouting.loadLibraryHooksEnabled";
@@ -828,55 +841,16 @@ namespace
         }
 
         helen::Log(L"[runtime] active-pack init build runtime coordinator create begin.");
-        const std::shared_ptr<std::optional<helen::CommandIntPair>> display_catalog_current_pair =
-            std::make_shared<std::optional<helen::CommandIntPair>>();
+        const std::shared_ptr<helen::BatmanDisplayModeResponseProvider> display_mode_response_provider =
+            std::make_shared<helen::BatmanDisplayModeResponseProvider>(
+                *g_batman_display_mode_service,
+                *g_command_dispatcher);
         const helen::MemoryStateObserverDynamicResponseCallback dynamic_response_callback =
-            [display_catalog_current_pair, &display_mode_service = *g_batman_display_mode_service, &command_dispatcher = *g_command_dispatcher](
+            [display_mode_response_provider](
                 const std::string& provider_id,
                 int raw_request) -> std::optional<int>
         {
-            if (provider_id != BatmanDisplayModeProviderId)
-            {
-                return std::nullopt;
-            }
-
-            if (raw_request == BatmanDisplayModeCatalogRequest)
-            {
-                display_catalog_current_pair->reset();
-                const std::optional<helen::CommandIntPair> current_pair = command_dispatcher.TryGetIntPair(
-                    "resolutionWidth",
-                    "resolutionHeight");
-                if (!current_pair.has_value() || !display_mode_service.Refresh())
-                {
-                    return std::nullopt;
-                }
-
-                *display_catalog_current_pair = *current_pair;
-            }
-            else if (raw_request == BatmanDisplayModeCurrentWidthRequest || raw_request == BatmanDisplayModeCurrentHeightRequest)
-            {
-                if (!display_catalog_current_pair->has_value())
-                {
-                    return std::nullopt;
-                }
-
-                if (raw_request == BatmanDisplayModeCurrentWidthRequest)
-                {
-                    return (*display_catalog_current_pair)->FirstValue;
-                }
-
-                const int current_height = (*display_catalog_current_pair)->SecondValue;
-                display_catalog_current_pair->reset();
-                return current_height;
-            }
-
-            const std::optional<int> catalog_value = display_mode_service.QueryCatalogScalar(raw_request);
-            if (!catalog_value.has_value())
-            {
-                display_catalog_current_pair->reset();
-            }
-
-            return catalog_value;
+            return display_mode_response_provider->Resolve(provider_id, raw_request);
         };
         g_build_runtime_coordinator = std::make_unique<helen::BuildRuntimeCoordinator>(
             active_pack_set.StartupCommandIds,

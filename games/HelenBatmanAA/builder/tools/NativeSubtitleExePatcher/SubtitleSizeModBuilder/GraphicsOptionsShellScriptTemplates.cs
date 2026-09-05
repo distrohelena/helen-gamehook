@@ -77,11 +77,32 @@ internal static class GraphicsOptionsShellScriptTemplates
            var ResolutionDraftIndex;
            var ResolutionCatalogCount;
            var ResolutionCatalogRequest;
+           var ResolutionCatalogBase;
+           var ResolutionCatalogFailure;
+           var ResolutionCatalogLoading;
+           var WindowedResolutionModes;
+           var FullscreenResolutionModes;
+           var WindowedResolutionAvailable;
+           var FullscreenResolutionAvailable;
+           var DesktopActualWidth;
+           var DesktopActualHeight;
+           var ResolutionInitialWidth;
+           var ResolutionInitialHeight;
+           var ResolutionDraftWidth;
+           var ResolutionDraftHeight;
+           var WindowedRememberedWidth;
+           var WindowedRememberedHeight;
+           var FullscreenRememberedWidth;
+           var FullscreenRememberedHeight;
+           var ResolutionCatalogKind;
+           var ResolutionInitializationStage;
+           var ResolutionCatalogPersistedWidth;
+           var ResolutionCatalogPersistedHeight;
+           var ResolutionPersistedWidth;
+           var ResolutionPersistedHeight;
            var ResolutionCatalogDeadline;
            var ResolutionCatalogIndex;
            var ResolutionPendingWidth;
-           var ResolutionCurrentWidth;
-           var ResolutionCurrentHeight;
            var ApplyQueue;
            var ApplyQueueIndex;
            var CurrentPendingSetting;
@@ -126,11 +147,32 @@ internal static class GraphicsOptionsShellScriptTemplates
               this.ResolutionDraftIndex = -1;
               this.ResolutionCatalogCount = 0;
               this.ResolutionCatalogRequest = undefined;
+              this.ResolutionCatalogBase = undefined;
+              this.ResolutionCatalogFailure = false;
+              this.ResolutionCatalogLoading = false;
+              this.WindowedResolutionModes = new Array();
+              this.FullscreenResolutionModes = new Array();
+              this.WindowedResolutionAvailable = false;
+              this.FullscreenResolutionAvailable = false;
+              this.DesktopActualWidth = undefined;
+              this.DesktopActualHeight = undefined;
+              this.ResolutionInitialWidth = undefined;
+              this.ResolutionInitialHeight = undefined;
+              this.ResolutionDraftWidth = undefined;
+              this.ResolutionDraftHeight = undefined;
+              this.WindowedRememberedWidth = undefined;
+              this.WindowedRememberedHeight = undefined;
+              this.FullscreenRememberedWidth = undefined;
+              this.FullscreenRememberedHeight = undefined;
+              this.ResolutionCatalogKind = -1;
+              this.ResolutionInitializationStage = "settings";
+              this.ResolutionCatalogPersistedWidth = undefined;
+              this.ResolutionCatalogPersistedHeight = undefined;
+              this.ResolutionPersistedWidth = undefined;
+              this.ResolutionPersistedHeight = undefined;
               this.ResolutionCatalogDeadline = undefined;
               this.ResolutionCatalogIndex = 0;
               this.ResolutionPendingWidth = undefined;
-              this.ResolutionCurrentWidth = undefined;
-              this.ResolutionCurrentHeight = undefined;
            }
            function CreateSettings()
            {
@@ -390,13 +432,26 @@ internal static class GraphicsOptionsShellScriptTemplates
            }
            function IsUnavailable(rowIndex)
            {
-              return this.InitializationFailed;
+              if(!this.InitializationComplete)
+              {
+                 return false;
+              }
+              if(rowIndex == 2)
+              {
+                 return this.ResolutionModes.length == 0 || this.ResolutionDraftIndex < 0;
+              }
+              var setting = this.GetSettingForRow(rowIndex);
+              return setting == undefined || setting.InitialIndex < 0;
            }
            function GetResolutionLabel()
            {
               if(this.ResolutionDraftIndex < 0 || this.ResolutionDraftIndex >= this.ResolutionModes.length)
               {
-                 return "Loading...";
+                 if(this.ResolutionDraftWidth != undefined && this.ResolutionDraftHeight != undefined)
+                 {
+                    return this.ResolutionDraftWidth + " x " + this.ResolutionDraftHeight;
+                 }
+                 return "Unavailable";
               }
               return this.ResolutionModes[this.ResolutionDraftIndex].Label;
            }
@@ -410,7 +465,9 @@ internal static class GraphicsOptionsShellScriptTemplates
            }
            function CanEditResolution()
            {
-              return this.InitializationComplete && !this.InitializationFailed && !this.InteractionBlocked && !this.RollbackLocked && this.ResolutionInitialIndex >= 0 && this.ResolutionDraftIndex >= 0 && this.ResolutionDraftIndex < this.ResolutionModes.length;
+              var fullscreenSetting = this.GetSettingForRow(1);
+              var catalogAvailable = fullscreenSetting != undefined && (fullscreenSetting.DraftIndex == 0 ? this.WindowedResolutionAvailable : this.FullscreenResolutionAvailable);
+              return this.InitializationComplete && !this.InitializationFailed && !this.InteractionBlocked && !this.RollbackLocked && catalogAvailable && this.ResolutionDraftIndex >= 0 && this.ResolutionDraftIndex < this.ResolutionModes.length;
            }
            function CanIncrementResolution()
            {
@@ -419,19 +476,6 @@ internal static class GraphicsOptionsShellScriptTemplates
            function CanDecrementResolution()
            {
               return this.CanEditResolution() && this.ResolutionDraftIndex > 0;
-           }
-           function HasResolutionPair(widthValue,heightValue)
-           {
-              var modeIndex = 0;
-              while(modeIndex < this.ResolutionModes.length)
-              {
-                 if(this.ResolutionModes[modeIndex].Width == widthValue && this.ResolutionModes[modeIndex].Height == heightValue)
-                 {
-                    return true;
-                 }
-                 modeIndex = modeIndex + 1;
-              }
-              return false;
            }
            function SetResolutionDraftIndex(index,forward)
            {
@@ -448,15 +492,19 @@ internal static class GraphicsOptionsShellScriptTemplates
                  flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Back");
               }
               this.ResolutionDraftIndex = index;
+              this.ResolutionDraftWidth = this.ResolutionModes[index].Width;
+              this.ResolutionDraftHeight = this.ResolutionModes[index].Height;
               this.RefreshRows();
            }
            function RestoreResolutionInitial()
            {
-              if(!this.CanEditResolution() || this.ResolutionDraftIndex == this.ResolutionInitialIndex)
+              if(!this.CanEditResolution() || (this.ResolutionDraftWidth == this.ResolutionInitialWidth && this.ResolutionDraftHeight == this.ResolutionInitialHeight))
               {
                  return undefined;
               }
-              this.ResolutionDraftIndex = this.ResolutionInitialIndex;
+              this.ResolutionDraftIndex = this.FindResolutionModeIndex(this.ResolutionModes,this.ResolutionInitialWidth,this.ResolutionInitialHeight);
+              this.ResolutionDraftWidth = this.ResolutionInitialWidth;
+              this.ResolutionDraftHeight = this.ResolutionInitialHeight;
               this.RefreshRows();
            }
            function ToggleResolution()
@@ -503,7 +551,7 @@ internal static class GraphicsOptionsShellScriptTemplates
                  }
                  settingIndex = settingIndex + 1;
               }
-              if(this.ResolutionDraftIndex != this.ResolutionInitialIndex)
+              if(this.ResolutionDraftWidth != this.ResolutionInitialWidth || this.ResolutionDraftHeight != this.ResolutionInitialHeight)
               {
                  return true;
               }
@@ -540,7 +588,7 @@ internal static class GraphicsOptionsShellScriptTemplates
            {
               this.InitializationIndex = 0;
               this.ResetResolutionCatalogState();
-              this.ResolutionCatalogRequest = 4700;
+              this.ResolutionInitializationStage = "settings";
               this.InitializationDeadline = getTimer() + 10000;
               this.ResolutionCatalogDeadline = this.InitializationDeadline;
               this.InitializationComplete = false;
@@ -555,14 +603,14 @@ internal static class GraphicsOptionsShellScriptTemplates
            }
            function SendInitializationRequest()
            {
-              if(this.InitializationIndex == 1 && this.ResolutionCatalogRequest == 4700)
+              if(this.InitializationIndex >= this.Settings.length && this.ResolutionInitializationStage == "settings")
               {
                  this.BeginResolutionCatalogInitialization();
                  return undefined;
               }
-              if(this.InitializationIndex == 1 && this.ResolutionCatalogRequest >= 4700 && this.ResolutionCatalogRequest <= 4898)
+              if(this.ResolutionInitializationStage != "settings")
               {
-                 this.SendResolutionCatalogRequest();
+                 this.PollInitializationCatalogProgress();
                  return undefined;
               }
               if(this.InitializationIndex >= this.Settings.length)
@@ -572,13 +620,54 @@ internal static class GraphicsOptionsShellScriptTemplates
               }
               this.CurrentPendingSetting = this.Settings[this.InitializationIndex];
               this.CurrentPendingCode = this.CurrentPendingSetting.ReadRequest;
+              this.CurrentPendingDeadline = getTimer() + 2000;
               flash.external.ExternalInterface.call("FE_SetControlType",this.Settings[this.InitializationIndex].ReadRequest,"");
            }
            function BeginResolutionCatalogInitialization()
            {
-              this.ResolutionCatalogRequest = 4700;
-              this.ResolutionCatalogDeadline = this.InitializationDeadline;
+              this.ResolutionCatalogRequest = 5200;
+              this.ResolutionCatalogBase = 5200;
+              this.ResolutionCatalogKind = 0;
+              this.ResolutionInitializationStage = "windowed";
+              this.ResolutionCatalogLoading = true;
+              this.ResolutionCatalogFailure = false;
+              this.ResolutionCatalogDeadline = getTimer() + 10000;
               this.SendResolutionCatalogRequest();
+           }
+           function PollInitializationCatalogProgress()
+           {
+              if(this.ResolutionInitializationStage == "windowed")
+              {
+                 this.ResolutionInitializationStage = "fullscreen";
+                 this.ResolutionCatalogRequest = 5400;
+                 this.ResolutionCatalogBase = 5400;
+                 this.ResolutionCatalogKind = 1;
+                 this.FullscreenResolutionModes = new Array();
+                 this.ResolutionCatalogCount = 0;
+                 this.ResolutionCatalogIndex = 0;
+                 this.ResolutionPendingWidth = undefined;
+                 this.ResolutionCatalogPersistedWidth = undefined;
+                 this.ResolutionCatalogPersistedHeight = undefined;
+                 this.ResolutionCatalogLoading = true;
+                 this.ResolutionCatalogFailure = false;
+                 this.ResolutionCatalogDeadline = getTimer() + 10000;
+                 this.SendResolutionCatalogRequest();
+                 return undefined;
+              }
+              if(this.ResolutionInitializationStage == "fullscreen")
+              {
+                 this.ResolutionInitializationStage = "desktop";
+                 this.ResolutionCatalogRequest = 5600;
+                 this.ResolutionCatalogBase = undefined;
+                 this.ResolutionCatalogKind = -1;
+                 this.ResolutionCatalogIndex = 0;
+                 this.ResolutionCatalogLoading = true;
+                 this.ResolutionCatalogFailure = false;
+                 this.ResolutionCatalogDeadline = getTimer() + 10000;
+                 this.SendResolutionCatalogRequest();
+                 return undefined;
+              }
+              this.FinishResolutionInitialization();
            }
            function SendResolutionCatalogRequest()
            {
@@ -633,10 +722,15 @@ internal static class GraphicsOptionsShellScriptTemplates
            }
            function PollInitialization()
            {
-              var deadline = this.ResolutionCatalogRequest >= 4700 && this.ResolutionCatalogRequest <= 4898 ? this.ResolutionCatalogDeadline : this.InitializationDeadline;
+              var deadline = this.ResolutionInitializationStage == "settings" ? this.CurrentPendingDeadline : this.ResolutionCatalogDeadline;
               if(this.IsDeadlineReached(deadline))
               {
-                 this.FailInitialization();
+                 if(this.ResolutionInitializationStage == "settings")
+                 {
+                    this.MarkSettingUnavailable(this.InitializationIndex);
+                    return undefined;
+                 }
+                 this.HandleResolutionCatalogFailure();
                  return undefined;
               }
               var rawValue = int(flash.external.ExternalInterface.call("FE_GetControlType"));
@@ -644,7 +738,7 @@ internal static class GraphicsOptionsShellScriptTemplates
               {
                  return undefined;
               }
-              if(this.InitializationIndex == 1 && this.ResolutionCatalogRequest >= 4700 && this.ResolutionCatalogRequest <= 4898)
+              if(this.ResolutionInitializationStage != "settings")
               {
                  this.PollResolutionCatalog(rawValue);
                  return undefined;
@@ -652,7 +746,7 @@ internal static class GraphicsOptionsShellScriptTemplates
               var setting = this.Settings[this.InitializationIndex];
               if(rawValue == setting.FailureResponse)
               {
-                 this.FailInitialization();
+                 this.MarkSettingUnavailable(this.InitializationIndex);
                  return undefined;
               }
               if(rawValue >= setting.ReadResponseBase && rawValue < setting.ReadResponseBase + setting.Values.length)
@@ -660,48 +754,60 @@ internal static class GraphicsOptionsShellScriptTemplates
                  this.Settings[this.InitializationIndex].InitialIndex = rawValue - this.Settings[this.InitializationIndex].ReadResponseBase;
                  this.Settings[this.InitializationIndex].DraftIndex = this.Settings[this.InitializationIndex].InitialIndex;
                  this.InitializationIndex = this.InitializationIndex + 1;
-                 if(this.InitializationIndex == 1)
-                 {
-                    this.BeginResolutionCatalogInitialization();
-                    return undefined;
-                 }
                  this.SendInitializationRequest();
                  return undefined;
               }
               if(rawValue != 0)
               {
-                 this.FailInitialization();
+                 this.MarkSettingUnavailable(this.InitializationIndex);
               }
+           }
+           function MarkSettingUnavailable(settingIndex)
+           {
+              if(settingIndex < 0 || settingIndex >= this.Settings.length)
+              {
+                 this.FailInitialization();
+                 return undefined;
+              }
+              this.Settings[settingIndex].InitialIndex = -1;
+              this.Settings[settingIndex].DraftIndex = -1;
+              this.InitializationIndex = settingIndex + 1;
+              this.SendInitializationRequest();
            }
            function PollResolutionCatalog(rawValue)
            {
+              if(this.ResolutionInitializationStage == "desktop")
+              {
+                 this.PollDesktopActualMode(rawValue);
+                 return undefined;
+              }
               if(rawValue == 4899)
               {
-                 this.FailInitialization();
+                 this.HandleResolutionCatalogFailure();
                  return undefined;
               }
               var scalarValue = this.DecodeResolutionScalar(rawValue);
               if(scalarValue < 1)
               {
-                 this.FailInitialization();
+                 this.HandleResolutionCatalogFailure();
                  return undefined;
               }
-              if(this.ResolutionCatalogRequest == 4700)
+              if(this.ResolutionCatalogRequest == this.ResolutionCatalogBase)
               {
                  if(scalarValue < 1 || scalarValue > 98)
                  {
-                    this.FailInitialization();
+                    this.HandleResolutionCatalogFailure();
                     return undefined;
                  }
                  this.ResolutionCatalogCount = scalarValue;
                  this.ResolutionCatalogIndex = 0;
-                 this.ResolutionCatalogRequest = 4701;
+                 this.ResolutionCatalogRequest = this.ResolutionCatalogBase + 1;
                  this.SendResolutionCatalogRequest();
                  return undefined;
               }
-              if(this.ResolutionCatalogRequest >= 4701 && this.ResolutionCatalogRequest < 4701 + this.ResolutionCatalogCount * 2)
+              if(this.ResolutionCatalogRequest >= this.ResolutionCatalogBase + 1 && this.ResolutionCatalogRequest < this.ResolutionCatalogBase + 1 + this.ResolutionCatalogCount * 2)
               {
-                 if((this.ResolutionCatalogRequest - 4701) % 2 == 0)
+                 if((this.ResolutionCatalogRequest - (this.ResolutionCatalogBase + 1)) % 2 == 0)
                  {
                     this.ResolutionPendingWidth = scalarValue;
                     this.ResolutionCatalogRequest = this.ResolutionCatalogRequest + 1;
@@ -710,64 +816,269 @@ internal static class GraphicsOptionsShellScriptTemplates
                  }
                  if(this.ResolutionPendingWidth == undefined)
                  {
-                    this.FailInitialization();
+                    this.HandleResolutionCatalogFailure();
                     return undefined;
                  }
-                 if(this.HasResolutionPair(this.ResolutionPendingWidth,scalarValue))
+                 var catalogModes = this.ResolutionCatalogKind == 0 ? this.WindowedResolutionModes : this.FullscreenResolutionModes;
+                 var existingModeIndex = 0;
+                 while(existingModeIndex < catalogModes.length)
                  {
-                    this.FailInitialization();
-                    return undefined;
+                    if(catalogModes[existingModeIndex].Width == this.ResolutionPendingWidth && catalogModes[existingModeIndex].Height == scalarValue)
+                    {
+                       this.HandleResolutionCatalogFailure();
+                       return undefined;
+                    }
+                    existingModeIndex = existingModeIndex + 1;
                  }
                  var widthValue = this.ResolutionPendingWidth;
                  var heightValue = scalarValue;
+                 this.ResolutionModes = catalogModes;
                  this.ResolutionModes.push({Width:widthValue,Height:heightValue,Label:widthValue + " x " + heightValue});
                  this.ResolutionPendingWidth = undefined;
                  this.ResolutionCatalogIndex = this.ResolutionCatalogIndex + 1;
                  if(this.ResolutionCatalogIndex >= this.ResolutionCatalogCount)
                  {
-                    this.ResolutionCatalogRequest = 4897;
+                    this.ResolutionCatalogRequest = this.ResolutionCatalogBase + 197;
+                }
+                else
+                {
+                    this.ResolutionCatalogRequest = this.ResolutionCatalogBase + 1 + this.ResolutionCatalogIndex * 2;
+                 }
+                 this.SendResolutionCatalogRequest();
+                 return undefined;
+              }
+              if(this.ResolutionCatalogRequest == this.ResolutionCatalogBase + 197)
+              {
+                 this.ResolutionCatalogPersistedWidth = scalarValue;
+                 this.ResolutionCatalogRequest = this.ResolutionCatalogBase + 198;
+                 this.SendResolutionCatalogRequest();
+                 return undefined;
+              }
+              if(this.ResolutionCatalogRequest == this.ResolutionCatalogBase + 198)
+              {
+                 this.ResolutionCatalogPersistedHeight = scalarValue;
+                 this.ResolutionCatalogLoading = false;
+                 if(this.ResolutionCatalogKind == 0)
+                 {
+                    this.WindowedResolutionAvailable = true;
                  }
                  else
                  {
-                    this.ResolutionCatalogRequest = 4701 + this.ResolutionCatalogIndex * 2;
+                    this.FullscreenResolutionAvailable = true;
                  }
-                 this.SendResolutionCatalogRequest();
-                 return undefined;
+                 this.CompleteResolutionCatalogLoad();
               }
-              if(this.ResolutionCatalogRequest == 4897)
+           }
+           function HandleResolutionCatalogFailure()
+           {
+              this.ResolutionCatalogFailure = true;
+              this.ResolutionCatalogLoading = false;
+              if(this.CurrentPendingOperation == "initialization")
               {
-                 this.ResolutionCurrentWidth = scalarValue;
-                 this.ResolutionCatalogRequest = 4898;
-                 this.SendResolutionCatalogRequest();
-                 return undefined;
-              }
-              if(this.ResolutionCatalogRequest == 4898)
-              {
-                 this.ResolutionCurrentHeight = scalarValue;
-                 if(!this.HasResolutionPair(this.ResolutionCurrentWidth,this.ResolutionCurrentHeight))
-                 {
-                    this.FailInitialization();
-                    return undefined;
-                 }
-                 var currentModeIndex = 0;
-                 while(currentModeIndex < this.ResolutionModes.length)
-                 {
-                    if(this.ResolutionModes[currentModeIndex].Width == this.ResolutionCurrentWidth && this.ResolutionModes[currentModeIndex].Height == this.ResolutionCurrentHeight)
-                    {
-                       this.ResolutionInitialIndex = currentModeIndex;
-                       this.ResolutionDraftIndex = currentModeIndex;
-                       break;
-                    }
-                    currentModeIndex = currentModeIndex + 1;
-                 }
-                 if(this.ResolutionInitialIndex < 0)
-                 {
-                    this.FailInitialization();
-                    return undefined;
-                 }
                  this.ResolutionCatalogRequest = undefined;
-                 this.SendInitializationRequest();
+                 if(this.ResolutionCatalogKind == 0)
+                 {
+                    this.WindowedResolutionAvailable = false;
+                    this.WindowedResolutionModes = new Array();
+                 }
+                 else if(this.ResolutionCatalogKind == 1)
+                 {
+                    this.FullscreenResolutionAvailable = false;
+                    this.FullscreenResolutionModes = new Array();
+                 }
+                 else
+                 {
+                    this.DesktopActualWidth = undefined;
+                    this.DesktopActualHeight = undefined;
+                 }
+                 this.PollInitializationCatalogProgress();
+                 return undefined;
               }
+              this.FailResolutionCatalogLoad();
+           }
+           function CompleteResolutionCatalogLoad()
+           {
+              this.ResolutionCatalogRequest = undefined;
+              this.ResolutionCatalogFailure = false;
+              this.ResolutionCatalogLoading = false;
+              if(this.ResolutionPersistedWidth == undefined && this.ResolutionCatalogPersistedWidth != undefined)
+              {
+                 this.ResolutionPersistedWidth = this.ResolutionCatalogPersistedWidth;
+                 this.ResolutionPersistedHeight = this.ResolutionCatalogPersistedHeight;
+              }
+              if(this.CurrentPendingOperation == "initialization")
+              {
+                 this.PollInitializationCatalogProgress();
+              }
+              else
+              {
+                 this.CurrentPendingOperation = "";
+                 this.CurrentPendingCode = undefined;
+                 this.InteractionBlocked = false;
+                 this.RefreshRows();
+              }
+           }
+           function FailResolutionCatalogLoad()
+           {
+              this.ResolutionCatalogRequest = undefined;
+              this.ResolutionCatalogLoading = false;
+              this.ResolutionCatalogFailure = true;
+              this.CurrentPendingOperation = "";
+              this.CurrentPendingCode = undefined;
+              this.InteractionBlocked = false;
+              this.RefreshRows();
+           }
+           function BeginResolutionCatalogLoad(targetIndex)
+           {
+              if(targetIndex != 0 && targetIndex != 1)
+              {
+                 return undefined;
+              }
+              this.SelectResolutionKind(targetIndex);
+           }
+           function PollDesktopActualMode(rawValue)
+           {
+              if(rawValue == 4899)
+              {
+                 this.HandleResolutionCatalogFailure();
+                 return undefined;
+              }
+              var scalarValue = this.DecodeResolutionScalar(rawValue);
+              if(scalarValue < 1)
+              {
+                 this.HandleResolutionCatalogFailure();
+                 return undefined;
+              }
+              if(this.ResolutionCatalogRequest == 5600)
+              {
+                 this.DesktopActualWidth = scalarValue;
+                 this.ResolutionCatalogRequest = 5601;
+                 this.SendResolutionCatalogRequest();
+                 return undefined;
+              }
+              if(this.ResolutionCatalogRequest == 5601)
+              {
+                 this.DesktopActualHeight = scalarValue;
+                 this.ResolutionCatalogRequest = undefined;
+                 this.ResolutionCatalogLoading = false;
+                 this.FinishResolutionInitialization();
+              }
+           }
+           function FinishResolutionInitialization()
+           {
+              this.ResolutionInitializationStage = "ready";
+              this.ResolutionCatalogRequest = undefined;
+              this.ResolutionCatalogLoading = false;
+              if(this.ResolutionPersistedWidth == undefined)
+              {
+                 this.ResolutionPersistedWidth = this.ResolutionCatalogPersistedWidth;
+                 this.ResolutionPersistedHeight = this.ResolutionCatalogPersistedHeight;
+              }
+              this.ResolutionInitialWidth = this.ResolutionPersistedWidth;
+              this.ResolutionInitialHeight = this.ResolutionPersistedHeight;
+              this.ResolutionDraftWidth = this.ResolutionPersistedWidth;
+              this.ResolutionDraftHeight = this.ResolutionPersistedHeight;
+              if(this.Settings[0].InitialIndex >= 0)
+              {
+                 this.ResolutionModes = this.Settings[0].InitialIndex == 0 ? this.WindowedResolutionModes : this.FullscreenResolutionModes;
+                 var initialModeIndex = this.FindResolutionModeIndex(this.ResolutionModes,this.ResolutionDraftWidth,this.ResolutionDraftHeight);
+                 if(initialModeIndex >= 0)
+                 {
+                    this.ResolutionInitialIndex = initialModeIndex;
+                    this.ResolutionDraftIndex = initialModeIndex;
+                 }
+                 else
+                 {
+                    this.ResolutionInitialIndex = -1;
+                    this.ResolutionDraftIndex = -1;
+                 }
+              }
+              if(this.Settings[0].InitialIndex == 0)
+              {
+                 this.WindowedRememberedWidth = this.ResolutionDraftWidth;
+                 this.WindowedRememberedHeight = this.ResolutionDraftHeight;
+              }
+              else
+              {
+                 this.FullscreenRememberedWidth = this.ResolutionDraftWidth;
+                 this.FullscreenRememberedHeight = this.ResolutionDraftHeight;
+              }
+              this.CompleteInitialization();
+           }
+           function SelectResolutionKind(targetIndex)
+           {
+              var previousModes = this.ResolutionModes;
+              var previousIndex = this.ResolutionDraftIndex;
+              var previousWidth = this.ResolutionDraftWidth;
+              var previousHeight = this.ResolutionDraftHeight;
+              var targetModes = targetIndex == 0 ? this.WindowedResolutionModes : this.FullscreenResolutionModes;
+              var targetAvailable = targetIndex == 0 ? this.WindowedResolutionAvailable : this.FullscreenResolutionAvailable;
+              if(!targetAvailable)
+              {
+                 this.ResolutionCatalogFailure = true;
+                 this.RefreshRows();
+                 return false;
+              }
+              if(this.ResolutionDraftWidth != undefined && this.ResolutionDraftHeight != undefined)
+              {
+                 if(targetIndex == 0)
+                 {
+                    this.FullscreenRememberedWidth = this.ResolutionDraftWidth;
+                    this.FullscreenRememberedHeight = this.ResolutionDraftHeight;
+                 }
+                 else
+                 {
+                    this.WindowedRememberedWidth = this.ResolutionDraftWidth;
+                    this.WindowedRememberedHeight = this.ResolutionDraftHeight;
+                 }
+              }
+              this.ResolutionModes = targetModes;
+              var rememberedWidth = targetIndex == 0 ? this.WindowedRememberedWidth : this.FullscreenRememberedWidth;
+              var rememberedHeight = targetIndex == 0 ? this.WindowedRememberedHeight : this.FullscreenRememberedHeight;
+              if(rememberedWidth == undefined)
+              {
+                 rememberedWidth = this.ResolutionDraftWidth;
+                 rememberedHeight = this.ResolutionDraftHeight;
+              }
+              var targetModeIndex = this.FindResolutionModeIndex(targetModes,rememberedWidth,rememberedHeight);
+              if(targetModeIndex < 0)
+              {
+                 targetModeIndex = this.FindResolutionModeIndex(targetModes,this.DesktopActualWidth,this.DesktopActualHeight);
+                 if(targetModeIndex < 0)
+                 {
+                    this.ResolutionModes = previousModes;
+                    this.ResolutionDraftIndex = previousIndex;
+                    this.ResolutionDraftWidth = previousWidth;
+                    this.ResolutionDraftHeight = previousHeight;
+                    this.RefreshRows();
+                    return false;
+                 }
+                 rememberedWidth = this.DesktopActualWidth;
+                 rememberedHeight = this.DesktopActualHeight;
+              }
+              this.ResolutionDraftIndex = targetModeIndex;
+              this.ResolutionDraftWidth = rememberedWidth;
+              this.ResolutionDraftHeight = rememberedHeight;
+              this.ResolutionCatalogFailure = false;
+              this.RefreshRows();
+              return true;
+           }
+           function FindResolutionModeIndex(modes,widthValue,heightValue)
+           {
+              if(widthValue == undefined || heightValue == undefined)
+              {
+                 return -1;
+              }
+              var modeIndex = 0;
+              while(modeIndex < modes.length)
+              {
+                 if(modes[modeIndex].Width == widthValue && modes[modeIndex].Height == heightValue)
+                 {
+                    return modeIndex;
+                 }
+                 modeIndex = modeIndex + 1;
+              }
+              return -1;
            }
            function DecodeResolutionScalar(rawValue)
            {
@@ -778,12 +1089,20 @@ internal static class GraphicsOptionsShellScriptTemplates
               var magnitude = 0 - rawValue;
               var ordinal = Math.floor((magnitude - 1) / 32768);
               var scalarValue = magnitude - ordinal * 32768;
-              var expectedOrdinal = this.ResolutionCatalogRequest - 4700;
+              var expectedOrdinal = this.GetResolutionRequestOrdinal(this.ResolutionCatalogRequest);
               if(ordinal != expectedOrdinal || scalarValue < 1 || scalarValue > 32767)
               {
                  return -1;
               }
               return scalarValue;
+           }
+           function GetResolutionRequestOrdinal(request)
+           {
+              if(request >= 4700 && request <= 4898) { return request - 4700; }
+              if(request >= 5200 && request <= 5398) { return 199 + request - 5200; }
+              if(request >= 5400 && request <= 5598) { return 398 + request - 5400; }
+              if(request >= 5600 && request <= 5601) { return 597 + request - 5600; }
+              return -1;
            }
            function SetDraftIndex(rowIndex,index,forward)
            {
@@ -800,7 +1119,16 @@ internal static class GraphicsOptionsShellScriptTemplates
               {
                  flash.external.ExternalInterface.call("FE_PlaySoundFromString","UI_FrontEndSFX.UI_Back");
               }
+              var previousIndex = setting.DraftIndex;
               setting.DraftIndex = index;
+              if(rowIndex == 1)
+              {
+                 if(!this.SelectResolutionKind(index))
+                 {
+                    setting.DraftIndex = previousIndex;
+                    return undefined;
+                 }
+              }
               this.RefreshRows();
            }
            function ToggleSetting(rowIndex)
@@ -868,9 +1196,9 @@ internal static class GraphicsOptionsShellScriptTemplates
                  {
                     this.ApplyQueue.push(this.Settings[settingIndex]);
                  }
-                 if(settingIndex == 0 && this.ResolutionDraftIndex != this.ResolutionInitialIndex)
+                 if(settingIndex == 0 && this.ResolutionDraftIndex >= 0 && (this.ResolutionDraftWidth != this.ResolutionInitialWidth || this.ResolutionDraftHeight != this.ResolutionInitialHeight))
                  {
-                    this.ApplyQueue.push({IsResolution:true,SelectedIndex:this.ResolutionDraftIndex,WriteRequest:5000 + this.ResolutionDraftIndex,WriteAcknowledgement:5100 + this.ResolutionDraftIndex,FailureResponse:5199});
+                    this.ApplyQueue.push({IsResolution:true,SelectedIndex:this.ResolutionDraftIndex,SelectedWidth:this.ResolutionDraftWidth,SelectedHeight:this.ResolutionDraftHeight,SelectedKind:this.Settings[0].DraftIndex,WriteRequest:5000 + this.ResolutionDraftIndex,WriteAcknowledgement:5100 + this.ResolutionDraftIndex,FailureResponse:5199});
                  }
                  settingIndex = settingIndex + 1;
               }
@@ -988,6 +1316,10 @@ internal static class GraphicsOptionsShellScriptTemplates
                  settingIndex = settingIndex + 1;
               }
               this.ResolutionInitialIndex = this.ResolutionDraftIndex;
+              this.ResolutionInitialWidth = this.ResolutionDraftWidth;
+              this.ResolutionInitialHeight = this.ResolutionDraftHeight;
+              this.ResolutionPersistedWidth = this.ResolutionDraftWidth;
+              this.ResolutionPersistedHeight = this.ResolutionDraftHeight;
            }
            function BeginRollback()
            {
@@ -1009,7 +1341,11 @@ internal static class GraphicsOptionsShellScriptTemplates
            }
            function CompleteRollback()
            {
-              this.ResolutionDraftIndex = this.ResolutionInitialIndex;
+              this.Settings[0].DraftIndex = this.Settings[0].InitialIndex;
+              this.SelectResolutionKind(this.Settings[0].InitialIndex);
+              this.ResolutionDraftWidth = this.ResolutionInitialWidth;
+              this.ResolutionDraftHeight = this.ResolutionInitialHeight;
+              this.ResolutionDraftIndex = this.FindResolutionModeIndex(this.ResolutionModes,this.ResolutionInitialWidth,this.ResolutionInitialHeight);
               this.ApplyInProgress = false;
               this.InteractionBlocked = false;
               this.UiStatus = "Apply Failed";
@@ -1332,7 +1668,7 @@ internal static class GraphicsOptionsShellScriptTemplates
               {
                  return false;
               }
-              return _parent.GraphicsOptionsController.GetResolutionDraftIndex() != _parent.GraphicsOptionsController.GetResolutionInitialIndex();
+              return _parent.GraphicsOptionsController.ResolutionDraftWidth != _parent.GraphicsOptionsController.ResolutionInitialWidth || _parent.GraphicsOptionsController.ResolutionDraftHeight != _parent.GraphicsOptionsController.ResolutionInitialHeight;
            };
            this.IsDefault = function()
            {
@@ -1340,7 +1676,7 @@ internal static class GraphicsOptionsShellScriptTemplates
               {
                  return false;
               }
-              return _parent.GraphicsOptionsController.GetResolutionDraftIndex() == _parent.GraphicsOptionsController.GetResolutionInitialIndex();
+              return _parent.GraphicsOptionsController.ResolutionDraftWidth == _parent.GraphicsOptionsController.ResolutionInitialWidth && _parent.GraphicsOptionsController.ResolutionDraftHeight == _parent.GraphicsOptionsController.ResolutionInitialHeight;
            };
            this.RestoreInitialValue = function()
            {
@@ -1471,7 +1807,7 @@ internal static class GraphicsOptionsShellScriptTemplates
               }
               if(this.ItemText != undefined)
               {
-                 this.ItemText.text = this.Names[this.State];
+                 this.ItemText.text = _parent.GraphicsOptionsController.IsUnavailable(this.RowIndex) ? "Unavailable" : this.Names[this.State];
               }
               if(this.LeftClicker != undefined)
               {

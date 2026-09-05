@@ -162,7 +162,11 @@ $graphicsProtocol = @(
 )
 
 $graphicsCommandValues = @(4960,4961,4969,4970,4971,4980,4981,4989,4990,4991)
-$dynamicCatalogRequests = @(for ($request = 4700; $request -le 4898; $request++) { [int]$request })
+$legacyCatalogRequests = @(for ($request = 4700; $request -le 4898; $request++) { [int]$request })
+$windowedCatalogRequests = @(for ($request = 5200; $request -le 5398; $request++) { [int]$request })
+$fullscreenCatalogRequests = @(for ($request = 5400; $request -le 5598; $request++) { [int]$request })
+$desktopCatalogRequests = @(5600, 5601)
+$dynamicCatalogRequests = @($legacyCatalogRequests + $windowedCatalogRequests + $fullscreenCatalogRequests + $desktopCatalogRequests)
 $resolutionWriteRequests = @(for ($index = 0; $index -lt 98; $index++) { [int](5000 + $index) })
 $resolutionAcknowledgementRequests = @(for ($index = 0; $index -lt 98; $index++) { [int](5100 + $index) })
 $resolutionConfigValues = @(for ($index = 0; $index -lt 98; $index++) { [int]$index })
@@ -246,8 +250,11 @@ function Assert-GraphicsProtocolTable {
 
 Assert-GraphicsProtocolTable -Protocol $graphicsProtocol -CommandValues $graphicsCommandValues
 
-if ($dynamicCatalogRequests.Count -ne 199 -or $dynamicCatalogRequests[0] -ne 4700 -or $dynamicCatalogRequests[-1] -ne 4898) {
-    throw 'Batman display catalog requests must be the ordered range 4700..4898.'
+if ($legacyCatalogRequests.Count -ne 199 -or $windowedCatalogRequests.Count -ne 199 -or $fullscreenCatalogRequests.Count -ne 199 -or $desktopCatalogRequests.Count -ne 2 -or
+    $dynamicCatalogRequests.Count -ne 599 -or $dynamicCatalogRequests[0] -ne 4700 -or $dynamicCatalogRequests[198] -ne 4898 -or
+    $dynamicCatalogRequests[199] -ne 5200 -or $dynamicCatalogRequests[397] -ne 5398 -or $dynamicCatalogRequests[398] -ne 5400 -or
+    $dynamicCatalogRequests[596] -ne 5598 -or $dynamicCatalogRequests[597] -ne 5600 -or $dynamicCatalogRequests[598] -ne 5601) {
+    throw 'Batman display catalog requests must be the ordered legacy, windowed, fullscreen, and desktop ranges (599 requests).'
 }
 if ($resolutionWriteRequests.Count -ne 98 -or $resolutionAcknowledgementRequests.Count -ne 98 -or $resolutionConfigValues.Count -ne 98) {
     throw 'Batman resolution protocol must contain exactly 98 generated mappings.'

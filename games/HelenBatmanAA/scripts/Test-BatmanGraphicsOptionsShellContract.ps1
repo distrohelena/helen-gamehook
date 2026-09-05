@@ -801,7 +801,11 @@ foreach ($RequiredScreenToken in @(
     'this.ResolutionInitialIndex = -1;',
     'this.ResolutionDraftIndex = -1;',
     'this.ResolutionCatalogCount = 0;',
-    'this.ResolutionCatalogRequest = 4700;',
+    'this.ResolutionCatalogRequest = 5200;',
+    'this.WindowedResolutionModes = new Array();',
+    'this.FullscreenResolutionModes = new Array();',
+    'this.ResolutionInitialWidth = undefined;',
+    'this.ResolutionDraftWidth = undefined;',
     'this.ResolutionCatalogDeadline = undefined;',
     'this.ApplyQueue = new Array();',
     'this.ApplyQueueIndex = 0;',
@@ -817,6 +821,9 @@ foreach ($RequiredScreenToken in @(
     'function ResetResolutionCatalogState()',
     'function BeginResolutionCatalogInitialization()',
     'function DecodeResolutionScalar(rawValue)',
+    'function GetResolutionRequestOrdinal(request)',
+    'function SelectResolutionKind(targetIndex)',
+    'function PollDesktopActualMode(rawValue)',
     'function IsDeadlineReached(deadline)',
     'this.InitializationDeadline = getTimer() + 10000;',
     'flash.external.ExternalInterface.call("FE_SetControlType",this.Settings[this.InitializationIndex].ReadRequest,"");',
@@ -866,11 +873,14 @@ if ($ScreenFrame.IndexOf('this.GraphicsOptionsController.Destroy();', [System.St
 }
 
 Assert-ContainsOrdinal -Text $ScreenFrame -Token 'this.ResolutionModes.push({Width:widthValue,Height:heightValue,Label:widthValue + " x " + heightValue});' -Context 'Resolution catalog label construction'
-Assert-ContainsOrdinal -Text $ScreenFrame -Token '4897' -Context 'Resolution current width request'
-Assert-ContainsOrdinal -Text $ScreenFrame -Token '4898' -Context 'Resolution current height request'
+Assert-ContainsOrdinal -Text $ScreenFrame -Token 'this.ResolutionCatalogRequest = 5600;' -Context 'Desktop current width request'
+Assert-ContainsOrdinal -Text $ScreenFrame -Token 'this.ResolutionCatalogRequest = 5601;' -Context 'Desktop current height request'
+Assert-ContainsOrdinal -Text $ScreenFrame -Token 'this.ResolutionCatalogRequest == this.ResolutionCatalogBase + 197' -Context 'Catalog persisted width request'
+Assert-ContainsOrdinal -Text $ScreenFrame -Token 'this.ResolutionCatalogRequest == this.ResolutionCatalogBase + 198' -Context 'Catalog persisted height request'
+Assert-ContainsOrdinal -Text $ScreenFrame -Token 'rawValue == 4899' -Context 'Shared catalog failure response'
 Assert-ContainsOrdinal -Text $ScreenFrame -Token 'rawValue == 5199' -Context 'Resolution apply failure'
 Assert-ContainsOrdinal -Text $ScreenFrame -Token 'var ordinal = Math.floor((magnitude - 1) / 32768);' -Context 'Resolution response ordinal decoder'
-Assert-ContainsOrdinal -Text $ScreenFrame -Token 'var expectedOrdinal = this.ResolutionCatalogRequest - 4700;' -Context 'Resolution response request correlation'
+Assert-ContainsOrdinal -Text $ScreenFrame -Token 'var expectedOrdinal = this.GetResolutionRequestOrdinal(this.ResolutionCatalogRequest);' -Context 'Resolution response request correlation'
 
 $ExpectedSettingDefinitions = @(
     '{RowIndex:1,Name:"Fullscreen",Values:new Array("Windowed","Fullscreen"),ConfigValues:new Array(0,1),ReadRequest:4670,ReadResponseBase:4671,WriteRequestBase:4673,WriteAcknowledgementBase:4675,FailureResponse:4679,InitialIndex:-1,DraftIndex:-1}',
@@ -1416,7 +1426,7 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
         Assert-ContainsOrdinal -Text $RowScript -Token 'if(_parent.GraphicsOptionsController == undefined)' -Context "$RowContext controller-load guard"
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.ItemText.text = "Loading...";' -Context "$RowContext controller-load guard"
         Assert-ContainsOrdinal -Text $RowScript -Token 'return undefined;' -Context "$RowContext controller-load guard"
-        Assert-ContainsOrdinal -Text $RowScript -Token 'this.ItemText.text = this.Names[this.State];' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.ItemText.text = _parent.GraphicsOptionsController.IsUnavailable(this.RowIndex) ? "Unavailable" : this.Names[this.State];' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = _parent.GraphicsOptionsController.GetDraftIndex(this.RowIndex);' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = _parent.GraphicsOptionsController.GetInitialIndex(this.RowIndex);' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.LeftClicker._visible = this.State > 0 && _parent.GraphicsOptionsController.CanEdit(this.RowIndex);' -Context $RowContext
@@ -1669,27 +1679,47 @@ function makeEnvironment() {
     return { screen, controller };
 }
 
-function initialize(controller, values) {
-    controller.BeginInitialization();
-    assert.deepStrictEqual(settingSignals(), [4670]);
-    const startupRequests = [4670, 4700, 4701, 4702, 4703, 4704, 4705, 4706, 4897, 4898, 4200, 4300, 4600, 4610, 4620, 4630, 4640, 4650, 4660, 4400, 4500];
-    const responses = [4671 + values[0], encodeResolutionScalar(4700, 3), encodeResolutionScalar(4701, 1280), encodeResolutionScalar(4702, 720), encodeResolutionScalar(4703, 1920), encodeResolutionScalar(4704, 1080), encodeResolutionScalar(4705, 3440), encodeResolutionScalar(4706, 1440), encodeResolutionScalar(4897, 1920), encodeResolutionScalar(4898, 1080)];
-    const responseBases = [4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510];
-    for (let index = 1; index < values.length; index += 1) {
-        responses.push(responseBases[index - 1] + values[index]);
-    }
-    for (const response of responses) {
-        queueResponses(response);
-        controller.Tick();
-    }
-    assert.deepStrictEqual(settingSignals(), startupRequests);
-    assert.strictEqual(controller.InitializationComplete, true);
-    assert.strictEqual(controller.CanApply(), false);
+function requestOrdinal(request) {
+    if (request >= 4700 && request <= 4898) return request - 4700;
+    if (request >= 5200 && request <= 5398) return 199 + request - 5200;
+    if (request >= 5400 && request <= 5598) return 398 + request - 5400;
+    if (request >= 5600 && request <= 5601) return 597 + request - 5600;
+    return -1;
 }
 
 function encodeResolutionScalar(request, scalar) {
-    const ordinal = request - 4700;
-    return -(scalar + ordinal * 32768);
+    return -(scalar + requestOrdinal(request) * 32768);
+}
+
+function feedCatalog(controller, base, pairs, persistedWidth, persistedHeight) {
+    queueResponses(encodeResolutionScalar(base, pairs.length)); controller.Tick();
+    for (let index = 0; index < pairs.length; index += 1) {
+        const request = base + 1 + index * 2;
+        queueResponses(encodeResolutionScalar(request, pairs[index][0])); controller.Tick();
+        queueResponses(encodeResolutionScalar(request + 1, pairs[index][1])); controller.Tick();
+    }
+    queueResponses(encodeResolutionScalar(base + 197, persistedWidth)); controller.Tick();
+    queueResponses(encodeResolutionScalar(base + 198, persistedHeight)); controller.Tick();
+}
+
+function initialize(controller, values) {
+    controller.BeginInitialization();
+    assert.deepStrictEqual(settingSignals(), [4670]);
+    const startupRequests = [4670, 4200, 4300, 4600, 4610, 4620, 4630, 4640, 4650, 4660, 4400, 4500, 5200, 5201, 5202, 5203, 5204, 5205, 5206, 5397, 5398, 5400, 5401, 5402, 5403, 5404, 5405, 5406, 5597, 5598, 5600, 5601];
+    const responses = [4671 + values[0]];
+    const responseBases = [4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510];
+    for (let index = 1; index < values.length; index += 1) responses.push(responseBases[index - 1] + values[index]);
+    for (const response of responses) { queueResponses(response); controller.Tick(); }
+    const pairs = [[1280, 720], [1920, 1080], [3440, 1440]];
+    feedCatalog(controller, 5200, pairs, 1920, 1080);
+    feedCatalog(controller, 5400, pairs, 1920, 1080);
+    queueResponses(encodeResolutionScalar(5600, 1920)); controller.Tick();
+    queueResponses(encodeResolutionScalar(5601, 1080)); controller.Tick();
+    assert.deepStrictEqual(settingSignals(), startupRequests);
+    if (!controller.InitializationComplete) {
+        throw new Error(`corrected initialization incomplete: stage=${controller.ResolutionInitializationStage} request=${controller.ResolutionCatalogRequest} pending=${controller.CurrentPendingCode} kind=${controller.ResolutionCatalogKind} windowed=${controller.WindowedResolutionModes.length}/${controller.WindowedResolutionAvailable} fullscreen=${controller.FullscreenResolutionModes.length}/${controller.FullscreenResolutionAvailable} desktop=${controller.DesktopActualWidth}x${controller.DesktopActualHeight}`);
+    }
+    assert.strictEqual(controller.CanApply(), false);
 }
 
 function expectInitializationRequestEcho(controller, request) {
@@ -1705,35 +1735,35 @@ function initializeWithPendingRequestEchoes(values) {
     const echoedEnvironment = makeEnvironment();
     const echoedController = echoedEnvironment.controller;
     echoedController.BeginInitialization();
-    assert.deepStrictEqual(settingSignals(), [4670]);
+    assert.deepStrictEqual(settingSignals().slice(0, 1), [4670]);
 
     expectInitializationRequestEcho(echoedController, 4670);
     queueResponses(4671 + values[0]);
     echoedController.Tick();
 
-    const dynamicRequests = [4700, 4701, 4702, 4703, 4704, 4705, 4706, 4897, 4898];
-    const dynamicResponses = [
-        encodeResolutionScalar(4700, 3),
-        encodeResolutionScalar(4701, 1280),
-        encodeResolutionScalar(4702, 720),
-        encodeResolutionScalar(4703, 1920),
-        encodeResolutionScalar(4704, 1080),
-        encodeResolutionScalar(4705, 3440),
-        encodeResolutionScalar(4706, 1440),
-        encodeResolutionScalar(4897, 1920),
-        encodeResolutionScalar(4898, 1080)
-    ];
-    for (let dynamicIndex = 0; dynamicIndex < dynamicRequests.length; dynamicIndex += 1) {
-        expectInitializationRequestEcho(echoedController, dynamicRequests[dynamicIndex]);
-        queueResponses(dynamicResponses[dynamicIndex]);
+    const staticRequests = [4200, 4300, 4600, 4610, 4620, 4630, 4640, 4650, 4660, 4400, 4500];
+    const staticBases = [4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510];
+    for (let staticIndex = 0; staticIndex < staticRequests.length; staticIndex += 1) {
+        expectInitializationRequestEcho(echoedController, staticRequests[staticIndex]);
+        queueResponses(staticBases[staticIndex] + (staticIndex === 0 ? values[1] : values[staticIndex + 1]));
         echoedController.Tick();
     }
-
-    const staticResponses = [4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510];
-    for (let staticIndex = 0; staticIndex < staticResponses.length; staticIndex += 1) {
-        queueResponses(staticResponses[staticIndex] + (staticIndex === 0 ? values[1] : values[staticIndex + 1]));
+    function echoAndRespond(request, scalar) {
+        expectInitializationRequestEcho(echoedController, request);
+        queueResponses(encodeResolutionScalar(request, scalar));
         echoedController.Tick();
     }
+    echoAndRespond(5200, 3);
+    echoAndRespond(5201, 1280); echoAndRespond(5202, 720);
+    echoAndRespond(5203, 1920); echoAndRespond(5204, 1080);
+    echoAndRespond(5205, 3440); echoAndRespond(5206, 1440);
+    echoAndRespond(5397, 1920); echoAndRespond(5398, 1080);
+    echoAndRespond(5400, 3);
+    echoAndRespond(5401, 1280); echoAndRespond(5402, 720);
+    echoAndRespond(5403, 1920); echoAndRespond(5404, 1080);
+    echoAndRespond(5405, 3440); echoAndRespond(5406, 1440);
+    echoAndRespond(5597, 1920); echoAndRespond(5598, 1080);
+    echoAndRespond(5600, 1920); echoAndRespond(5601, 1080);
     assert.strictEqual(echoedController.InitializationFailed, false);
     assert.strictEqual(echoedController.InitializationComplete, true);
     assert.strictEqual(echoedController.CanApply(), false);
@@ -1786,31 +1816,52 @@ assert.strictEqual(as2ToInt32(2147483648), -2147483648);
 assert.strictEqual(as2ToInt32(-2147483649), 2147483647);
 assert.strictEqual(as2ToInt32(-2147483648), -2147483648);
 
-function expectInitializationFailure(responses, message) {
+function expectCatalogFailure(responses, message) {
     setNow(0);
     const failedEnvironment = makeEnvironment();
-    failedEnvironment.controller.BeginInitialization();
+    const failedController = failedEnvironment.controller;
+    failedController.BeginInitialization();
+    for (const response of [4671, 4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510]) {
+        queueResponses(response);
+        failedController.Tick();
+    }
     for (const response of responses) {
         queueResponses(response);
-        failedEnvironment.controller.Tick();
+        failedController.Tick();
     }
-    assert.strictEqual(failedEnvironment.controller.InitializationFailed, true, message);
+    assert.strictEqual(failedController.ResolutionInitializationStage, 'fullscreen', message);
+    assert.strictEqual(failedController.WindowedResolutionModes.length, 0, 'failed catalog must discard partial entries');
+    feedCatalog(failedController, 5400, [[1920, 1080]], 2560, 1600);
+    queueResponses(encodeResolutionScalar(5600, 1920)); failedController.Tick();
+    queueResponses(encodeResolutionScalar(5601, 1080)); failedController.Tick();
+    assert.strictEqual(failedController.InitializationComplete, true, message);
+    assert.strictEqual(failedController.IsUnavailable(2), true, message);
+    assert.strictEqual(failedController.CanEdit(3), true, 'catalog rejection must preserve VSync');
     return failedEnvironment;
 }
 
-expectInitializationFailure([4671, 0], 'zero catalog count must fail initialization');
-expectInitializationFailure([4671, -99], 'oversized catalog count must fail initialization');
-expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4701, 1280), encodeResolutionScalar(4702, 720), encodeResolutionScalar(4703, 1280), encodeResolutionScalar(4704, 720)], 'duplicate resolution pairs must fail initialization');
-expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4701, 1280), 0], 'incomplete resolution pair must fail initialization');
-expectInitializationFailure([4671, -3, 4702], 'out-of-order resolution response must fail initialization');
-expectInitializationFailure([4671, -3, 1280], 'positive resolution scalar must fail initialization');
-expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4701, 1280), encodeResolutionScalar(4702, 720), encodeResolutionScalar(4703, 1920), encodeResolutionScalar(4704, 1080), encodeResolutionScalar(4705, 3440), encodeResolutionScalar(4706, 1440), encodeResolutionScalar(4897, 800), encodeResolutionScalar(4898, 600)], 'unsupported current resolution must fail initialization');
-expectInitializationFailure([4671, 4672], 'mismatched request response must fail initialization');
-expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4700, 3)], 'stale prior resolution response must fail correlation');
-expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4702, 1280)], 'future resolution response must fail correlation');
-expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), -2147483648], 'INT_MIN resolution response must fail correlation');
-expectInitializationFailure([4675], 'a nonzero fullscreen acknowledgement mismatch must fail initialization');
-expectInitializationFailure([4671, 4701], 'a nonzero dynamic request mismatch must fail initialization');
+expectCatalogFailure([0], 'zero catalog count is rejected');
+expectCatalogFailure([encodeResolutionScalar(5200, 99)], 'oversized catalog count is rejected');
+expectCatalogFailure([encodeResolutionScalar(5200, 2), encodeResolutionScalar(5201, 1280), encodeResolutionScalar(5202, 720), encodeResolutionScalar(5203, 1280), encodeResolutionScalar(5204, 720)], 'duplicate catalog pairs are rejected');
+expectCatalogFailure([encodeResolutionScalar(5200, 1), encodeResolutionScalar(5201, 1280), 0], 'incomplete pair is rejected');
+expectCatalogFailure([encodeResolutionScalar(5200, 1), 5202], 'out-of-order request is rejected');
+expectCatalogFailure([encodeResolutionScalar(5200, 1), 1280], 'positive scalar is rejected');
+expectCatalogFailure([4672], 'unrelated static response is rejected');
+expectCatalogFailure([encodeResolutionScalar(5200, 1), encodeResolutionScalar(5200, 1)], 'stale prior response is rejected');
+expectCatalogFailure([encodeResolutionScalar(5200, 1), encodeResolutionScalar(5202, 1280)], 'future response is rejected');
+expectCatalogFailure([encodeResolutionScalar(5200, 1), -2147483648], 'INT_MIN response is rejected');
+
+let isolatedLegacyFailure = initializeCorrected(Array(12).fill(0), { failLegacyIndex: 1 });
+assert.strictEqual(isolatedLegacyFailure.controller.InitializationComplete, true, 'a legacy scalar failure must not abort initialization');
+assert.strictEqual(isolatedLegacyFailure.controller.Settings[1].InitialIndex, -1, 'the failed legacy row is unavailable');
+assert.strictEqual(isolatedLegacyFailure.controller.Settings[2].InitialIndex, 0, 'later legacy rows still initialize after a failure');
+let isolatedWindowedFailure = initializeCorrected(Array(12).fill(0), { failWindowed: true });
+assert.strictEqual(isolatedWindowedFailure.controller.InitializationComplete, true, 'windowed catalog failure is isolated');
+assert.strictEqual(isolatedWindowedFailure.controller.WindowedResolutionAvailable, false, 'windowed resolution is unavailable after catalog failure');
+assert.strictEqual(isolatedWindowedFailure.controller.Settings[1].InitialIndex, 0, 'VSync remains initialized after catalog failure');
+let isolatedFullscreenFailure = initializeCorrected(Array(12).fill(0), { failFullscreen: true });
+assert.strictEqual(isolatedFullscreenFailure.controller.InitializationComplete, true, 'fullscreen catalog failure is isolated');
+assert.strictEqual(isolatedFullscreenFailure.controller.FullscreenResolutionAvailable, false, 'fullscreen resolution is unavailable after catalog failure');
 
 initializeWithPendingRequestEchoes(Array(12).fill(0));
 
@@ -1915,22 +1966,23 @@ assert.strictEqual(calls.some(call => call.name === 'FE_SetControlType' && call.
 function initializeBoundaryCatalog(controller, currentWidth, currentHeight, expectedCurrentIndex) {
     controller.BeginInitialization();
     assert.deepStrictEqual(settingSignals(), [4670]);
-    const responses = [4671, encodeResolutionScalar(4700, 98)];
-    for (let modeIndex = 0; modeIndex < 98; modeIndex += 1) {
-        const widthRequest = 4701 + modeIndex * 2;
-        const heightRequest = widthRequest + 1;
-        const widthValue = modeIndex == 97 ? 32767 : modeIndex + 1;
-        const heightValue = modeIndex == 97 ? 32767 : 1000 + modeIndex;
-        responses.push(encodeResolutionScalar(widthRequest, widthValue));
-        responses.push(encodeResolutionScalar(heightRequest, heightValue));
-    }
-    responses.push(encodeResolutionScalar(4897, currentWidth));
-    responses.push(encodeResolutionScalar(4898, currentHeight));
-    responses.push(4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510);
-    for (const response of responses) {
-        queueResponses(response);
+    const responses = [4671];
+    const staticResponses = [4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510];
+    for (const response of staticResponses) responses.push(response);
+    for (let settingIndex = 0; settingIndex < responses.length; settingIndex += 1) {
+        queueResponses(responses[settingIndex]);
         controller.Tick();
     }
+    const boundaryPairs = [];
+    for (let modeIndex = 0; modeIndex < 98; modeIndex += 1) {
+        const widthValue = modeIndex == 97 ? 32767 : modeIndex + 1;
+        const heightValue = modeIndex == 97 ? 32767 : 1000 + modeIndex;
+        boundaryPairs.push([widthValue, heightValue]);
+    }
+    feedCatalog(controller, 5200, boundaryPairs, currentWidth, currentHeight);
+    feedCatalog(controller, 5400, boundaryPairs, currentWidth, currentHeight);
+    queueResponses(encodeResolutionScalar(5600, 1920)); controller.Tick();
+    queueResponses(encodeResolutionScalar(5601, 1080)); controller.Tick();
     assert.strictEqual(controller.InitializationComplete, true);
     assert.strictEqual(controller.ResolutionModes.length, 98);
     assert.strictEqual(controller.ResolutionInitialIndex, expectedCurrentIndex);
@@ -1968,20 +2020,11 @@ queueResponses(4671);
 retryEnvironment.controller.Tick();
 queueResponses(0);
 retryEnvironment.controller.Tick();
-assert.strictEqual(retryEnvironment.controller.InitializationFailed, true);
-assert.deepStrictEqual(retryEnvironment.controller.ResolutionModes, []);
-assert.strictEqual(retryEnvironment.controller.ResolutionCatalogCount, 0);
-assert.strictEqual(retryEnvironment.controller.ResolutionCatalogRequest, undefined);
-assert.strictEqual(retryEnvironment.controller.ResolutionCatalogDeadline, undefined);
-assert.strictEqual(retryEnvironment.controller.ResolutionCatalogIndex, 0);
-assert.strictEqual(retryEnvironment.controller.ResolutionPendingWidth, undefined);
-assert.strictEqual(retryEnvironment.controller.ResolutionCurrentWidth, undefined);
-assert.strictEqual(retryEnvironment.controller.ResolutionCurrentHeight, undefined);
-assert.strictEqual(retryEnvironment.controller.ResolutionInitialIndex, -1);
-assert.strictEqual(retryEnvironment.controller.ResolutionDraftIndex, -1);
+assert.strictEqual(retryEnvironment.controller.InitializationFailed, false);
+assert.strictEqual(retryEnvironment.controller.Settings[1].InitialIndex, -1, 'a malformed VSync response isolates that legacy row');
 clearCalls();
 initialize(retryEnvironment.controller, Array(12).fill(0));
-assert.strictEqual(retryEnvironment.controller.ResolutionInitialIndex, 1, 'same controller retry must rebuild a clean catalog');
+assert.strictEqual(retryEnvironment.controller.ResolutionInitialIndex, 1, `same controller retry must rebuild a clean catalog (${retryEnvironment.controller.ResolutionInitialWidth}x${retryEnvironment.controller.ResolutionInitialHeight}, ${retryEnvironment.controller.ResolutionModes.map(mode => mode.Label).join(',')})`);
 retryEnvironment.controller.Destroy();
 assert.deepStrictEqual(retryEnvironment.controller.ResolutionModes, []);
 assert.strictEqual(retryEnvironment.controller.ResolutionCatalogCount, 0);
@@ -1989,8 +2032,6 @@ assert.strictEqual(retryEnvironment.controller.ResolutionCatalogRequest, undefin
 assert.strictEqual(retryEnvironment.controller.ResolutionCatalogDeadline, undefined);
 assert.strictEqual(retryEnvironment.controller.ResolutionCatalogIndex, 0);
 assert.strictEqual(retryEnvironment.controller.ResolutionPendingWidth, undefined);
-assert.strictEqual(retryEnvironment.controller.ResolutionCurrentWidth, undefined);
-assert.strictEqual(retryEnvironment.controller.ResolutionCurrentHeight, undefined);
 assert.strictEqual(retryEnvironment.controller.ResolutionInitialIndex, -1);
 assert.strictEqual(retryEnvironment.controller.ResolutionDraftIndex, -1);
 
@@ -2029,30 +2070,24 @@ controller.BeginInitialization();
 assert.deepStrictEqual(settingSignals(), [4670]);
 queueResponses(9999);
 controller.Tick();
-assert.deepStrictEqual(settingSignals(), [4670]);
-assert.strictEqual(controller.InitializationFailed, true);
+assert.deepStrictEqual(settingSignals(), [4670, 4200]);
+assert.strictEqual(controller.InitializationFailed, false);
+assert.strictEqual(controller.Settings[0].InitialIndex, -1, 'Fullscreen timeout isolates the new row');
 environment = makeEnvironment();
 controller = environment.controller;
 clearCalls();
-controller.BeginInitialization();
 const startupValues = [0, 1, 4, 0, 0, 0, 0, 0, 0, 0, 2, 1];
-const startupRequests = [4670, 4700, 4701, 4702, 4703, 4704, 4705, 4706, 4897, 4898, 4200, 4300, 4600, 4610, 4620, 4630, 4640, 4650, 4660, 4400, 4500];
-const startupResponses = [4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4701, 1280), encodeResolutionScalar(4702, 720), encodeResolutionScalar(4703, 1920), encodeResolutionScalar(4704, 1080), encodeResolutionScalar(4705, 3440), encodeResolutionScalar(4706, 1440), encodeResolutionScalar(4897, 1920), encodeResolutionScalar(4898, 1080), 4210 + startupValues[1], 4310 + startupValues[2], 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410 + startupValues[10], 4510 + startupValues[11]];
-for (const startupResponse of startupResponses) {
-    queueResponses(startupResponse);
-    controller.Tick();
-}
-assert.deepStrictEqual(settingSignals(), startupRequests);
+initialize(controller, startupValues);
 assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), startupValues);
 assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), startupValues);
 assert.strictEqual(controller.Settings.length, 12);
 assert.deepStrictEqual(controller.ResolutionModes.map(mode => mode.Label), ['1280 x 720', '1920 x 1080', '3440 x 1440']);
-assert.strictEqual(controller.ResolutionInitialIndex, 1);
-assert.strictEqual(controller.ResolutionDraftIndex, 1);
+assert.strictEqual(controller.ResolutionInitialIndex, 1, `startup resolution mismatch: ${controller.ResolutionInitialWidth}x${controller.ResolutionInitialHeight} modes=${controller.ResolutionModes.map(mode => mode.Label).join(',')} kind=${controller.Settings[0].InitialIndex}`);
+assert.strictEqual(controller.ResolutionDraftIndex, 1, `startup draft mismatch: ${controller.ResolutionInitialWidth}x${controller.ResolutionInitialHeight} index=${controller.ResolutionDraftIndex}`);
 const resolutionRow = loadRow(rowScripts[1], environment.screen);
-assert.strictEqual(resolutionRow.State, 1);
-assert.strictEqual(resolutionRow.Initial, 1);
-assert.strictEqual(resolutionRow.Default, 1);
+assert.strictEqual(resolutionRow.State, 1, `resolution row startup state mismatch: ${resolutionRow.State}`);
+assert.strictEqual(resolutionRow.Initial, 1, `resolution row startup initial mismatch: ${resolutionRow.Initial}`);
+assert.strictEqual(resolutionRow.Default, 1, `resolution row startup default mismatch: ${resolutionRow.Default}`);
 assert.strictEqual(resolutionRow.HasChanged(), false);
 assert.strictEqual(resolutionRow.IsDefault(), true);
 controller.DecrementResolution();
@@ -2133,24 +2168,30 @@ assert.ok(fullscreenRollbackSignal === 4970 || fullscreenRollbackSignal === 4971
 queueResponses(fullscreenRollbackSignal === 4970 ? 4960 : 4961);
 fullscreenFailureController.Tick();
 assert.strictEqual(fullscreenFailureController.GetApplyStatusText(), 'Apply Failed');
-assert.strictEqual(fullscreenFailureController.Settings[0].DraftIndex, 1);
+assert.strictEqual(fullscreenFailureController.Settings[0].DraftIndex, 0, 'failed fullscreen Apply restores the saved windowed mode');
 assert.strictEqual(fullscreenFailureController.Settings[0].InitialIndex, 0);
 
 setNow(0);
 environment = makeEnvironment();
 controller = environment.controller;
 controller.BeginInitialization();
-for (const initializationFailureResponse of [4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4701, 1280), encodeResolutionScalar(4702, 720), encodeResolutionScalar(4703, 1920), encodeResolutionScalar(4704, 1080), encodeResolutionScalar(4705, 3440), encodeResolutionScalar(4706, 1440), encodeResolutionScalar(4897, 1920), encodeResolutionScalar(4898, 1080), 4299]) {
+for (const initializationFailureResponse of [4679, 4299, 4399, 4609, 4619, 4629, 4639, 4649, 4659, 4669, 4499, 4599, 4899, 4899, 4899]) {
     queueResponses(initializationFailureResponse);
     controller.Tick();
 }
-assert.strictEqual(controller.InitializationFailed, true);
+assert.strictEqual(controller.InitializationComplete, true, 'every row failure still completes the bounded initialization flow');
 assert.deepStrictEqual(controller.Settings.map(setting => setting.InitialIndex), Array(12).fill(-1));
 assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), Array(12).fill(-1));
 assert.strictEqual(controller.GetDetailLevelDraftIndex(), 4);
 assert.strictEqual(controller.CanEditDetailLevel(), false);
 assert.strictEqual(controller.CanApply(), false);
 assert.strictEqual(controller.CanEdit(3), false);
+for (const unavailableRowIndex of [0, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12]) {
+    const unavailableRow = loadRow(rowScripts[unavailableRowIndex], environment.screen);
+    assert.strictEqual(unavailableRow.ItemText.text, 'Unavailable', 'failed scalar row must render an explicit unavailable value');
+    assert.strictEqual(unavailableRow.LeftClicker._visible, false);
+    assert.strictEqual(unavailableRow.RightClicker._visible, false);
+}
 assert.strictEqual(environment.screen.bBlockInput, false);
 assert.strictEqual(environment.screen.bLockInput, false);
 assert.strictEqual(environment.screen.TryBack(), true);
@@ -2171,7 +2212,8 @@ controller.BeginInitialization();
 assert.strictEqual(controller.InitializationDeadline, 2147493000);
 setNow(-2147474296);
 controller.Tick();
-assert.strictEqual(controller.InitializationFailed, true);
+assert.strictEqual(controller.InitializationFailed, false, 'timer rollover timeout isolates the current setting');
+assert.strictEqual(controller.CurrentPendingCode, 4200, 'initialization continues with VSync after the first timeout');
 assert.deepStrictEqual(controller.Settings.map(setting => setting.DraftIndex), Array(12).fill(-1));
 
 setNow(0);
@@ -2181,7 +2223,7 @@ controller = environment.controller;
 initialize(controller, Array(12).fill(0));
 controller.IncrementSetting(3);
 assert.strictEqual(controller.Settings[1].DraftIndex, 1);
-assert.strictEqual(settingSignals().length, 21);
+assert.strictEqual(settingSignals().length, 32);
 controller.DecrementSetting(3);
 controller.DecrementSetting(3);
 assert.strictEqual(controller.Settings[1].DraftIndex, 0);
@@ -2218,7 +2260,7 @@ controller.DecrementDetailPreset();
 assert.strictEqual(controller.GetDetailLevelDraftIndex(), 3);
 controller.ToggleDetailPreset();
 assert.strictEqual(controller.GetDetailLevelDraftIndex(), 0);
-assert.strictEqual(settingSignals().length, 21);
+assert.strictEqual(settingSignals().length, 32);
 
 setNow(0);
 environment = makeEnvironment();
@@ -2572,6 +2614,76 @@ assert.strictEqual(lockedBackEnvironment.screen.returnFromScreenCount, 0);
 lockedBackEnvironment.screen.bLockInput = false;
 assert.strictEqual(lockedBackEnvironment.screen.onKeyDown(), true);
 assert.strictEqual(lockedBackEnvironment.screen.returnFromScreenCount, 1);
+
+function initializeCorrected(values, options) {
+    const environment = makeEnvironment();
+    const controller = environment.controller;
+    const settingsValues = values || Array(12).fill(0);
+    const catalogOptions = options || {};
+    controller.BeginInitialization();
+    assert.deepStrictEqual(settingSignals(), [4670]);
+    queueResponses(4670);
+    controller.Tick();
+    queueResponses(4671 + settingsValues[0]);
+    controller.Tick();
+    const staticRequests = [4200, 4300, 4600, 4610, 4620, 4630, 4640, 4650, 4660, 4400, 4500];
+    const staticBases = [4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510];
+    for (let index = 0; index < staticRequests.length; index += 1) {
+        if (catalogOptions.failLegacyIndex === index + 1) queueResponses(4999);
+        else queueResponses(staticBases[index] + settingsValues[index + 1]);
+        controller.Tick();
+    }
+    if (catalogOptions.failWindowed) { queueResponses(4899); controller.Tick(); }
+    else { feedCatalog(controller, 5200, [[1280, 720], [1920, 1080], [2560, 1600]], catalogOptions.windowedWidth || 2560, catalogOptions.windowedHeight || 1600); }
+    if (catalogOptions.failFullscreen) { queueResponses(4899); controller.Tick(); }
+    else { feedCatalog(controller, 5400, [[1280, 720], [1920, 1080]], catalogOptions.fullscreenWidth || 1920, catalogOptions.fullscreenHeight || 1080); }
+    queueResponses(encodeResolutionScalar(5600, 1920)); controller.Tick();
+    queueResponses(encodeResolutionScalar(5601, 1080)); controller.Tick();
+    if (!controller.InitializationComplete) {
+        throw new Error(`corrected initialization incomplete: stage=${controller.ResolutionInitializationStage} request=${controller.ResolutionCatalogRequest} pending=${controller.CurrentPendingCode} kind=${controller.ResolutionCatalogKind} windowed=${controller.WindowedResolutionModes.length}/${controller.WindowedResolutionAvailable} fullscreen=${controller.FullscreenResolutionModes.length}/${controller.FullscreenResolutionAvailable} desktop=${controller.DesktopActualWidth}x${controller.DesktopActualHeight}`);
+    }
+    assert.strictEqual(controller.InitializationFailed, false);
+    return environment;
+}
+
+let corrected = initializeCorrected();
+assert.strictEqual(corrected.controller.ResolutionInitialWidth, 2560, 'windowed startup keeps the exact custom width');
+assert.strictEqual(corrected.controller.ResolutionInitialHeight, 1600, 'windowed startup keeps the exact custom height');
+assert.strictEqual(corrected.controller.GetResolutionLabel(), '2560 x 1600', 'custom window size is visible');
+
+corrected.controller.ResolutionDraftIndex = 1;
+corrected.controller.ResolutionDraftWidth = corrected.controller.ResolutionInitialWidth;
+corrected.controller.ResolutionDraftHeight = corrected.controller.ResolutionInitialHeight;
+assert.strictEqual(corrected.controller.IsDirty(), false, 'resolution dirty state compares dimensions, not catalog indices');
+
+corrected = initializeCorrected();
+corrected.controller.ToggleSetting(1);
+assert.strictEqual(corrected.controller.Settings[0].DraftIndex, 1);
+assert.strictEqual(corrected.controller.GetResolutionLabel(), '1920 x 1080', 'fullscreen switch selects the remembered supported pair');
+corrected.controller.ToggleSetting(1);
+assert.strictEqual(corrected.controller.GetResolutionLabel(), '2560 x 1600', 'windowed switch restores the remembered custom pair');
+
+corrected = initializeCorrected(Array(12).fill(0), { failWindowed: true });
+corrected.controller.Settings[1].DraftIndex = 1;
+assert.strictEqual(corrected.controller.InitializationComplete, true, 'windowed catalog failure does not abort legacy initialization');
+assert.strictEqual(corrected.controller.CanApply(), true, 'legacy settings remain applicable after a new-row failure');
+corrected.controller.ApplyChanges();
+assert.strictEqual(settingSignals()[settingSignals().length - 1], 4221, 'legacy Apply excludes unavailable resolution');
+
+corrected = initializeCorrected();
+corrected.controller.ToggleSetting(1);
+corrected.controller.IncrementResolution();
+corrected.controller.ApplyChanges();
+assert.strictEqual(settingSignals()[settingSignals().length - 1], 4674, 'Fullscreen is queued before resolution');
+queueResponses(4676); corrected.controller.Tick();
+assert.strictEqual(settingSignals()[settingSignals().length - 1], 5001, 'resolution uses the selected destination index');
+queueResponses(5101); corrected.controller.Tick();
+queueResponses(4989); corrected.controller.Tick();
+const rollbackSignal = settingSignals()[settingSignals().length - 1];
+queueResponses(rollbackSignal === 4970 ? 4960 : 4961); corrected.controller.Tick();
+assert.strictEqual(corrected.controller.Settings[0].DraftIndex, 0, 'commit failure restores the original mode');
+assert.strictEqual(corrected.controller.ResolutionDraftWidth, 2560, 'commit failure restores the exact original width');
+assert.strictEqual(corrected.controller.ResolutionDraftHeight, 1600, 'commit failure restores the exact original height');
 
 console.log('STATE_MACHINE_PASS');
 '@

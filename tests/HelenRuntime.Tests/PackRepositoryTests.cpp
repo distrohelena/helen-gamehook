@@ -239,7 +239,14 @@ namespace
         Expect(dynamic_observer.ResponseMappings.empty(), "Generated dynamic observer unexpectedly has response mappings.");
         Expect(dynamic_observer.AcknowledgementMappings.empty(), "Generated dynamic observer unexpectedly has acknowledgement mappings.");
         Expect(dynamic_observer.DynamicResponseProviderId.has_value() && *dynamic_observer.DynamicResponseProviderId == "batmanDisplayModes", "Generated dynamic observer provider mismatch.");
-        Expect(dynamic_observer.DynamicResponseRequestValues.size() == 199, "Generated dynamic observer request count mismatch.");
+        Expect(dynamic_observer.DynamicResponseRequestValues.size() == 599, "Generated dynamic observer request count mismatch.");
+        for (std::size_t request_index = 0; request_index < 199; ++request_index)
+        {
+            Expect(dynamic_observer.DynamicResponseRequestValues[request_index] == 4700 + static_cast<int>(request_index), "Generated legacy catalog request order mismatch.");
+            Expect(dynamic_observer.DynamicResponseRequestValues[199 + request_index] == 5200 + static_cast<int>(request_index), "Generated windowed catalog request order mismatch.");
+            Expect(dynamic_observer.DynamicResponseRequestValues[398 + request_index] == 5400 + static_cast<int>(request_index), "Generated fullscreen catalog request order mismatch.");
+        }
+        Expect(dynamic_observer.DynamicResponseRequestValues[597] == 5600 && dynamic_observer.DynamicResponseRequestValues[598] == 5601, "Generated desktop catalog request order mismatch.");
         std::cout << "GENERATED_BATMAN_PROTOCOL_PASS\n";
     }
 
@@ -1881,6 +1888,10 @@ void RunPackRepositoryTests()
             std::end(expected_legacy_graphics_address_match_values));
         expected_graphics_address_match_values.insert(expected_graphics_address_match_values.end(), { 4670, 4671, 4672, 4673, 4674, 4675, 4676, 4679 });
         for (int value = 4700; value <= 4899; ++value) { expected_graphics_address_match_values.push_back(value); }
+        for (int value = 5200; value <= 5398; ++value) { expected_graphics_address_match_values.push_back(value); }
+        for (int value = 5400; value <= 5598; ++value) { expected_graphics_address_match_values.push_back(value); }
+        expected_graphics_address_match_values.push_back(5600);
+        expected_graphics_address_match_values.push_back(5601);
         for (int value = 5000; value <= 5097; ++value) { expected_graphics_address_match_values.push_back(value); }
         for (int value = 5100; value <= 5197; ++value) { expected_graphics_address_match_values.push_back(value); }
         expected_graphics_address_match_values.push_back(5199);
@@ -1916,11 +1927,17 @@ void RunPackRepositoryTests()
         const helen::MemoryStateObserverDefinition& checked_in_catalog_observer = loaded_batman_pack->Build.StateObservers[1];
         Expect(checked_in_catalog_observer.TargetConfigKey.empty(), "Checked-in Batman catalog observer unexpectedly targets config.");
         Expect(checked_in_catalog_observer.DynamicResponseProviderId.has_value() && *checked_in_catalog_observer.DynamicResponseProviderId == "batmanDisplayModes", "Checked-in Batman catalog provider mismatch.");
-        Expect(checked_in_catalog_observer.DynamicResponseRequestValues.size() == 199, "Checked-in Batman catalog request count mismatch.");
+        Expect(checked_in_catalog_observer.DynamicResponseRequestValues.size() == 599, "Checked-in Batman catalog request count mismatch.");
         for (std::size_t request_index = 0; request_index < 199; ++request_index)
         {
-            Expect(checked_in_catalog_observer.DynamicResponseRequestValues[request_index] == 4700 + static_cast<int>(request_index), "Checked-in Batman catalog request order mismatch.");
+            Expect(checked_in_catalog_observer.DynamicResponseRequestValues[request_index] == 4700 + static_cast<int>(request_index), "Checked-in Batman legacy catalog request order mismatch.");
         }
+        for (std::size_t request_index = 0; request_index < 199; ++request_index)
+        {
+            Expect(checked_in_catalog_observer.DynamicResponseRequestValues[199 + request_index] == 5200 + static_cast<int>(request_index), "Checked-in Batman windowed catalog request order mismatch.");
+            Expect(checked_in_catalog_observer.DynamicResponseRequestValues[398 + request_index] == 5400 + static_cast<int>(request_index), "Checked-in Batman fullscreen catalog request order mismatch.");
+        }
+        Expect(checked_in_catalog_observer.DynamicResponseRequestValues[597] == 5600 && checked_in_catalog_observer.DynamicResponseRequestValues[598] == 5601, "Checked-in Batman desktop catalog request order mismatch.");
         Expect(checked_in_catalog_observer.DynamicResponseMinimumValue == 1 && checked_in_catalog_observer.DynamicResponseMaximumValue == 32767, "Checked-in Batman catalog scalar bounds mismatch.");
         Expect(checked_in_catalog_observer.FailureResponseValue.has_value() && *checked_in_catalog_observer.FailureResponseValue == 4899, "Checked-in Batman catalog failure response mismatch.");
         Expect(checked_in_catalog_observer.Mappings.empty() && checked_in_catalog_observer.ResponseMappings.empty() && checked_in_catalog_observer.AcknowledgementMappings.empty(), "Checked-in Batman catalog observer unexpectedly declared static mappings.");
