@@ -1,5 +1,6 @@
 #include <exception>
 #include <iostream>
+#include <windows.h>
 
 /**
  * @brief Runs merge-validation coverage for the active multi-pack runtime builder.
@@ -161,13 +162,16 @@ void RunWindowBehaviorConfigTests();
  */
 void RunWindowBehaviorHookSetTests();
 
-/**
- * @brief Runs the native runtime tests and reports the first failure to stderr.
- */
+/** @brief Runs read-only graphics snapshot coverage against real temporary launcher INIs. */
+void RunBatmanGraphicsSnapshotTests();
+
+/** @brief Runs native tests with console-only failure reporting and no Windows crash dialogs. */
 int main()
 {
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     try
     {
+        RunBatmanGraphicsSnapshotTests();
         RunActivePackSetBuilderTests();
         RunBatmanDisplayModeServiceTests();
         RunBatmanDisplayModeResponseProviderTests();

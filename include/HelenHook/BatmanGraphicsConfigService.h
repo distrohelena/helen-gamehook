@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <HelenHook/BatmanGraphicsSnapshot.h>
 
 namespace helen
 {
@@ -31,6 +32,9 @@ namespace helen
          * @return True when the sibling launcher INI can be decoded, every required value is present, and every config key updates successfully; otherwise false.
          */
         bool LoadIntoDispatcher(CommandDispatcher& dispatcher) const;
+
+        /** @brief Captures independently valid launcher settings once without modifying dispatcher state or either INI. */
+        BatmanGraphicsSnapshot CaptureReadSnapshot() const;
 
         /**
          * @brief Writes the graphics draft into `BmEngine.ini` and its launcher-owned `UserEngine.ini` sibling.

@@ -76,6 +76,8 @@
     <ClCompile Include="BatmanDisplayModeResponseProvider.cpp" />
     <ClCompile Include="BatmanDisplayModeService.cpp" />
     <ClCompile Include="BatmanGraphicsConfigService.cpp" />
+    <ClCompile Include="BatmanGraphicsSnapshot.cpp" />
+    <ClCompile Include="BatmanGraphicsDraftState.cpp" />
     <ClCompile Include="BuildRuntimeCoordinator.cpp" />
     <ClCompile Include="BuildHookInstaller.cpp" />
     <ClCompile Include="CommandDispatcher.cpp" />
@@ -120,6 +122,9 @@
     <ClInclude Include="..\include\HelenHook\BatmanDisplayModeService.h" />
     <ClInclude Include="..\include\HelenHook\BatmanDisplayModeResponseProvider.h" />
     <ClInclude Include="..\include\HelenHook\BatmanGraphicsConfigService.h" />
+    <ClInclude Include="..\include\HelenHook\BatmanGraphicsField.h" />
+    <ClInclude Include="..\include\HelenHook\BatmanGraphicsSnapshot.h" />
+    <ClInclude Include="..\include\HelenHook\BatmanGraphicsDraftState.h" />
     <ClInclude Include="..\include\HelenHook\BuildRuntimeCoordinator.h" />
     <ClInclude Include="..\include\HelenHook\BuildHookInstaller.h" />
     <ClInclude Include="..\include\HelenHook\BuildDefinition.h" />

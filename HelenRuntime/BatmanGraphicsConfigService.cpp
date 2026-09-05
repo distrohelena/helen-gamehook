@@ -68,7 +68,7 @@ namespace
     /**
      * @brief Stores the normalized Batman graphics draft values used by the ActionScript graphics menu.
      */
-    struct BatmanGraphicsDraftState
+    struct LegacyBatmanGraphicsDraftState
     {
         /** @brief Normalized fullscreen state where `0` means windowed and `1` means fullscreen. */
         int Fullscreen{};
@@ -1645,7 +1645,7 @@ namespace
      * @param state Current normalized Batman graphics draft state.
      * @return Matching preset definition when the current toggles exactly match one preset; otherwise no value.
      */
-    std::optional<BatmanGraphicsPresetDefinition> TryResolvePresetFromDraft(const BatmanGraphicsDraftState& state)
+    std::optional<BatmanGraphicsPresetDefinition> TryResolvePresetFromDraft(const LegacyBatmanGraphicsDraftState& state)
     {
         for (const BatmanGraphicsPresetDefinition& preset : BatmanGraphicsPresets)
         {
@@ -1669,7 +1669,7 @@ namespace
      * @param state Current normalized Batman graphics draft state.
      * @return Derived UE3 `DetailMode` integer that best matches the current draft state.
      */
-    int DeriveDetailModeFromDraft(const BatmanGraphicsDraftState& state)
+    int DeriveDetailModeFromDraft(const LegacyBatmanGraphicsDraftState& state)
     {
         const std::optional<BatmanGraphicsPresetDefinition> preset = TryResolvePresetFromDraft(state);
         if (preset.has_value())
@@ -1732,7 +1732,7 @@ namespace
      * @param state Receives the full normalized Batman graphics draft on success.
      * @return True when every required config key exists; otherwise false.
      */
-    bool TryReadDraftStateFromDispatcher(const helen::CommandDispatcher& dispatcher, BatmanGraphicsDraftState& state)
+    bool TryReadDraftStateFromDispatcher(const helen::CommandDispatcher& dispatcher, LegacyBatmanGraphicsDraftState& state)
     {
         const std::optional<helen::CommandIntPair> resolution_pair = dispatcher.TryGetIntPair(
             "resolutionWidth",
@@ -1766,7 +1766,7 @@ namespace
      * @param state Fully populated Batman graphics draft state that should be stored.
      * @return True when every required config key exists; otherwise false.
      */
-    bool TryWriteDraftStateToDispatcher(helen::CommandDispatcher& dispatcher, const BatmanGraphicsDraftState& state)
+    bool TryWriteDraftStateToDispatcher(helen::CommandDispatcher& dispatcher, const LegacyBatmanGraphicsDraftState& state)
     {
         return
             TryWriteDispatcherValue(dispatcher, "fullscreen", state.Fullscreen) &&
@@ -1785,113 +1785,93 @@ namespace
             TryWriteDispatcherValue(dispatcher, "stereo", state.Stereo);
     }
 
-    /**
-     * @brief Loads the normalized Batman graphics draft state from the INI file lines.
-     * @param lines Parsed INI file lines that should be translated into the normalized menu state.
-     * @param state Receives the normalized Batman graphics draft on success.
-     * @return True when every required INI key is present and maps successfully; otherwise false.
-     */
-    bool TryReadDraftStateFromIniLines(const std::vector<std::string>& lines, BatmanGraphicsDraftState& state)
-    {
-        std::optional<std::string> raw_value = TryReadIniValue(lines, "SystemSettings", "Fullscreen");
-        if (!raw_value.has_value() || !TryParseBoolValue(*raw_value, state.Fullscreen))
-        {
+    /** @brief Decodes one independently valid launcher field using the existing INI parser and mappings. */
+    std::optional<int> ReadGraphicsField(const std::vector<std::string>& lines, helen::BatmanGraphicsField field) {
+        using helen::BatmanGraphicsField;
+        /** @brief Launcher keys in the exact stable scalar order; PhysX uses Engine.Engine rather than SystemSettings. */
+        static constexpr std::array<const char*, 14> Keys{
+            "Fullscreen", "UseVsync", "MaxMultisamples", "Bloom", "DynamicShadows", "MotionBlur",
+            "Distortion", "FogVolumes", "DisableSphericalHarmonicLights", "AmbientOcclusion",
+            "PhysXLevel", "Stereo", "ResX", "ResY"
+        };
+        const std::size_t index = static_cast<std::size_t>(field);
+        if (index >= Keys.size()) {
+            return std::nullopt;
+        }
+        const char* section = field == BatmanGraphicsField::Physx ? "Engine.Engine" : "SystemSettings";
+        const std::optional<std::string> raw = TryReadIniValue(lines, section, Keys[index]);
+        int value;
+        if (!raw.has_value()) {
+            return std::nullopt;
+        } else if (field == BatmanGraphicsField::Msaa || field == BatmanGraphicsField::Physx ||
+            field == BatmanGraphicsField::PersistedWidth || field == BatmanGraphicsField::PersistedHeight) {
+            if (!TryParseIntValue(*raw, value)) {
+                return std::nullopt;
+            }
+            if (field == BatmanGraphicsField::Msaa) {
+                int normalized;
+                if (value < 0 || !TryMapMsaaFromIniValue(value, normalized)) {
+                    return std::nullopt;
+                }
+                return normalized;
+            } else if (field == BatmanGraphicsField::Physx) {
+                return value >= 0 && value <= 2 ? std::optional<int>(value) : std::nullopt;
+            } else {
+                return value > 0 ? std::optional<int>(value) : std::nullopt;
+            }
+        } else if (!TryParseBoolValue(*raw, value)) {
+            return std::nullopt;
+        }
+        return field == BatmanGraphicsField::SphericalHarmonicLighting ? 1 - value : value;
+    }
+
+    /** @brief Captures all independent parse outcomes and invalidates configured dimensions as a pair. */
+    helen::BatmanGraphicsSnapshot ReadGraphicsSnapshot(const std::vector<std::string>& lines) {
+        helen::BatmanGraphicsSnapshot::Values values;
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            values[index] = ReadGraphicsField(lines, static_cast<helen::BatmanGraphicsField>(index));
+            if (!values[index].has_value()) {
+                helen::Logf(L"[graphics] Launcher snapshot field=%u missing or invalid.", static_cast<unsigned>(index));
+            }
+        }
+        if (!values[12].has_value() || !values[13].has_value()) {
+            values[12].reset();
+            values[13].reset();
+        }
+        return helen::BatmanGraphicsSnapshot(std::move(values));
+    }
+
+    /** @brief Converts a complete independently parsed snapshot into the legacy writer shape; partial snapshots fail. */
+    bool TryReadDraftStateFromIniLines(const std::vector<std::string>& lines, LegacyBatmanGraphicsDraftState& state) {
+        const helen::BatmanGraphicsSnapshot snapshot = ReadGraphicsSnapshot(lines);
+        if (!snapshot.IsComplete()) {
             return false;
         }
-
-        raw_value = TryReadIniValue(lines, "SystemSettings", "ResX");
-        if (!raw_value.has_value() || !TryParseIntValue(*raw_value, state.ResolutionWidth))
-        {
-            return false;
-        }
-
-        raw_value = TryReadIniValue(lines, "SystemSettings", "ResY");
-        if (!raw_value.has_value() || !TryParseIntValue(*raw_value, state.ResolutionHeight))
-        {
-            return false;
-        }
-
-        raw_value = TryReadIniValue(lines, "SystemSettings", "UseVsync");
-        if (!raw_value.has_value() || !TryParseBoolValue(*raw_value, state.Vsync))
-        {
-            return false;
-        }
-
-        int raw_msaa = 0;
-        raw_value = TryReadIniValue(lines, "SystemSettings", "MaxMultisamples");
-        if (!raw_value.has_value() || !TryParseIntValue(*raw_value, raw_msaa) || !TryMapMsaaFromIniValue(raw_msaa, state.Msaa))
-        {
-            return false;
-        }
-
-        raw_value = TryReadIniValue(lines, "SystemSettings", "Bloom");
-        if (!raw_value.has_value() || !TryParseBoolValue(*raw_value, state.Bloom))
-        {
-            return false;
-        }
-
-        raw_value = TryReadIniValue(lines, "SystemSettings", "DynamicShadows");
-        if (!raw_value.has_value() || !TryParseBoolValue(*raw_value, state.DynamicShadows))
-        {
-            return false;
-        }
-
-        raw_value = TryReadIniValue(lines, "SystemSettings", "MotionBlur");
-        if (!raw_value.has_value() || !TryParseBoolValue(*raw_value, state.MotionBlur))
-        {
-            return false;
-        }
-
-        raw_value = TryReadIniValue(lines, "SystemSettings", "Distortion");
-        if (!raw_value.has_value() || !TryParseBoolValue(*raw_value, state.Distortion))
-        {
-            return false;
-        }
-
-        raw_value = TryReadIniValue(lines, "SystemSettings", "FogVolumes");
-        if (!raw_value.has_value() || !TryParseBoolValue(*raw_value, state.FogVolumes))
-        {
-            return false;
-        }
-
-        int raw_disable_spherical_harmonic_lights = 0;
-        raw_value = TryReadIniValue(lines, "SystemSettings", "DisableSphericalHarmonicLights");
-        if (!raw_value.has_value() || !TryParseBoolValue(*raw_value, raw_disable_spherical_harmonic_lights))
-        {
-            return false;
-        }
-
-        state.SphericalHarmonicLighting = raw_disable_spherical_harmonic_lights == 0 ? 1 : 0;
-
-        raw_value = TryReadIniValue(lines, "SystemSettings", "AmbientOcclusion");
-        if (!raw_value.has_value() || !TryParseBoolValue(*raw_value, state.AmbientOcclusion))
-        {
-            return false;
-        }
-
-        raw_value = TryReadIniValue(lines, "Engine.Engine", "PhysXLevel");
-        if (!raw_value.has_value() || !TryParseIntValue(*raw_value, state.Physx))
-        {
-            return false;
-        }
-
-        raw_value = TryReadIniValue(lines, "SystemSettings", "Stereo");
-        if (!raw_value.has_value() || !TryParseBoolValue(*raw_value, state.Stereo))
-        {
-            return false;
-        }
-
+        using helen::BatmanGraphicsField;
+        state.Fullscreen = *snapshot.Get(BatmanGraphicsField::Fullscreen);
+        state.ResolutionWidth = *snapshot.Get(BatmanGraphicsField::PersistedWidth);
+        state.ResolutionHeight = *snapshot.Get(BatmanGraphicsField::PersistedHeight);
+        state.Vsync = *snapshot.Get(BatmanGraphicsField::Vsync);
+        state.Msaa = *snapshot.Get(BatmanGraphicsField::Msaa);
+        state.Bloom = *snapshot.Get(BatmanGraphicsField::Bloom);
+        state.DynamicShadows = *snapshot.Get(BatmanGraphicsField::DynamicShadows);
+        state.MotionBlur = *snapshot.Get(BatmanGraphicsField::MotionBlur);
+        state.Distortion = *snapshot.Get(BatmanGraphicsField::Distortion);
+        state.FogVolumes = *snapshot.Get(BatmanGraphicsField::FogVolumes);
+        state.SphericalHarmonicLighting = *snapshot.Get(BatmanGraphicsField::SphericalHarmonicLighting);
+        state.AmbientOcclusion = *snapshot.Get(BatmanGraphicsField::AmbientOcclusion);
+        state.Physx = *snapshot.Get(BatmanGraphicsField::Physx);
+        state.Stereo = *snapshot.Get(BatmanGraphicsField::Stereo);
         const std::optional<BatmanGraphicsPresetDefinition> preset = TryResolvePresetFromDraft(state);
         state.DetailLevel = preset.has_value() ? preset->DetailLevel : 4;
         return true;
     }
-
     /**
      * @brief Applies one declared Batman detail preset to the supplied draft state.
      * @param state Draft state that should receive the preset-controlled toggle values.
      * @return True when `state.DetailLevel` resolves to a declared Batman preset; otherwise false.
      */
-    bool ApplyDetailPresetToDraftState(BatmanGraphicsDraftState& state)
+    bool ApplyDetailPresetToDraftState(LegacyBatmanGraphicsDraftState& state)
     {
         const std::optional<BatmanGraphicsPresetDefinition> preset = TryGetPresetByDetailLevel(state.DetailLevel);
         if (!preset.has_value())
@@ -1917,7 +1897,7 @@ namespace
      * @return True when every required setting exists and accepts the normalized value; otherwise false.
      */
     bool TryApplyDraftStateToIniLines(
-        const BatmanGraphicsDraftState& state,
+        const LegacyBatmanGraphicsDraftState& state,
         std::vector<std::string>& lines,
         std::wstring& failed_setting)
     {
@@ -2060,11 +2040,18 @@ namespace helen
         }
     }
 
-    /**
-     * @brief Reads the current Batman graphics settings from launcher-owned `UserEngine.ini` into registered config keys.
-     * @param dispatcher Config dispatcher that receives the normalized graphics draft values.
-     * @return True when the sibling launcher INI can be decoded, every required value is present, and every config key updates successfully; otherwise false.
-     */
+    /** @brief Captures one launcher document without writing config; individual malformed fields remain absent. */
+    BatmanGraphicsSnapshot BatmanGraphicsConfigService::CaptureReadSnapshot() const {
+        const std::filesystem::path user_ini_path = ini_path_.parent_path() / "UserEngine.ini";
+        const std::optional<IniTextDocument> document = TryReadIniDocument(user_ini_path);
+        if (!document.has_value()) {
+            Logf(L"[graphics] Snapshot failed: unable to read launcher INI path=%ls.", user_ini_path.wstring().c_str());
+            return BatmanGraphicsSnapshot(BatmanGraphicsSnapshot::Values{});
+        }
+        return ReadGraphicsSnapshot(document->Lines);
+    }
+
+    /** @brief Loads registered legacy config keys only after the shared decoder supplies a complete valid draft. */
     bool BatmanGraphicsConfigService::LoadIntoDispatcher(CommandDispatcher& dispatcher) const
     {
         const std::filesystem::path user_ini_path = ini_path_.parent_path() / "UserEngine.ini";
@@ -2075,7 +2062,7 @@ namespace helen
             return false;
         }
 
-        BatmanGraphicsDraftState state;
+        LegacyBatmanGraphicsDraftState state;
         if (!TryReadDraftStateFromIniLines(user_document->Lines, state))
         {
             return false;
@@ -2092,7 +2079,7 @@ namespace helen
     bool BatmanGraphicsConfigService::ApplyFromDispatcher(const CommandDispatcher& dispatcher) const
     {
         const std::lock_guard<std::mutex> transaction_lock(BatmanGraphicsApplyMutex);
-        BatmanGraphicsDraftState state;
+        LegacyBatmanGraphicsDraftState state;
         if (!TryReadDraftStateFromDispatcher(dispatcher, state))
         {
             Logf(L"[graphics] Apply failed: one or more graphics draft keys are missing from the dispatcher.");
@@ -2232,7 +2219,7 @@ namespace helen
      */
     bool BatmanGraphicsConfigService::SyncDetailLevelFromDispatcher(CommandDispatcher& dispatcher) const
     {
-        BatmanGraphicsDraftState state;
+        LegacyBatmanGraphicsDraftState state;
         if (!TryReadDraftStateFromDispatcher(dispatcher, state))
         {
             return false;
@@ -2250,7 +2237,7 @@ namespace helen
      */
     bool BatmanGraphicsConfigService::ApplySelectedDetailLevelToDispatcher(CommandDispatcher& dispatcher) const
     {
-        BatmanGraphicsDraftState state;
+        LegacyBatmanGraphicsDraftState state;
         if (!TryReadDraftStateFromDispatcher(dispatcher, state))
         {
             return false;
