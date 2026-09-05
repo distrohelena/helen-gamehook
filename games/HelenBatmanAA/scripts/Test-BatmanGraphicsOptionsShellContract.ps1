@@ -821,6 +821,7 @@ foreach ($RequiredScreenToken in @(
     'this.InitializationDeadline = getTimer() + 10000;',
     'flash.external.ExternalInterface.call("FE_SetControlType",this.Settings[this.InitializationIndex].ReadRequest,"");',
     'var rawValue = int(flash.external.ExternalInterface.call("FE_GetControlType"));',
+    'if(rawValue == this.CurrentPendingCode)',
     'this.Settings[this.InitializationIndex].InitialIndex = rawValue - this.Settings[this.InitializationIndex].ReadResponseBase;',
     'this.Settings[this.InitializationIndex].DraftIndex = this.Settings[this.InitializationIndex].InitialIndex;',
     'function IsDirty()',
@@ -1691,6 +1692,54 @@ function encodeResolutionScalar(request, scalar) {
     return -(scalar + ordinal * 32768);
 }
 
+function expectInitializationRequestEcho(controller, request) {
+    assert.strictEqual(controller.CurrentPendingCode, request, 'initialization must expose the request being awaited before its echo is polled');
+    queueResponses(request);
+    controller.Tick();
+    assert.strictEqual(controller.InitializationFailed, false, 'an initialization request echo must remain pending');
+    assert.strictEqual(controller.InitializationComplete, false, 'an initialization request echo must not complete initialization');
+}
+
+function initializeWithPendingRequestEchoes(values) {
+    setNow(0);
+    const echoedEnvironment = makeEnvironment();
+    const echoedController = echoedEnvironment.controller;
+    echoedController.BeginInitialization();
+    assert.deepStrictEqual(settingSignals(), [4670]);
+
+    expectInitializationRequestEcho(echoedController, 4670);
+    queueResponses(4671 + values[0]);
+    echoedController.Tick();
+
+    const dynamicRequests = [4700, 4701, 4702, 4703, 4704, 4705, 4706, 4897, 4898];
+    const dynamicResponses = [
+        encodeResolutionScalar(4700, 3),
+        encodeResolutionScalar(4701, 1280),
+        encodeResolutionScalar(4702, 720),
+        encodeResolutionScalar(4703, 1920),
+        encodeResolutionScalar(4704, 1080),
+        encodeResolutionScalar(4705, 3440),
+        encodeResolutionScalar(4706, 1440),
+        encodeResolutionScalar(4897, 1920),
+        encodeResolutionScalar(4898, 1080)
+    ];
+    for (let dynamicIndex = 0; dynamicIndex < dynamicRequests.length; dynamicIndex += 1) {
+        expectInitializationRequestEcho(echoedController, dynamicRequests[dynamicIndex]);
+        queueResponses(dynamicResponses[dynamicIndex]);
+        echoedController.Tick();
+    }
+
+    const staticResponses = [4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510];
+    for (let staticIndex = 0; staticIndex < staticResponses.length; staticIndex += 1) {
+        queueResponses(staticResponses[staticIndex] + (staticIndex === 0 ? values[1] : values[staticIndex + 1]));
+        echoedController.Tick();
+    }
+    assert.strictEqual(echoedController.InitializationFailed, false);
+    assert.strictEqual(echoedController.InitializationComplete, true);
+    assert.strictEqual(echoedController.CanApply(), false);
+    return echoedEnvironment;
+}
+
 function loadRow(script, parent, children) {
     const bodyStart = script.indexOf('{');
     const bodyEnd = script.lastIndexOf('}');
@@ -1760,6 +1809,10 @@ expectInitializationFailure([4671, 4672], 'mismatched request response must fail
 expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4700, 3)], 'stale prior resolution response must fail correlation');
 expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), encodeResolutionScalar(4702, 1280)], 'future resolution response must fail correlation');
 expectInitializationFailure([4671, encodeResolutionScalar(4700, 3), -2147483648], 'INT_MIN resolution response must fail correlation');
+expectInitializationFailure([4675], 'a nonzero fullscreen acknowledgement mismatch must fail initialization');
+expectInitializationFailure([4671, 4701], 'a nonzero dynamic request mismatch must fail initialization');
+
+initializeWithPendingRequestEchoes(Array(12).fill(0));
 
 setNow(0);
 clearCalls();

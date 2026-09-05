@@ -640,6 +640,10 @@ internal static class GraphicsOptionsShellScriptTemplates
                  return undefined;
               }
               var rawValue = int(flash.external.ExternalInterface.call("FE_GetControlType"));
+              if(rawValue == this.CurrentPendingCode)
+              {
+                 return undefined;
+              }
               if(this.InitializationIndex == 1 && this.ResolutionCatalogRequest >= 4700 && this.ResolutionCatalogRequest <= 4898)
               {
                  this.PollResolutionCatalog(rawValue);
