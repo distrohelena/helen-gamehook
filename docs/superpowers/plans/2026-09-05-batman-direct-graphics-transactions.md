@@ -31,7 +31,13 @@ Exact reconstructed frontend SHA256: `F73FD07D5205EAE39D58495E1FCC395761E5E99C9E
 Durable pre-install backup: `output/batman-direct-graphics/rollback-3dd583e991d9412594b9e32a58d86779/`.
 Only subtitles and graphics remain enabled. Batman was closed at installation. Installed files passed exact hash/snapshot verification; temporary deployment staging was verified empty and removed.
 
-Still pending: user gameplay tests and logs; migration of the original stable pack/rebuild/release validators; shared generated field/outcome constants; remaining exhaustive failure/identity/capture-count coverage listed below. Do not interpret this checkpoint as completion of every checkbox or a release-ready package. Do not use the old stable rebuild/deploy route to reproduce this direct test candidate.
+### User-confirmed live acceptance
+
+After installation of the candidate recorded above, Helena confirmed that the graphics menu works and loads immediately. She then confirmed the requested VSync change/Apply/reopen test, followed by the requested Fullscreen/Resolution change/Apply/restart test. These are user-reported gameplay results, distinct from automated verification. Implementation and candidate tooling are committed on main as `d18059d`.
+
+At the acceptance commit, the frontend behavior test passed again. The native aggregate suite initially failed the subtitle upsert fixture, then passed in a subsequent process without source changes. Inspection found that the PID-only temporary fixture directory selected by the failed run already contained `BmGame.ini` and other files created on September 4. The subtitle resolver prefers that existing sibling, whereas the upsert fixture expects no sibling. This identifies an outstanding test-isolation issue with reused process IDs; no game files or implementation code were changed to obtain the rerun. Do not treat this as consistently clean native-suite execution until fixture isolation is corrected.
+
+Still pending: log review; migration of the original stable pack/rebuild/release validators; shared generated field/outcome constants; remaining exhaustive failure/identity/capture-count coverage listed below; correction of the PID-reuse fixture issue. Do not interpret this checkpoint as completion of every checkbox or a release-ready package. Do not use the old stable rebuild/deploy route to reproduce this direct test candidate.
 
 ## Global Constraints
 
