@@ -152,6 +152,9 @@ void RunDeltaVirtualFileSourceTests();
  */
 void RunVirtualFileServiceTests();
 
+/** @brief Runs real temporary-file session routing and trusted transaction coverage. */
+void RunFileWriteRoutingServiceTests();
+
 /**
  * @brief Runs the window behavior config coverage for generic `window.*` keys and derived hook plans.
  */
@@ -204,6 +207,7 @@ int main()
         RunHookBlobRelocatorTests();
         RunMemoryStateObserverServiceTests();
         RunVirtualFileServiceTests();
+        RunFileWriteRoutingServiceTests();
         RunDebugTraceServiceTests();
         RunWindowBehaviorConfigTests();
         RunWindowBehaviorHookSetTests();
