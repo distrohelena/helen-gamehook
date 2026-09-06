@@ -29,7 +29,7 @@ Optional build.json `fileWriteRoutes` array, entries:
 
 Create a fresh uniquely named directory under runtime cache; never reuse previous content, including after a crash. Initialize redirected files from originals before installation. Initially require existing regular originals and reject reparse-point traversal and ambiguous aliases. Normalize ordinary case/slash/dot spelling and recognize supported extended/short path aliases or explicitly reject them when they could address a protected file. Do not allow a spelling change, hard-link alias, or parent-directory rename to quietly mutate a known protected original through covered APIs. An implementation may explicitly reject unsupported alias/mutation forms. Ordinary unrelated operations must retain native behavior.
 
-Best-effort cleanup is not a data-path fallback: normal shutdown removes only this session's owned artifacts; cleanup failures are logged and never cause reuse. Crash leftovers are inert, not treated as a new session's data. Do not recursively delete arbitrary cache content.
+Best-effort cleanup is not a data-path fallback: explicit service disposal removes only this session's owned artifacts; cleanup failures are logged and never cause reuse. HelenGameHook currently has process-lifetime hooks and deliberately avoids teardown under loader lock. Ordinary game process exit, like a crash, may therefore leave inert scratch files on disk; no later session reads them. Do not add unsafe loader-lock cleanup, a cleanup daemon, or recursively delete arbitrary cache content. Document the distinction between logical session discard and physical scratch retention.
 
 ## Real handles and mutation semantics
 
