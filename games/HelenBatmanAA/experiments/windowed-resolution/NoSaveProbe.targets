@@ -1,0 +1,17 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Throwaway opt-in source substitution. No normal project imports this file. -->
+  <PropertyGroup>
+    <OutDir>$(NoSaveOutput)\native\</OutDir>
+    <IntDir>$(NoSaveOutput)\obj\$(MSBuildProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'HelenRuntime'">
+    <ClCompile Remove="BatmanGraphicsSessionService.cpp" />
+    <ClCompile Include="$(NoSaveOutput)\BatmanGraphicsSessionService.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)NoSaveResolutionProbe.cpp" />
+  </ItemGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'HelenRuntime'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+</Project>

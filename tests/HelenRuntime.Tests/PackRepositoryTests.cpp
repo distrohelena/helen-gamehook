@@ -1910,7 +1910,8 @@ void RunPackRepositoryTests()
             Expect(observer.ScanEndAddress == 0x30000000, "Checked-in Batman graphics scan end must cover the observed randomized heap range.");
             Expect(observer.ScanStride == 4, "Checked-in Batman graphics scan stride mismatch.");
             Expect(observer.ValueOffset == 12, "Checked-in Batman graphics value offset mismatch.");
-            Expect(observer.PollIntervalMs == 50, "Checked-in Batman graphics poll interval mismatch.");
+            const int expected_poll_interval = observer.Id == "graphicsObserverDisplayModeCatalog" ? 10 : 50;
+            Expect(observer.PollIntervalMs == expected_poll_interval, "Checked-in Batman graphics poll interval mismatch.");
             Expect(observer.Checks.size() == 11, "Checked-in Batman graphics structural-check count mismatch.");
             Expect(observer.AddressMatchValues.size() == expected_graphics_address_match_values.size(), "Checked-in Batman graphics address-match value count mismatch.");
             for (std::size_t index = 0; index < expected_graphics_address_match_values.size(); ++index)

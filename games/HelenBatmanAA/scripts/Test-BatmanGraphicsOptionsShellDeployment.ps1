@@ -253,6 +253,9 @@ try {
     $validStagedHooksText = Get-Content -LiteralPath (Join-Path $StagedPackRoot 'builds\steam-goty-1.0\hooks.json') -Raw
     $mutatedQualityHooksPath = Join-Path $StagedPackRoot 'builds\steam-goty-1.0\hooks.json'
     $protocolMutations = @(
+        [pscustomobject]@{ Name = 'stale catalog cadence'; Mutate = { param($hooks) $hooks.stateObservers[1].pollIntervalMs = 50 } },
+        [pscustomobject]@{ Name = 'accelerated scalar cadence'; Mutate = { param($hooks) $hooks.stateObservers[3].pollIntervalMs = 10 } },
+        [pscustomobject]@{ Name = 'accelerated Apply cadence'; Mutate = { param($hooks) $hooks.stateObservers[14].pollIntervalMs = 10 } },
         [pscustomobject]@{ Name = 'catalog request omission'; Mutate = { param($hooks) $hooks.stateObservers[1].dynamicResponse.requests = @($hooks.stateObservers[1].dynamicResponse.requests | Select-Object -SkipLast 1) } },
         [pscustomobject]@{ Name = 'windowed catalog boundary'; Mutate = { param($hooks) $hooks.stateObservers[1].dynamicResponse.requests[199] = 5201 } },
         [pscustomobject]@{ Name = 'fullscreen catalog boundary'; Mutate = { param($hooks) $hooks.stateObservers[1].dynamicResponse.requests[596] = 5597 } },

@@ -343,7 +343,8 @@ function New-GraphicsCarrierObserver {
         scanEndAddress = '0x30000000'
         scanStride = [int]4
         valueOffset = [int]12
-        pollIntervalMs = [int]50
+        # Catalog scalars are sequential read-only replies; writes retain the established cadence.
+        pollIntervalMs = if ($dynamicResponseSupplied) { [int]10 } else { [int]50 }
     }
     if (-not $dynamicResponseSupplied) {
         $observer.targetConfigKey = $TargetConfigKey

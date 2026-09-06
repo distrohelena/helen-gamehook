@@ -358,7 +358,8 @@ function Assert-BatmanGraphicsVsyncHooks {
         if ($observer.id -cne $expected.Id) { throw "$Context $($expected.Id) identity drifted." }
         if ($observerIndex -ne 1 -and $observer.targetConfigKey -cne $expected.Target) { throw "$Context $($expected.Id) target drifted." }
         if ($observerIndex -eq 1 -and $observer.PSObject.Properties.Name -contains 'targetConfigKey') { throw "$Context dynamic observer must omit targetConfigKey." }
-        if ($observer.scanStartAddress -cne '0x10000000' -or $observer.scanEndAddress -cne '0x30000000' -or $observer.scanStride -ne 4 -or $observer.valueOffset -ne 12 -or $observer.pollIntervalMs -ne 50) {
+        $expectedPollInterval = if ($observer.id -ceq 'graphicsObserverDisplayModeCatalog') { 10 } else { 50 }
+        if ($observer.scanStartAddress -cne '0x10000000' -or $observer.scanEndAddress -cne '0x30000000' -or $observer.scanStride -ne 4 -or $observer.valueOffset -ne 12 -or $observer.pollIntervalMs -ne $expectedPollInterval) {
             throw "$Context $($observer.id) scan geometry drifted."
         }
         if (@($observer.addressMatchValues).Count -ne $expectedAddressMatchValues.Count -or (@($observer.addressMatchValues) -join ',') -cne ($expectedAddressMatchValues -join ',')) {

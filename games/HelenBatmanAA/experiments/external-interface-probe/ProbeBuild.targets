@@ -1,0 +1,14 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Explicit opt-in import for this experiment only; never imported by ordinary project builds. -->
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'HelenGameHook'">
+    <ClCompile>
+      <PreprocessorDefinitions>HELEN_BATMAN_DIRECT_PROBE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'HelenGameHook'">
+    <ClCompile Include="$(MSBuildThisFileDirectory)FullscreenProbe.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)DispatchAdapter.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)ProbeRuntime.cpp" />
+  </ItemGroup>
+</Project>

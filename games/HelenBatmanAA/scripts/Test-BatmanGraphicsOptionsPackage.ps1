@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ExpectedGraphicsShellSha256 = 'A75AA895C00F39D27D24AB566DD9B55356C172F776C6C387F924BEAB6585D515'
+$ExpectedGraphicsShellSha256 = '588101E40C0E8A21B44F2F9191946E791380CC40483464CF45CDDC3506BFE4CC'
 
 . (Join-Path $PSScriptRoot 'BatmanBuilderWorkspaceHelpers.ps1')
 . (Join-Path $PSScriptRoot 'BatmanPackVerificationHelpers.ps1')
@@ -1020,7 +1020,8 @@ for ($observerIndex = 0; $observerIndex -lt $expectedObserverIds.Count; $observe
     Assert-StrictJsonStringEquals -Value $observer.scanEndAddress -Expected '0x30000000' -Context "hooks.json observer $($observerIndex + 1) scanEndAddress"
     Assert-StrictJsonIntegerEquals -Value $observer.scanStride -Expected 4 -Context "hooks.json observer $($observerIndex + 1) scanStride"
     Assert-StrictJsonIntegerEquals -Value $observer.valueOffset -Expected 12 -Context "hooks.json observer $($observerIndex + 1) valueOffset"
-    Assert-StrictJsonIntegerEquals -Value $observer.pollIntervalMs -Expected 50 -Context "hooks.json observer $($observerIndex + 1) pollIntervalMs"
+    $expectedPollInterval = if ($observer.id -ceq 'graphicsObserverDisplayModeCatalog') { 10 } else { 50 }
+    Assert-StrictJsonIntegerEquals -Value $observer.pollIntervalMs -Expected $expectedPollInterval -Context "hooks.json observer $($observerIndex + 1) pollIntervalMs"
     Assert-StrictJsonIntegerArrayEquals -Values $observer.addressMatchValues -Expected $expectedAddressMatchValues -Context "hooks.json observer $($observerIndex + 1) addressMatchValues"
     foreach ($addressValue in @($observer.addressMatchValues)) {
         if ([long]$addressValue -le 0) { throw "hooks.json $($observer.id) addressMatchValues must contain positive discovery values only; ordinal-tagged dynamic negatives are transient responses." }

@@ -1026,7 +1026,7 @@
                                "scanEndAddress":  "0x30000000",
                                "scanStride":  4,
                                "valueOffset":  12,
-                               "pollIntervalMs":  50,
+                               "pollIntervalMs":  10,
                                "addressMatchValues":  [
                                                           4200,
                                                           4210,

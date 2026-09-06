@@ -269,7 +269,7 @@ function Get-ActionScriptFunctionBody {
         [string]$Context
     )
 
-    $FunctionToken = "this.$FunctionName = function()"
+    $FunctionToken = "this.$FunctionName = function("
     $FunctionIndex = $ScriptText.IndexOf($FunctionToken, [System.StringComparison]::Ordinal)
     if ($FunctionIndex -lt 0) {
         throw "$Context is missing function: $FunctionToken"
@@ -1426,7 +1426,7 @@ for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
         Assert-ContainsOrdinal -Text $RowScript -Token 'if(_parent.GraphicsOptionsController == undefined)' -Context "$RowContext controller-load guard"
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.ItemText.text = "Loading...";' -Context "$RowContext controller-load guard"
         Assert-ContainsOrdinal -Text $RowScript -Token 'return undefined;' -Context "$RowContext controller-load guard"
-        Assert-ContainsOrdinal -Text $RowScript -Token 'this.ItemText.text = _parent.GraphicsOptionsController.IsUnavailable(this.RowIndex) ? "Unavailable" : this.Names[this.State];' -Context $RowContext
+        Assert-ContainsOrdinal -Text $RowScript -Token 'this.ItemText.text = _parent.GraphicsOptionsController.IsUnavailable(this.RowIndex) ? _parent.GraphicsOptionsController.GetUnavailableLabel(this.RowIndex) : this.Names[this.State];' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.State = _parent.GraphicsOptionsController.GetDraftIndex(this.RowIndex);' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.Initial = _parent.GraphicsOptionsController.GetInitialIndex(this.RowIndex);' -Context $RowContext
         Assert-ContainsOrdinal -Text $RowScript -Token 'this.LeftClicker._visible = this.State > 0 && _parent.GraphicsOptionsController.CanEdit(this.RowIndex);' -Context $RowContext
@@ -2188,7 +2188,7 @@ assert.strictEqual(controller.CanApply(), false);
 assert.strictEqual(controller.CanEdit(3), false);
 for (const unavailableRowIndex of [0, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12]) {
     const unavailableRow = loadRow(rowScripts[unavailableRowIndex], environment.screen);
-    assert.strictEqual(unavailableRow.ItemText.text, 'Unavailable', 'failed scalar row must render an explicit unavailable value');
+    assert.strictEqual(unavailableRow.ItemText.text, unavailableRowIndex === 0 ? 'Read failed' : 'Unavailable', 'failed scalar row must render an explicit unavailable value');
     assert.strictEqual(unavailableRow.LeftClicker._visible, false);
     assert.strictEqual(unavailableRow.RightClicker._visible, false);
 }
@@ -2684,6 +2684,146 @@ queueResponses(rollbackSignal === 4970 ? 4960 : 4961); corrected.controller.Tick
 assert.strictEqual(corrected.controller.Settings[0].DraftIndex, 0, 'commit failure restores the original mode');
 assert.strictEqual(corrected.controller.ResolutionDraftWidth, 2560, 'commit failure restores the exact original width');
 assert.strictEqual(corrected.controller.ResolutionDraftHeight, 1600, 'commit failure restores the exact original height');
+
+setNow(0);
+const progressiveEnvironment = makeEnvironment();
+const progressiveController = progressiveEnvironment.controller;
+const progressiveVsyncRow = loadRow(rowScripts[2], progressiveEnvironment.screen);
+progressiveEnvironment.screen.GraphicsRow3 = progressiveVsyncRow;
+const progressiveResolutionRow = loadRow(rowScripts[1], progressiveEnvironment.screen);
+progressiveEnvironment.screen.GraphicsRow2 = progressiveResolutionRow;
+const progressiveDetailRow = loadRow(rowScripts[4], progressiveEnvironment.screen);
+progressiveEnvironment.screen.GraphicsRow5 = progressiveDetailRow;
+progressiveController.BeginInitialization();
+queueResponses(4671); progressiveController.Tick();
+queueResponses(4210); progressiveController.Tick();
+assert.strictEqual(progressiveVsyncRow.ItemText.text, 'Off', 'VSync must appear when read, without waiting for resolution catalogs');
+assert.strictEqual(progressiveResolutionRow.ItemText.text, 'Loading...');
+for (const response of [4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510]) {
+    queueResponses(response); progressiveController.Tick();
+}
+assert.strictEqual(progressiveController.CurrentPendingCode, 5200, 'all scalar settings precede the deferred catalogs');
+assert.strictEqual(progressiveController.InitializationComplete, false);
+assert.strictEqual(progressiveController.CanEdit(3), true, 'loaded scalar drafts can be edited while resolutions load');
+assert.strictEqual(progressiveController.CanEditDetailLevel(), true);
+assert.strictEqual(progressiveDetailRow.ItemText.text, 'Low', 'the composite detail row appears before resolutions finish');
+assert.strictEqual(progressiveController.CanEdit(1), false, 'mode switching waits for complete catalogs');
+assert.strictEqual(progressiveController.CanEditResolution(), false);
+assert.strictEqual(progressiveEnvironment.screen.bBlockInput, false);
+progressiveController.ToggleSetting(3);
+assert.strictEqual(progressiveVsyncRow.ItemText.text, 'On');
+const pendingSignals = settingSignals().slice();
+assert.strictEqual(progressiveController.CanApply(), false, 'Apply cannot interrupt the catalog transport');
+progressiveController.ApplyChanges();
+assert.deepStrictEqual(settingSignals(), pendingSignals);
+feedCatalog(progressiveController, 5200, [[1280, 720], [2560, 1600]], 2560, 1600);
+feedCatalog(progressiveController, 5400, [[1920, 1080]], 2560, 1600);
+queueResponses(encodeResolutionScalar(5600, 1920)); progressiveController.Tick();
+queueResponses(encodeResolutionScalar(5601, 1080)); progressiveController.Tick();
+assert.strictEqual(progressiveController.Settings[1].DraftIndex, 1, 'catalog completion preserves edits made during loading');
+assert.strictEqual(progressiveController.CanApply(), true);
+assert.strictEqual(progressiveResolutionRow.ItemText.text, '2560 x 1600');
+progressiveController.ApplyChanges();
+assert.strictEqual(settingSignals()[settingSignals().length - 1], 4221, 'the pending scalar edit uses the unchanged Apply protocol');
+queueResponses(4231); progressiveController.Tick();
+queueResponses(4981); progressiveController.Tick();
+assert.strictEqual(progressiveController.Settings[1].InitialIndex, 1);
+assert.strictEqual(progressiveController.CanApply(), false);
+
+for (const cancelDuringLoad of [false, true]) {
+    setNow(0);
+    const deferredEnvironment = makeEnvironment();
+    const deferredController = deferredEnvironment.controller;
+    deferredController.BeginInitialization();
+    for (const response of [4671, 4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510]) {
+        queueResponses(response); deferredController.Tick();
+    }
+    deferredController.ToggleSetting(3);
+    if (cancelDuringLoad) {
+        const beforeBack = settingSignals().slice();
+        assert.strictEqual(deferredEnvironment.screen.TryBack(), true, 'Back remains available while catalogs load');
+        assert.deepStrictEqual(settingSignals(), beforeBack, 'Back must not write a pending draft');
+        assert.strictEqual(deferredController.Settings[1].DraftIndex, 0);
+        assert.strictEqual(deferredController.CurrentPendingOperation, '');
+    } else {
+        for (let phase = 0; phase < 3; phase += 1) {
+            setNow(deferredController.ResolutionCatalogDeadline);
+            deferredController.Tick();
+        }
+        assert.strictEqual(deferredController.InitializationComplete, true);
+        assert.strictEqual(deferredController.Settings[1].DraftIndex, 1, 'catalog timeouts preserve the loaded scalar edit');
+        assert.strictEqual(deferredController.CanEdit(3), true);
+        assert.strictEqual(deferredController.CanApply(), true);
+        assert.strictEqual(deferredController.IsUnavailable(2), true);
+    }
+}
+
+setNow(0);
+const mouseEnvironment = makeEnvironment();
+initialize(mouseEnvironment.controller, Array(12).fill(0));
+const mouseMsaaRow = loadRow(rowScripts[3], mouseEnvironment.screen);
+mouseMsaaRow._xmouse = 100;
+mouseMsaaRow.RunAction(true);
+assert.strictEqual(mouseEnvironment.controller.GetDraftIndex(4), 1, 'right mouse click increments MSAA');
+mouseMsaaRow._xmouse = -100;
+mouseMsaaRow.RunAction(true);
+assert.strictEqual(mouseEnvironment.controller.GetDraftIndex(4), 0, 'left mouse click decrements MSAA rather than cycling forward');
+mouseMsaaRow.RunAction(true);
+assert.strictEqual(mouseEnvironment.controller.GetDraftIndex(4), 0, 'left mouse click clamps at the minimum');
+mouseMsaaRow.RunAction(false);
+assert.strictEqual(mouseEnvironment.controller.GetDraftIndex(4), 1, 'keyboard activation still cycles regardless of mouse position');
+const mouseBooleanRow = loadRow(rowScripts[2], mouseEnvironment.screen);
+mouseBooleanRow._xmouse = -100;
+mouseBooleanRow.RunAction(true);
+assert.strictEqual(mouseEnvironment.controller.GetDraftIndex(3), 0, 'left on Off must not toggle On');
+mouseBooleanRow._xmouse = 100;
+mouseBooleanRow.RunAction(true);
+mouseBooleanRow.RunAction(true);
+assert.strictEqual(mouseEnvironment.controller.GetDraftIndex(3), 1, 'right on On stays at the maximum');
+mouseBooleanRow._xmouse = -100;
+mouseBooleanRow.RunAction(true);
+assert.strictEqual(mouseEnvironment.controller.GetDraftIndex(3), 0);
+const mouseDetailRow = loadRow(rowScripts[4], mouseEnvironment.screen);
+mouseDetailRow._xmouse = 100;
+mouseDetailRow.RunAction(true);
+mouseDetailRow._xmouse = -100;
+mouseDetailRow.RunAction(true);
+assert.strictEqual(mouseEnvironment.controller.GetDetailLevelDraftIndex(), 0, 'detail preset left mouse click decrements');
+const mouseResolutionRow = loadRow(rowScripts[1], mouseEnvironment.screen);
+mouseResolutionRow._xmouse = -100;
+mouseResolutionRow.RunAction(true);
+assert.strictEqual(mouseEnvironment.controller.GetResolutionDraftIndex(), 0, 'resolution left mouse click decrements');
+mouseResolutionRow._xmouse = 100;
+mouseResolutionRow.RunAction(true);
+assert.strictEqual(mouseEnvironment.controller.GetResolutionDraftIndex(), 1);
+
+for (const firstReadCase of [
+    { reply: 4679, expected: 'Read failed' },
+    { reply: 4210, expected: 'Reply 4210' },
+    { reply: -19597424, expected: 'Reply -19597424' },
+    { reply: 4670, expected: 'Timeout', timeout: true }
+]) {
+    setNow(0);
+    const diagnosticEnvironment = makeEnvironment();
+    const diagnosticController = diagnosticEnvironment.controller;
+    const diagnosticRow = loadRow(rowScripts[0], diagnosticEnvironment.screen);
+    diagnosticEnvironment.screen.GraphicsRow1 = diagnosticRow;
+    diagnosticController.BeginInitialization();
+    queueResponses(firstReadCase.reply); diagnosticController.Tick();
+    if (firstReadCase.timeout) {
+        assert.strictEqual(diagnosticController.CurrentPendingCode, 4670, 'a pending echo is not an invalid reply');
+        setNow(diagnosticController.CurrentPendingDeadline); diagnosticController.Tick();
+    }
+    assert.strictEqual(diagnosticController.CurrentPendingCode, 4200, 'diagnostics must not alter the request sequence');
+    for (const response of [4210, 4310, 4601, 4611, 4621, 4631, 4641, 4651, 4661, 4410, 4510]) {
+        queueResponses(response); diagnosticController.Tick();
+    }
+    assert.strictEqual(diagnosticRow.ItemText.text, firstReadCase.expected, 'Fullscreen must expose the first-read failure reason');
+    assert.strictEqual(diagnosticController.CanEdit(1), false);
+    assert.strictEqual(diagnosticController.CanEdit(3), true, 'first-read diagnostics must not block the loaded settings');
+    diagnosticController.BeginInitialization();
+    assert.strictEqual(diagnosticRow.ItemText.text, 'Loading...', 'a new attempt clears the diagnostic and stale first-row value');
+}
 
 console.log('STATE_MACHINE_PASS');
 '@

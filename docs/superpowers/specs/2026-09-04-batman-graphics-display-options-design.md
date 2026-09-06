@@ -8,6 +8,8 @@ The following requirements supersede the original fullscreen-only catalog and al
 - The Windowed selection catalog includes that exact configured size and common window sizes that fit the game monitor's usable work area. Fullscreen selections come only from that monitor's supported display modes.
 - Changing Fullscreen switches the local Resolution catalog. Preserve the selected pair when valid in the destination catalog. For an unsupported transition into Fullscreen, use the monitor's actual current display mode as a visible pending selection; never manufacture a nearest mode or write the INIs before Apply.
 - A failure in either new row must not discard or disable the previously working settings. Initialization must continue for existing rows, and Apply must include only available, changed selections.
+- Scalar values appear as their reads complete. Once scalar initialization finishes, existing scalar/detail drafts and Back are available while resolution catalogs load afterward. Fullscreen switching, resolution editing, and Apply wait for the catalog exchange to finish; edits made during loading survive completion or catalog failure.
+- The read-only resolution catalog observer polls at 10 ms to reduce sequential-response latency. Existing scalar, write, Apply, and rollback observers retain their 50 ms cadence; no protocol values or timeout limits change.
 - Apply validation must use the selected Windowed/Fullscreen semantics and the exact catalog associated with the queued resolution. Applying an unrelated setting must preserve an unchanged launcher resolution.
 - Back and failed Apply must retain or restore the original mode and exact size. Opening the screen again reads the persisted launcher state.
 
@@ -272,6 +274,12 @@ Windows API access is placed behind an injected display-mode source so tests use
 - production provenance rejects the legacy controller, installed game inputs, `batma/`, and `F:\helenhook.7z`
 
 ## Deployment and Live Verification
+
+### Mouse direction and first-read diagnostics
+
+Mouse activation uses the retail `RunAction(bMouse)` contract and row-local `_xmouse` sign: left decrements, right increments, and both clamp at the ends. Keyboard activation retains cycling. This applies to scalar, Detail Level, and Resolution rows.
+
+An unsuccessful first Fullscreen read displays `Timeout`, `Read failed`, or `Reply <raw code>` instead of a generic unavailable label. The diagnostic resets on each initialization attempt; it does not change deadlines, retry reads, fabricate a setting value, or block successfully loaded scalar settings. The intermittent live failure's underlying cause remains unconfirmed until this diagnostic is observed.
 
 After all automated validators pass, deploy atomically while Batman is closed and verify exact source/live hashes plus the absence of staging and recovery directories.
 
