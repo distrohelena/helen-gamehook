@@ -87,6 +87,13 @@ namespace helen
         bool IsTrackedHandle(HANDLE handle) const;
 
         /**
+         * @brief Classifies the final file identity behind a native handle for safety-sensitive handle APIs.
+         * @param handle Native handle whose final path should be inspected.
+         * @return Protected or Rejected when the handle identifies a selected file; Unrelated for non-file handles.
+         */
+        PathDisposition ClassifyHandle(HANDLE handle) const;
+
+        /**
          * @brief Opens an exact path through routing or forwards an unrelated path to native CreateFileW.
          * @param path Path requested by the caller.
          * @param access Desired access mask.
@@ -121,6 +128,64 @@ namespace helen
         DWORD GetAttributes(const std::filesystem::path& path);
 
         /**
+         * @brief Deletes an exact path while redirecting a protected overlay deletion to the session copy.
+         * @param path Native path supplied to DeleteFileA/W.
+         * @return Native success result, or FALSE with a fail-closed Win32 error.
+         */
+        BOOL Delete(const std::filesystem::path& path);
+
+        /**
+         * @brief Moves one path while routing a selected destination into its session overlay.
+         * @param existing_path Source path supplied to MoveFileA/W or MoveFileExA/W.
+         * @param new_path Destination path supplied to MoveFileA/W or MoveFileExA/W.
+         * @param flags MoveFileEx flags; unsupported delayed or cross-volume semantics are rejected.
+         * @return Native success result, or FALSE before mutation when the operation is unsafe.
+         */
+        BOOL Move(const std::filesystem::path& existing_path, const std::filesystem::path& new_path, DWORD flags);
+
+        /**
+         * @brief Replaces a selected destination only inside its session overlay.
+         * @param replaced_path Protected destination path supplied to ReplaceFileA/W.
+         * @param replacement_path Replacement source path supplied to ReplaceFileA/W.
+         * @param backup_file_name Optional native backup path; protected or non-null backups are rejected.
+         * @param replace_flags Native ReplaceFile flags accepted for an overlay replacement.
+         * @param exclude Reserved merge-exclusion pointer, which must be null.
+         * @param reserved Reserved pointer, which must be null.
+         * @return Native success result, or FALSE before mutation when operands are unsafe.
+         */
+        BOOL Replace(
+            const std::filesystem::path& replaced_path,
+            const std::filesystem::path& replacement_path,
+            LPCWSTR backup_file_name,
+            DWORD replace_flags,
+            LPVOID exclude,
+            LPVOID reserved);
+
+        /**
+         * @brief Copies a source into a selected destination overlay without escaping protected content.
+         * @param existing_path Source path supplied to CopyFileA/W.
+         * @param new_path Destination path supplied to CopyFileA/W.
+         * @param fail_if_exists Native fail-if-exists flag.
+         * @return Native success result, or FALSE before mutation when operands are unsafe.
+         */
+        BOOL Copy(const std::filesystem::path& existing_path, const std::filesystem::path& new_path, BOOL fail_if_exists);
+
+        /**
+         * @brief Applies attributes to a selected overlay or forwards an unrelated path natively.
+         * @param path Native path supplied to SetFileAttributesA/W.
+         * @param attributes Attributes requested by the caller.
+         * @return Native success result, or FALSE with a fail-closed Win32 error.
+         */
+        BOOL SetAttributes(const std::filesystem::path& path, DWORD attributes);
+
+        /**
+         * @brief Reports whether a directory mutation would contain a declared protected file.
+         * @param path Directory path supplied to CreateDirectoryA/W or RemoveDirectoryA/W.
+         * @return True when the mutation must be rejected to protect a selected route.
+         */
+        bool IsProtectedParentPath(const std::filesystem::path& path) const;
+
+        /**
          * @brief Acquires a no-bypass trusted save scope for the named exact routes.
          * @param original_paths Original paths being written by HelenHook.
          * @param error Receives ERROR_SUCCESS or the acquisition failure.
@@ -144,6 +209,9 @@ namespace helen
 
         /** @brief Classifies one path while the service mutex is already held and returns the route key when protected. */
         PathDisposition ClassifyPathUnlocked(const std::filesystem::path& path, std::wstring& route_key, DWORD& error) const;
+
+        /** @brief Checks parent-directory coverage while the service mutex is already held. */
+        bool IsProtectedParentPathUnlocked(const std::filesystem::path& path) const;
 
         /** @brief Runtime cache root from which this service creates exactly one unique child. */
         std::filesystem::path cache_directory_;

@@ -111,6 +111,7 @@
     <ClCompile Include="TextureReplacementAssetLoaderTests.cpp" />
     <ClCompile Include="VirtualFileServiceTests.cpp" />
     <ClCompile Include="FileWriteRoutingServiceTests.cpp" />
+    <ClCompile Include="FileWriteRoutingHookFixture.cpp" />
     <ClCompile Include="WindowBehaviorConfigTests.cpp" />
     <ClCompile Include="WindowBehaviorHookSetTests.cpp" />
     <ClCompile Include="TestMain.cpp" />

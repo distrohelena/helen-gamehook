@@ -7,6 +7,7 @@
 
 #include <HelenHook/HiddenPathMatcher.h>
 #include <HelenHook/Hook.h>
+#include <HelenHook/FileWriteRoutingService.h>
 #include <HelenHook/VirtualFileService.h>
 
 namespace helen
@@ -38,6 +39,21 @@ namespace helen
          */
         FileApiHookSet(
             VirtualFileService& virtual_files,
+            std::filesystem::path game_installation_root,
+            std::filesystem::path request_base_directory,
+            std::vector<std::string> hidden_paths);
+
+        /**
+         * @brief Binds the hook set to virtual files and one initialized session write-routing owner.
+         * @param virtual_files Service that supplies matching replacement payloads.
+         * @param file_write_routing Service that owns protected paths, handles, and mutation serialization.
+         * @param game_installation_root Absolute game installation root used to relativize hidden paths.
+         * @param request_base_directory Absolute directory used to resolve relative file requests.
+         * @param hidden_paths Canonical relative paths that should be reported as missing.
+         */
+        FileApiHookSet(
+            VirtualFileService& virtual_files,
+            FileWriteRoutingService& file_write_routing,
             std::filesystem::path game_installation_root,
             std::filesystem::path request_base_directory,
             std::vector<std::string> hidden_paths);
@@ -153,6 +169,55 @@ namespace helen
             DWORD dwMaximumSizeLow,
             LPCSTR lpName);
 
+        /** @brief IAT detour that rejects writable or named mappings for routed handles. */
+        static HANDLE WINAPI CreateFileMappingWDetour(
+            HANDLE hFile,
+            LPSECURITY_ATTRIBUTES lpFileMappingAttributes,
+            DWORD flProtect,
+            DWORD dwMaximumSizeHigh,
+            DWORD dwMaximumSizeLow,
+            LPCWSTR lpName);
+
+        /** @brief IAT detours for ANSI and Unicode exact-file deletion. */
+        static BOOL WINAPI DeleteFileADetour(LPCSTR lpFileName);
+        static BOOL WINAPI DeleteFileWDetour(LPCWSTR lpFileName);
+
+        /** @brief IAT detours for ANSI and Unicode basic moves. */
+        static BOOL WINAPI MoveFileADetour(LPCSTR lpExistingFileName, LPCSTR lpNewFileName);
+        static BOOL WINAPI MoveFileWDetour(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName);
+
+        /** @brief IAT detours for ANSI and Unicode flag-bearing moves. */
+        static BOOL WINAPI MoveFileExADetour(LPCSTR lpExistingFileName, LPCSTR lpNewFileName, DWORD dwFlags);
+        static BOOL WINAPI MoveFileExWDetour(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName, DWORD dwFlags);
+
+        /** @brief IAT detours for ANSI and Unicode replacement publication. */
+        static BOOL WINAPI ReplaceFileADetour(LPCSTR lpReplacedFileName, LPCSTR lpReplacementFileName,
+            LPCSTR lpBackupFileName, DWORD dwReplaceFlags, LPVOID lpExclude, LPVOID lpReserved);
+        static BOOL WINAPI ReplaceFileWDetour(LPCWSTR lpReplacedFileName, LPCWSTR lpReplacementFileName,
+            LPCWSTR lpBackupFileName, DWORD dwReplaceFlags, LPVOID lpExclude, LPVOID lpReserved);
+
+        /** @brief IAT detours for ANSI and Unicode copy-to-destination operations. */
+        static BOOL WINAPI CopyFileADetour(LPCSTR lpExistingFileName, LPCSTR lpNewFileName, BOOL bFailIfExists);
+        static BOOL WINAPI CopyFileWDetour(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName, BOOL bFailIfExists);
+
+        /** @brief IAT detours for ANSI and Unicode attribute mutation. */
+        static BOOL WINAPI SetFileAttributesADetour(LPCSTR lpFileName, DWORD dwFileAttributes);
+        static BOOL WINAPI SetFileAttributesWDetour(LPCWSTR lpFileName, DWORD dwFileAttributes);
+
+        /** @brief IAT detours that reject parent-directory mutation affecting a protected file. */
+        static BOOL WINAPI CreateDirectoryADetour(LPCSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes);
+        static BOOL WINAPI CreateDirectoryWDetour(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes);
+        static BOOL WINAPI RemoveDirectoryADetour(LPCSTR lpPathName);
+        static BOOL WINAPI RemoveDirectoryWDetour(LPCWSTR lpPathName);
+
+        /** @brief IAT detour that rejects duplication of routed handles. */
+        static BOOL WINAPI DuplicateHandleDetour(HANDLE hSourceProcessHandle, HANDLE hSourceHandle,
+            HANDLE hTargetProcessHandle, LPHANDLE lpTargetHandle, DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwOptions);
+
+        /** @brief IAT detour that rejects handle-based rename and disposition operations for routed handles. */
+        static BOOL WINAPI SetFileInformationByHandleDetour(HANDLE hFile, FILE_INFO_BY_HANDLE_CLASS FileInformationClass,
+            LPVOID lpFileInformation, DWORD dwBufferSize);
+
         /**
          * @brief IAT detour for CloseHandle that releases synthetic virtual handles only.
          */
@@ -169,6 +234,9 @@ namespace helen
 
         /** @brief Hidden-path matcher that decides which file requests should be reported as missing. */
         HiddenPathMatcher hidden_path_matcher_;
+
+        /** @brief Optional service that owns protected write routing; null retains legacy behavior. */
+        FileWriteRoutingService* file_write_routing_ = nullptr;
 
         /** @brief IAT hook used to replace CreateFileW in the main executable imports when that import is present. */
         IatHook create_file_w_hook_;
@@ -196,6 +264,29 @@ namespace helen
 
         /** @brief IAT hook used to replace CreateFileMappingA in the main executable imports when that import is present. */
         IatHook create_file_mapping_a_hook_;
+
+        /** @brief IAT hook used to replace CreateFileMappingW in the main executable imports when that import is present. */
+        IatHook create_file_mapping_w_hook_;
+
+        /** @brief IAT hooks for mutation APIs; absent imports retain native behavior. */
+        IatHook delete_file_a_hook_;
+        IatHook delete_file_w_hook_;
+        IatHook move_file_a_hook_;
+        IatHook move_file_w_hook_;
+        IatHook move_file_ex_a_hook_;
+        IatHook move_file_ex_w_hook_;
+        IatHook replace_file_a_hook_;
+        IatHook replace_file_w_hook_;
+        IatHook copy_file_a_hook_;
+        IatHook copy_file_w_hook_;
+        IatHook set_file_attributes_a_hook_;
+        IatHook set_file_attributes_w_hook_;
+        IatHook create_directory_a_hook_;
+        IatHook create_directory_w_hook_;
+        IatHook remove_directory_a_hook_;
+        IatHook remove_directory_w_hook_;
+        IatHook duplicate_handle_hook_;
+        IatHook set_file_information_by_handle_hook_;
 
         /** @brief IAT hook used to replace CloseHandle in the main executable imports. */
         IatHook close_handle_hook_;

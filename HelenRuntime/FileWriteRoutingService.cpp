@@ -15,6 +15,129 @@
 namespace
 {
     /**
+     * @brief Resolves one kernel32 export so routing internals bypass the executable's patched IAT.
+     * @tparam T Exact native function pointer type.
+     * @param export_name Export name to resolve.
+     * @return Resolved function pointer, or nullptr when the export is unavailable.
+     */
+    template <typename T>
+    T ResolveKernel32Export(const char* export_name) noexcept
+    {
+        const HMODULE module = GetModuleHandleW(L"kernel32.dll");
+        return module == nullptr ? nullptr : reinterpret_cast<T>(GetProcAddress(module, export_name));
+    }
+
+    /** @brief Calls the native CreateFileW export without the current executable IAT. */
+    HANDLE WINAPI CallNativeCreateFileW(LPCWSTR path, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES security,
+        DWORD disposition, DWORD flags, HANDLE template_file)
+    {
+        const auto function = ResolveKernel32Export<decltype(&CreateFileW)>("CreateFileW");
+        if (function == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return INVALID_HANDLE_VALUE;
+        }
+        return function(path, access, share, security, disposition, flags, template_file);
+    }
+
+    /** @brief Calls the native GetFileAttributesW export without the current executable IAT. */
+    DWORD WINAPI CallNativeGetFileAttributesW(LPCWSTR path)
+    {
+        const auto function = ResolveKernel32Export<decltype(&GetFileAttributesW)>("GetFileAttributesW");
+        if (function == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return INVALID_FILE_ATTRIBUTES;
+        }
+        return function(path);
+    }
+
+    /** @brief Calls the native CloseHandle export without the current executable IAT. */
+    BOOL WINAPI CallNativeCloseHandle(HANDLE handle)
+    {
+        const auto function = ResolveKernel32Export<decltype(&CloseHandle)>("CloseHandle");
+        if (function == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return FALSE;
+        }
+        return function(handle);
+    }
+
+    /** @brief Calls the native DeleteFileW export without the current executable IAT. */
+    BOOL WINAPI CallNativeDeleteFileW(LPCWSTR path)
+    {
+        const auto function = ResolveKernel32Export<decltype(&DeleteFileW)>("DeleteFileW");
+        if (function == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return FALSE;
+        }
+        return function(path);
+    }
+
+    /** @brief Calls the native MoveFileExW export without the current executable IAT. */
+    BOOL WINAPI CallNativeMoveFileExW(LPCWSTR existing_path, LPCWSTR new_path, DWORD flags)
+    {
+        const auto function = ResolveKernel32Export<decltype(&MoveFileExW)>("MoveFileExW");
+        if (function == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return FALSE;
+        }
+        return function(existing_path, new_path, flags);
+    }
+
+    /** @brief Calls the native ReplaceFileW export without the current executable IAT. */
+    BOOL WINAPI CallNativeReplaceFileW(LPCWSTR replaced_path, LPCWSTR replacement_path, LPCWSTR backup_path,
+        DWORD flags, LPVOID exclude, LPVOID reserved)
+    {
+        const auto function = ResolveKernel32Export<decltype(&ReplaceFileW)>("ReplaceFileW");
+        if (function == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return FALSE;
+        }
+        return function(replaced_path, replacement_path, backup_path, flags, exclude, reserved);
+    }
+
+    /** @brief Calls the native CopyFileW export without the current executable IAT. */
+    BOOL WINAPI CallNativeCopyFileW(LPCWSTR existing_path, LPCWSTR new_path, BOOL fail_if_exists)
+    {
+        const auto function = ResolveKernel32Export<decltype(&CopyFileW)>("CopyFileW");
+        if (function == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return FALSE;
+        }
+        return function(existing_path, new_path, fail_if_exists);
+    }
+
+    /** @brief Calls the native SetFileAttributesW export without the current executable IAT. */
+    BOOL WINAPI CallNativeSetFileAttributesW(LPCWSTR path, DWORD attributes)
+    {
+        const auto function = ResolveKernel32Export<decltype(&SetFileAttributesW)>("SetFileAttributesW");
+        if (function == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return FALSE;
+        }
+        return function(path, attributes);
+    }
+
+    /** @brief Calls the native CreateDirectoryW export without the current executable IAT. */
+    BOOL WINAPI CallNativeCreateDirectoryW(LPCWSTR path, LPSECURITY_ATTRIBUTES security_attributes)
+    {
+        const auto function = ResolveKernel32Export<decltype(&CreateDirectoryW)>("CreateDirectoryW");
+        if (function == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return FALSE;
+        }
+        return function(path, security_attributes);
+    }
+
+    /**
      * @brief Captures the stable identity and canonical name of one inspected native file.
      */
     struct InspectedPath
@@ -138,7 +261,7 @@ namespace
             }
 
             current /= component;
-            const DWORD attributes = GetFileAttributesW(current.wstring().c_str());
+            const DWORD attributes = CallNativeGetFileAttributesW(current.wstring().c_str());
             if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
             {
                 return true;
@@ -199,7 +322,7 @@ namespace
         inspection = {};
         inspection.FullPath = full_path;
         inspection.HasReparseComponent = ContainsReparseComponent(full_path);
-        const HANDLE handle = CreateFileW(
+        const HANDLE handle = CallNativeCreateFileW(
             full_path.c_str(),
             FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -219,7 +342,7 @@ namespace
         std::wstring final_path;
         const bool final_result = info_result != FALSE && GetFinalPath(handle, final_path);
         const DWORD final_error = final_result ? ERROR_SUCCESS : GetLastError();
-        CloseHandle(handle);
+        CallNativeCloseHandle(handle);
         if (!info_result)
         {
             error = info_error;
@@ -334,7 +457,7 @@ namespace
      */
     bool ValidateTrustedOriginalOpen(const std::wstring& full_path, DWORD& error)
     {
-        const HANDLE handle = CreateFileW(
+        const HANDLE handle = CallNativeCreateFileW(
             full_path.c_str(),
             GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -348,7 +471,7 @@ namespace
             return false;
         }
 
-        const BOOL close_result = CloseHandle(handle);
+        const BOOL close_result = CallNativeCloseHandle(handle);
         error = close_result != FALSE ? ERROR_SUCCESS : GetLastError();
         return close_result != FALSE;
     }
@@ -449,17 +572,18 @@ namespace helen
         }
 
         session_directory = std::filesystem::path(temporary_name.data());
-        if (!DeleteFileW(session_directory.wstring().c_str()) || !CreateDirectoryW(session_directory.wstring().c_str(), nullptr))
+        if (!CallNativeDeleteFileW(session_directory.wstring().c_str()) ||
+            !CallNativeCreateDirectoryW(session_directory.wstring().c_str(), nullptr))
         {
             error = GetLastError();
-            DeleteFileW(session_directory.wstring().c_str());
+            CallNativeDeleteFileW(session_directory.wstring().c_str());
             return false;
         }
 
         for (std::size_t index = 0; index < pending_routes.size(); ++index)
         {
             pending_routes[index].OverlayPath = session_directory / (L"route_" + std::to_wstring(index) + L".dat");
-            if (!CopyFileW(pending_routes[index].Route.OriginalPath.wstring().c_str(), pending_routes[index].OverlayPath.wstring().c_str(), TRUE))
+            if (!CallNativeCopyFileW(pending_routes[index].Route.OriginalPath.wstring().c_str(), pending_routes[index].OverlayPath.wstring().c_str(), TRUE))
             {
                 error = GetLastError();
                 RemoveOwnedDirectory(session_directory);
@@ -583,6 +707,20 @@ namespace helen
         return tracked_handles_.find(handle) != tracked_handles_.end();
     }
 
+    FileWriteRoutingService::PathDisposition FileWriteRoutingService::ClassifyHandle(HANDLE handle) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring final_path;
+        if (!GetFinalPath(handle, final_path))
+        {
+            return PathDisposition::Unrelated;
+        }
+
+        std::wstring route_key;
+        DWORD error = ERROR_SUCCESS;
+        return ClassifyPathUnlocked(std::filesystem::path(final_path), route_key, error);
+    }
+
     HANDLE FileWriteRoutingService::Open(
         const std::filesystem::path& path,
         DWORD access,
@@ -598,7 +736,7 @@ namespace helen
         const PathDisposition path_disposition = ClassifyPathUnlocked(path, route_key, classification_error);
         if (path_disposition == PathDisposition::Unrelated)
         {
-            return CreateFileW(path.wstring().c_str(), access, share, security_attributes, disposition, flags, template_file);
+            return CallNativeCreateFileW(path.wstring().c_str(), access, share, security_attributes, disposition, flags, template_file);
         }
 
         if (path_disposition == PathDisposition::Rejected)
@@ -639,7 +777,7 @@ namespace helen
             return INVALID_HANDLE_VALUE;
         }
 
-        const HANDLE handle = CreateFileW(target_path.wstring().c_str(), access, share, security_attributes, disposition, flags, template_file);
+        const HANDLE handle = CallNativeCreateFileW(target_path.wstring().c_str(), access, share, security_attributes, disposition, flags, template_file);
         if (handle != INVALID_HANDLE_VALUE)
         {
             tracked_handles_.emplace(handle, route_key);
@@ -658,7 +796,7 @@ namespace helen
             return FALSE;
         }
 
-        const BOOL result = CloseHandle(handle);
+        const BOOL result = CallNativeCloseHandle(handle);
         if (result != FALSE)
         {
             tracked_handles_.erase(tracked);
@@ -675,7 +813,7 @@ namespace helen
         const PathDisposition path_disposition = ClassifyPathUnlocked(path, route_key, classification_error);
         if (path_disposition == PathDisposition::Unrelated)
         {
-            return GetFileAttributesW(path.wstring().c_str());
+            return CallNativeGetFileAttributesW(path.wstring().c_str());
         }
 
         if (path_disposition == PathDisposition::Rejected)
@@ -692,7 +830,332 @@ namespace helen
 
         const FileWriteRoute& route = routes_.at(route_key);
         const std::filesystem::path& source_path = route.WritePolicy == FileWritePolicy::Redirect && route.ReadPolicy == FileReadPolicy::Redirected ? overlay_paths_.at(route_key) : route.OriginalPath;
-        return GetFileAttributesW(source_path.wstring().c_str());
+        return CallNativeGetFileAttributesW(source_path.wstring().c_str());
+    }
+
+    BOOL FileWriteRoutingService::Delete(const std::filesystem::path& path)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring route_key;
+        DWORD classification_error = ERROR_SUCCESS;
+        const PathDisposition disposition = ClassifyPathUnlocked(path, route_key, classification_error);
+        if (disposition == PathDisposition::Unrelated)
+        {
+            return CallNativeDeleteFileW(path.wstring().c_str());
+        }
+
+        if (disposition == PathDisposition::Rejected)
+        {
+            SetLastError(classification_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : classification_error);
+            return FALSE;
+        }
+
+        const auto route = routes_.find(route_key);
+        if (route == routes_.end() || failed_routes_.find(route_key) != failed_routes_.end() ||
+            route->second.WritePolicy == FileWritePolicy::Deny)
+        {
+            SetLastError(route == routes_.end() || failed_routes_.find(route_key) != failed_routes_.end()
+                ? ERROR_WRITE_FAULT : ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+
+        for (const auto& tracked : tracked_handles_)
+        {
+            if (tracked.second == route_key)
+            {
+                SetLastError(ERROR_SHARING_VIOLATION);
+                return FALSE;
+            }
+        }
+
+        return CallNativeDeleteFileW(overlay_paths_.at(route_key).wstring().c_str());
+    }
+
+    BOOL FileWriteRoutingService::Move(
+        const std::filesystem::path& existing_path,
+        const std::filesystem::path& new_path,
+        DWORD flags)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if ((flags & (MOVEFILE_DELAY_UNTIL_REBOOT | MOVEFILE_COPY_ALLOWED)) != 0)
+        {
+            SetLastError(ERROR_NOT_SUPPORTED);
+            return FALSE;
+        }
+
+        std::wstring source_route;
+        std::wstring destination_route;
+        DWORD source_error = ERROR_SUCCESS;
+        DWORD destination_error = ERROR_SUCCESS;
+        const PathDisposition source_disposition = ClassifyPathUnlocked(existing_path, source_route, source_error);
+        const PathDisposition destination_disposition = ClassifyPathUnlocked(new_path, destination_route, destination_error);
+        if (source_disposition == PathDisposition::Rejected || destination_disposition == PathDisposition::Rejected)
+        {
+            SetLastError(source_disposition == PathDisposition::Rejected
+                ? (source_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : source_error)
+                : (destination_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : destination_error));
+            return FALSE;
+        }
+
+        if (IsProtectedParentPathUnlocked(existing_path) || IsProtectedParentPathUnlocked(new_path))
+        {
+            SetLastError(ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+
+        if (source_disposition == PathDisposition::Protected &&
+            (destination_disposition != PathDisposition::Protected || source_route != destination_route))
+        {
+            SetLastError(ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+
+        if (source_disposition == PathDisposition::Protected && destination_disposition == PathDisposition::Protected)
+        {
+            SetLastError(ERROR_NOT_SUPPORTED);
+            return FALSE;
+        }
+
+        if (destination_disposition == PathDisposition::Unrelated)
+        {
+            return CallNativeMoveFileExW(existing_path.wstring().c_str(), new_path.wstring().c_str(), flags);
+        }
+
+        const auto route = routes_.find(destination_route);
+        if (route == routes_.end() || failed_routes_.find(destination_route) != failed_routes_.end() ||
+            route->second.WritePolicy == FileWritePolicy::Deny)
+        {
+            SetLastError(route == routes_.end() || failed_routes_.find(destination_route) != failed_routes_.end()
+                ? ERROR_WRITE_FAULT : ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+
+        for (const auto& tracked : tracked_handles_)
+        {
+            if (tracked.second == destination_route)
+            {
+                SetLastError(ERROR_SHARING_VIOLATION);
+                return FALSE;
+            }
+        }
+
+        return CallNativeMoveFileExW(
+            existing_path.wstring().c_str(),
+            overlay_paths_.at(destination_route).wstring().c_str(),
+            flags);
+    }
+
+    BOOL FileWriteRoutingService::Replace(
+        const std::filesystem::path& replaced_path,
+        const std::filesystem::path& replacement_path,
+        LPCWSTR backup_file_name,
+        DWORD replace_flags,
+        LPVOID exclude,
+        LPVOID reserved)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (exclude != nullptr || reserved != nullptr)
+        {
+            SetLastError(ERROR_NOT_SUPPORTED);
+            return FALSE;
+        }
+
+        std::wstring replaced_route;
+        std::wstring replacement_route;
+        DWORD replaced_error = ERROR_SUCCESS;
+        DWORD replacement_error = ERROR_SUCCESS;
+        const PathDisposition replaced_disposition = ClassifyPathUnlocked(replaced_path, replaced_route, replaced_error);
+        const PathDisposition replacement_disposition = ClassifyPathUnlocked(replacement_path, replacement_route, replacement_error);
+        if (replaced_disposition == PathDisposition::Rejected || replacement_disposition == PathDisposition::Rejected)
+        {
+            SetLastError(replaced_disposition == PathDisposition::Rejected
+                ? (replaced_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : replaced_error)
+                : (replacement_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : replacement_error));
+            return FALSE;
+        }
+
+        if (replaced_disposition == PathDisposition::Unrelated && replacement_disposition == PathDisposition::Unrelated)
+        {
+            if (backup_file_name != nullptr)
+            {
+                std::wstring backup_route;
+                DWORD backup_error = ERROR_SUCCESS;
+                const PathDisposition backup_disposition = ClassifyPathUnlocked(std::filesystem::path(backup_file_name), backup_route, backup_error);
+                if (backup_disposition != PathDisposition::Unrelated)
+                {
+                    SetLastError(backup_disposition == PathDisposition::Rejected
+                        ? (backup_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : backup_error)
+                        : ERROR_NOT_SUPPORTED);
+                    return FALSE;
+                }
+            }
+            return CallNativeReplaceFileW(replaced_path.wstring().c_str(), replacement_path.wstring().c_str(), backup_file_name,
+                replace_flags, nullptr, nullptr);
+        }
+
+        if (backup_file_name != nullptr)
+        {
+            SetLastError(ERROR_NOT_SUPPORTED);
+            return FALSE;
+        }
+
+        if (replaced_disposition != PathDisposition::Protected || replacement_disposition != PathDisposition::Unrelated)
+        {
+            SetLastError(ERROR_NOT_SUPPORTED);
+            return FALSE;
+        }
+
+        const auto route = routes_.find(replaced_route);
+        if (route == routes_.end() || failed_routes_.find(replaced_route) != failed_routes_.end() ||
+            route->second.WritePolicy == FileWritePolicy::Deny)
+        {
+            SetLastError(route == routes_.end() || failed_routes_.find(replaced_route) != failed_routes_.end()
+                ? ERROR_WRITE_FAULT : ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+
+        for (const auto& tracked : tracked_handles_)
+        {
+            if (tracked.second == replaced_route)
+            {
+                SetLastError(ERROR_SHARING_VIOLATION);
+                return FALSE;
+            }
+        }
+
+        return CallNativeReplaceFileW(
+            overlay_paths_.at(replaced_route).wstring().c_str(),
+            replacement_path.wstring().c_str(),
+            nullptr,
+            replace_flags,
+            nullptr,
+            nullptr);
+    }
+
+    BOOL FileWriteRoutingService::Copy(
+        const std::filesystem::path& existing_path,
+        const std::filesystem::path& new_path,
+        BOOL fail_if_exists)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring source_route;
+        std::wstring destination_route;
+        DWORD source_error = ERROR_SUCCESS;
+        DWORD destination_error = ERROR_SUCCESS;
+        const PathDisposition source_disposition = ClassifyPathUnlocked(existing_path, source_route, source_error);
+        const PathDisposition destination_disposition = ClassifyPathUnlocked(new_path, destination_route, destination_error);
+        if (source_disposition == PathDisposition::Rejected || destination_disposition == PathDisposition::Rejected)
+        {
+            SetLastError(source_disposition == PathDisposition::Rejected
+                ? (source_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : source_error)
+                : (destination_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : destination_error));
+            return FALSE;
+        }
+
+        if (source_disposition == PathDisposition::Protected && destination_disposition == PathDisposition::Unrelated)
+        {
+            SetLastError(ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+
+        if (source_disposition == PathDisposition::Protected && destination_disposition == PathDisposition::Protected)
+        {
+            SetLastError(ERROR_NOT_SUPPORTED);
+            return FALSE;
+        }
+
+        if (destination_disposition == PathDisposition::Unrelated)
+        {
+            return CallNativeCopyFileW(existing_path.wstring().c_str(), new_path.wstring().c_str(), fail_if_exists);
+        }
+
+        const auto route = routes_.find(destination_route);
+        if (route == routes_.end() || failed_routes_.find(destination_route) != failed_routes_.end() ||
+            route->second.WritePolicy == FileWritePolicy::Deny)
+        {
+            SetLastError(route == routes_.end() || failed_routes_.find(destination_route) != failed_routes_.end()
+                ? ERROR_WRITE_FAULT : ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+
+        for (const auto& tracked : tracked_handles_)
+        {
+            if (tracked.second == destination_route)
+            {
+                SetLastError(ERROR_SHARING_VIOLATION);
+                return FALSE;
+            }
+        }
+
+        return CallNativeCopyFileW(
+            existing_path.wstring().c_str(),
+            overlay_paths_.at(destination_route).wstring().c_str(),
+            fail_if_exists);
+    }
+
+    BOOL FileWriteRoutingService::SetAttributes(const std::filesystem::path& path, DWORD attributes)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring route_key;
+        DWORD classification_error = ERROR_SUCCESS;
+        const PathDisposition disposition = ClassifyPathUnlocked(path, route_key, classification_error);
+        if (disposition == PathDisposition::Unrelated)
+        {
+            return CallNativeSetFileAttributesW(path.wstring().c_str(), attributes);
+        }
+
+        if (disposition == PathDisposition::Rejected)
+        {
+            SetLastError(classification_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : classification_error);
+            return FALSE;
+        }
+
+        const auto route = routes_.find(route_key);
+        if (route == routes_.end() || failed_routes_.find(route_key) != failed_routes_.end() ||
+            route->second.WritePolicy == FileWritePolicy::Deny)
+        {
+            SetLastError(route == routes_.end() || failed_routes_.find(route_key) != failed_routes_.end()
+                ? ERROR_WRITE_FAULT : ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+
+        return CallNativeSetFileAttributesW(overlay_paths_.at(route_key).wstring().c_str(), attributes);
+    }
+
+    bool FileWriteRoutingService::IsProtectedParentPath(const std::filesystem::path& path) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return IsProtectedParentPathUnlocked(path);
+    }
+
+    bool FileWriteRoutingService::IsProtectedParentPathUnlocked(const std::filesystem::path& path) const
+    {
+        std::wstring full_path;
+        if (!ResolveFullPath(path, request_base_directory_, full_path))
+        {
+            return false;
+        }
+
+        std::wstring key;
+        if (!NormalizePathKey(full_path, key))
+        {
+            return false;
+        }
+
+        if (!key.empty() && key.back() != L'/')
+        {
+            key.push_back(L'/');
+        }
+
+        for (const auto& route : routes_)
+        {
+            if (route.first.rfind(key, 0) == 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     std::unique_ptr<FileWriteRoutingTransaction> FileWriteRoutingService::BeginTrustedWrite(
@@ -776,7 +1239,7 @@ namespace helen
                 return false;
             }
 
-            if (!CopyFileW(route->second.OriginalPath.wstring().c_str(), overlay->second.wstring().c_str(), FALSE))
+            if (!CallNativeCopyFileW(route->second.OriginalPath.wstring().c_str(), overlay->second.wstring().c_str(), FALSE))
             {
                 error = GetLastError();
                 LatchRoutesFailed(route_keys);

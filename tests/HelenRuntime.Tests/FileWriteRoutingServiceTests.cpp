@@ -338,6 +338,38 @@ void RunFileWriteRoutingServiceTests()
         const HANDLE unrelated_read = second_service.Open(cancellation_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         Expect(unrelated_read != INVALID_HANDLE_VALUE, "No-write cancellation damaged unrelated access.");
         Expect(ReadHandle(unrelated_read) == "V", "No-write cancellation changed unrelated bytes.");
+
+        const std::filesystem::path mutation_original = request_base / "mutation.ini";
+        const std::filesystem::path mutation_source = request_base / "mutation.tmp";
+        WriteAllBytes(mutation_original, "M");
+        WriteAllBytes(mutation_source, "N");
+        helen::FileWriteRoutingService mutation_service(root / "mutation-cache", request_base);
+        const helen::FileWriteRoute mutation_route = { "mutation", mutation_original, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected };
+        Expect(mutation_service.Initialize({ mutation_route }, error), "Mutation routing initialization failed.");
+        Expect(mutation_service.Copy(mutation_source, mutation_original, FALSE) != FALSE, "Protected copy destination was not redirected.");
+        Expect(ReadThroughRouter(mutation_service, mutation_original) == "N", "Redirected copy did not update the session file.");
+        WriteAllBytes(mutation_source, "O");
+        Expect(mutation_service.Move(mutation_source, mutation_original, MOVEFILE_REPLACE_EXISTING) != FALSE, "Protected move destination was not redirected.");
+        Expect(ReadThroughRouter(mutation_service, mutation_original) == "O", "Redirected move did not update the session file.");
+        WriteAllBytes(mutation_source, "P");
+        Expect(mutation_service.Replace(mutation_original, mutation_source, nullptr, REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr) != FALSE,
+            "Protected replace destination was not redirected.");
+        Expect(ReadThroughRouter(mutation_service, mutation_original) == "P", "Redirected replace did not update the session file.");
+        Expect(mutation_service.SetAttributes(mutation_original, FILE_ATTRIBUTE_HIDDEN) != FALSE, "Protected attribute mutation was not redirected.");
+        Expect((mutation_service.GetAttributes(mutation_original) & FILE_ATTRIBUTE_HIDDEN) != 0, "Redirected attributes were not visible.");
+        Expect(mutation_service.Delete(mutation_original) != FALSE, "Protected delete did not remove the session file.");
+        const HANDLE deleted_route = mutation_service.Open(mutation_original, GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        Expect(deleted_route == INVALID_HANDLE_VALUE, "Deleted overlay fell back to the original file.");
+
+        WriteAllBytes(mutation_original, "M");
+        helen::FileWriteRoutingService deny_mutation_service(root / "deny-mutation-cache", request_base);
+        const helen::FileWriteRoute deny_mutation_route = { "deny-mutation", mutation_original, helen::FileWritePolicy::Deny, helen::FileReadPolicy::Original };
+        Expect(deny_mutation_service.Initialize({ deny_mutation_route }, error), "Deny mutation initialization failed.");
+        Expect(deny_mutation_service.Delete(mutation_original) == FALSE && GetLastError() == ERROR_ACCESS_DENIED,
+            "Deny mutation unexpectedly deleted a protected original.");
+        Expect(deny_mutation_service.Copy(mutation_source, mutation_original, FALSE) == FALSE && GetLastError() == ERROR_ACCESS_DENIED,
+            "Deny mutation unexpectedly accepted a protected copy destination.");
     }
     catch (...)
     {

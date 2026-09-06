@@ -155,6 +155,9 @@ void RunVirtualFileServiceTests();
 /** @brief Runs real temporary-file session routing and trusted transaction coverage. */
 void RunFileWriteRoutingServiceTests();
 
+/** @brief Runs the real imported Win32 IAT routing fixture for session mutations. */
+void RunFileWriteRoutingHookFixtureTests();
+
 /**
  * @brief Runs the window behavior config coverage for generic `window.*` keys and derived hook plans.
  */
@@ -208,6 +211,7 @@ int main()
         RunMemoryStateObserverServiceTests();
         RunVirtualFileServiceTests();
         RunFileWriteRoutingServiceTests();
+        RunFileWriteRoutingHookFixtureTests();
         RunDebugTraceServiceTests();
         RunWindowBehaviorConfigTests();
         RunWindowBehaviorHookSetTests();
