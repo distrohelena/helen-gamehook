@@ -26,6 +26,21 @@ namespace helen
     {
     public:
         /**
+         * @brief Describes whether a path is unrelated, protected, or must be rejected before native fallback.
+         */
+        enum class PathDisposition
+        {
+            /** @brief Path has no relationship to a declared route and may use native behavior. */
+            Unrelated,
+
+            /** @brief Path resolves to a validated protected route. */
+            Protected,
+
+            /** @brief Path is a known or unsafe route spelling that cannot be verified safely. */
+            Rejected,
+        };
+
+        /**
          * @brief Binds routing to a cache root and the base used to resolve relative request paths.
          * @param cache_directory Writable runtime cache root; one unique child is created at initialization.
          * @param request_base_directory Directory used to resolve relative route and request paths.
@@ -56,6 +71,13 @@ namespace helen
          * @return True for a declared route and for an alias/reparse form that resolves to a declared route.
          */
         bool IsProtectedPath(const std::filesystem::path& path) const;
+
+        /**
+         * @brief Classifies a path so hook adapters can distinguish native pass-through from fail-closed routing errors.
+         * @param path Native path supplied by an API caller.
+         * @return Unrelated for native pass-through, Protected for routing, or Rejected for unsafe/indeterminate route forms.
+         */
+        PathDisposition ClassifyPath(const std::filesystem::path& path) const;
 
         /**
          * @brief Reports whether a handle was returned by a protected routed open and remains live.
@@ -119,6 +141,9 @@ namespace helen
 
         /** @brief Removes this service's unique session directory and ignores cleanup failure. */
         void CleanupSession() noexcept;
+
+        /** @brief Classifies one path while the service mutex is already held and returns the route key when protected. */
+        PathDisposition ClassifyPathUnlocked(const std::filesystem::path& path, std::wstring& route_key, DWORD& error) const;
 
         /** @brief Runtime cache root from which this service creates exactly one unique child. */
         std::filesystem::path cache_directory_;

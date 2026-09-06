@@ -59,3 +59,31 @@ The tests use real temporary files and exercise redirect reads/writes, original-
 ## Commit
 
 The implementation and report are in the scoped commit currently being handed off; its final SHA is recorded in the handoff message after this metadata amendment.
+
+## Round-1 corrections
+
+The original report intentionally disclosed that the first RED run was a missing-header compile failure rather than a behavioral RED. This correction round added behavioral regressions before the fixes. Against the committed core, the focused console run failed with:
+
+```text
+Trusted write accepted an unverifiable protected path.
+GENERATED_BATMAN_PROTOCOL_PASS
+```
+
+The regression used an exclusive real original-file handle and proved that `BeginTrustedWrite` could otherwise acquire a transaction without verifiable metadata access. The regression also asserts busy-save original bytes remain unchanged.
+
+The correction adds:
+
+- `FileWriteRoutingService::PathDisposition` and `ClassifyPath`, with `Rejected` kept distinct from native `Unrelated` pass-through.
+- Share-compatible trusted-original preflight used by classification and trusted acquisition, so locked/indeterminate known route aliases fail closed with the native error.
+- Replacement-aware synchronization: a verified regular, non-reparse, single-link replacement is accepted, copied to the overlay, and its native identity/canonical alias is refreshed. A real `ReplaceFileW` test covers this path.
+- Optional short-name, hard-link, and symbolic reparse alias tests where Windows permits fixture creation.
+- Cleanup failure logging for the service-owned session directory.
+
+After correction, the focused routing test executable exited `0`. The final required full Release Win32 build command completed successfully, and the required console invocation produced:
+
+```text
+GENERATED_BATMAN_PROTOCOL_PASS
+PASS
+```
+
+The correction commit SHA is recorded in the final handoff message.

@@ -1,5 +1,6 @@
 #include <HelenHook/FileWriteRoutingService.h>
 
+#include <HelenHook/Log.h>
 #include <HelenHook/FileWriteRoutingTransaction.h>
 
 #include <algorithm>
@@ -252,6 +253,10 @@ namespace
 
         std::error_code error;
         std::filesystem::remove_all(path, error);
+        if (error)
+        {
+            helen::Logf(L"[runtime] file-write routing cleanup failed path=%ls error=%lu", path.wstring().c_str(), static_cast<unsigned long>(error.value()));
+        }
     }
 
     /**
@@ -319,6 +324,33 @@ namespace
         }
 
         return false;
+    }
+
+    /**
+     * @brief Verifies that a protected original can be opened for trusted validation with native sharing semantics.
+     * @param full_path Absolute path of the protected original.
+     * @param error Receives the native sharing or access failure.
+     * @return True when the validation open succeeded and was closed.
+     */
+    bool ValidateTrustedOriginalOpen(const std::wstring& full_path, DWORD& error)
+    {
+        const HANDLE handle = CreateFileW(
+            full_path.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+        {
+            error = GetLastError();
+            return false;
+        }
+
+        const BOOL close_result = CloseHandle(handle);
+        error = close_result != FALSE ? ERROR_SUCCESS : GetLastError();
+        return close_result != FALSE;
     }
 }
 
@@ -454,31 +486,95 @@ namespace helen
     bool FileWriteRoutingService::IsProtectedPath(const std::filesystem::path& path) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring route_key;
+        DWORD error = ERROR_SUCCESS;
+        return ClassifyPathUnlocked(path, route_key, error) != PathDisposition::Unrelated;
+    }
+
+    FileWriteRoutingService::PathDisposition FileWriteRoutingService::ClassifyPath(const std::filesystem::path& path) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring route_key;
+        DWORD error = ERROR_SUCCESS;
+        return ClassifyPathUnlocked(path, route_key, error);
+    }
+
+    FileWriteRoutingService::PathDisposition FileWriteRoutingService::ClassifyPathUnlocked(
+        const std::filesystem::path& path,
+        std::wstring& route_key,
+        DWORD& error) const
+    {
+        route_key.clear();
+        error = ERROR_SUCCESS;
         std::wstring full_path;
         if (!ResolveFullPath(path, request_base_directory_, full_path))
         {
-            return false;
+            error = ERROR_INVALID_NAME;
+            return PathDisposition::Unrelated;
         }
 
         std::wstring lexical_key;
         if (!NormalizePathKey(full_path, lexical_key))
         {
-            return false;
+            error = ERROR_INVALID_NAME;
+            return PathDisposition::Unrelated;
         }
 
-        if (path_aliases_.find(lexical_key) != path_aliases_.end())
+        const auto alias = path_aliases_.find(lexical_key);
+        if (alias != path_aliases_.end())
         {
-            return true;
+            route_key = alias->second;
+            InspectedPath inspection;
+            DWORD inspection_error = ERROR_SUCCESS;
+            if (!InspectExistingPath(full_path, inspection, inspection_error))
+            {
+                error = inspection_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : inspection_error;
+                return PathDisposition::Rejected;
+            }
+
+            if (!ValidateTrustedOriginalOpen(full_path, inspection_error))
+            {
+                error = inspection_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : inspection_error;
+                return PathDisposition::Rejected;
+            }
+
+            const auto identity_route = identity_routes_.find(inspection.Identity);
+            if (inspection.HasReparseComponent || identity_route == identity_routes_.end() || identity_route->second != route_key || inspection.NumberOfLinks != 1)
+            {
+                error = ERROR_ACCESS_DENIED;
+                return PathDisposition::Rejected;
+            }
+
+            return PathDisposition::Protected;
         }
 
         InspectedPath inspection;
         DWORD inspection_error = ERROR_SUCCESS;
-        if (InspectExistingPath(full_path, inspection, inspection_error))
+        if (!InspectExistingPath(full_path, inspection, inspection_error))
         {
-            return identity_routes_.find(inspection.Identity) != identity_routes_.end();
+            return PathDisposition::Unrelated;
         }
 
-        return false;
+        const auto identity_route = identity_routes_.find(inspection.Identity);
+        if (identity_route == identity_routes_.end())
+        {
+            return PathDisposition::Unrelated;
+        }
+
+        route_key = identity_route->second;
+        if (inspection.HasReparseComponent || inspection.NumberOfLinks != 1)
+        {
+            error = ERROR_ACCESS_DENIED;
+            return PathDisposition::Rejected;
+        }
+
+        if (!ValidateTrustedOriginalOpen(full_path, inspection_error))
+        {
+            error = inspection_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : inspection_error;
+            return PathDisposition::Rejected;
+        }
+
+        return PathDisposition::Protected;
     }
 
     bool FileWriteRoutingService::IsTrackedHandle(HANDLE handle) const
@@ -497,54 +593,24 @@ namespace helen
         HANDLE template_file)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::wstring full_path;
-        const bool has_full_path = ResolveFullPath(path, request_base_directory_, full_path);
-        std::wstring lexical_key;
-        const bool has_lexical_key = has_full_path && NormalizePathKey(full_path, lexical_key);
         std::wstring route_key;
-        bool unsafe_alias = false;
-        if (has_lexical_key)
-        {
-            const auto alias = path_aliases_.find(lexical_key);
-            if (alias != path_aliases_.end())
-            {
-                route_key = alias->second;
-                InspectedPath inspection;
-                DWORD inspection_error = ERROR_SUCCESS;
-                if (InspectExistingPath(full_path, inspection, inspection_error))
-                {
-                    const auto identity_route = identity_routes_.find(inspection.Identity);
-                    unsafe_alias = inspection.HasReparseComponent ||
-                        identity_route == identity_routes_.end() ||
-                        identity_route->second != route_key ||
-                        inspection.NumberOfLinks != 1;
-                }
-            }
-            else
-            {
-                InspectedPath inspection;
-                DWORD inspection_error = ERROR_SUCCESS;
-                if (InspectExistingPath(full_path, inspection, inspection_error))
-                {
-                    const auto identity = identity_routes_.find(inspection.Identity);
-                    if (identity != identity_routes_.end())
-                    {
-                        route_key = identity->second;
-                        unsafe_alias = inspection.HasReparseComponent || inspection.NumberOfLinks != 1;
-                    }
-                }
-            }
-        }
-
-        if (route_key.empty())
+        DWORD classification_error = ERROR_SUCCESS;
+        const PathDisposition path_disposition = ClassifyPathUnlocked(path, route_key, classification_error);
+        if (path_disposition == PathDisposition::Unrelated)
         {
             return CreateFileW(path.wstring().c_str(), access, share, security_attributes, disposition, flags, template_file);
         }
 
-        const auto route = routes_.find(route_key);
-        if (route == routes_.end() || unsafe_alias || failed_routes_.find(route_key) != failed_routes_.end())
+        if (path_disposition == PathDisposition::Rejected)
         {
-            SetLastError(unsafe_alias ? ERROR_ACCESS_DENIED : ERROR_WRITE_FAULT);
+            SetLastError(classification_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : classification_error);
+            return INVALID_HANDLE_VALUE;
+        }
+
+        const auto route = routes_.find(route_key);
+        if (route == routes_.end() || failed_routes_.find(route_key) != failed_routes_.end())
+        {
+            SetLastError(ERROR_WRITE_FAULT);
             return INVALID_HANDLE_VALUE;
         }
 
@@ -604,58 +670,18 @@ namespace helen
     DWORD FileWriteRoutingService::GetAttributes(const std::filesystem::path& path)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::wstring full_path;
-        std::wstring lexical_key;
-        if (!ResolveFullPath(path, request_base_directory_, full_path) || !NormalizePathKey(full_path, lexical_key))
-        {
-            return GetFileAttributesW(path.wstring().c_str());
-        }
-
         std::wstring route_key;
-        const auto alias = path_aliases_.find(lexical_key);
-        if (alias != path_aliases_.end())
-        {
-            route_key = alias->second;
-            InspectedPath inspection;
-            DWORD inspection_error = ERROR_SUCCESS;
-            if (InspectExistingPath(full_path, inspection, inspection_error))
-            {
-                const auto identity_route = identity_routes_.find(inspection.Identity);
-                if (inspection.HasReparseComponent || identity_route == identity_routes_.end() || identity_route->second != route_key || inspection.NumberOfLinks != 1)
-                {
-                    SetLastError(ERROR_ACCESS_DENIED);
-                    return INVALID_FILE_ATTRIBUTES;
-                }
-            }
-        }
-        else
-        {
-            InspectedPath inspection;
-            DWORD inspection_error = ERROR_SUCCESS;
-            if (InspectExistingPath(full_path, inspection, inspection_error))
-            {
-                const auto identity = identity_routes_.find(inspection.Identity);
-                if (identity != identity_routes_.end())
-                {
-                    route_key = identity->second;
-                }
-            }
-        }
-
-        if (!route_key.empty())
-        {
-            InspectedPath inspection;
-            DWORD inspection_error = ERROR_SUCCESS;
-            if (InspectExistingPath(full_path, inspection, inspection_error) && inspection.HasReparseComponent)
-            {
-                SetLastError(ERROR_ACCESS_DENIED);
-                return INVALID_FILE_ATTRIBUTES;
-            }
-        }
-
-        if (route_key.empty())
+        DWORD classification_error = ERROR_SUCCESS;
+        const PathDisposition path_disposition = ClassifyPathUnlocked(path, route_key, classification_error);
+        if (path_disposition == PathDisposition::Unrelated)
         {
             return GetFileAttributesW(path.wstring().c_str());
+        }
+
+        if (path_disposition == PathDisposition::Rejected)
+        {
+            SetLastError(classification_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : classification_error);
+            return INVALID_FILE_ATTRIBUTES;
         }
 
         if (failed_routes_.find(route_key) != failed_routes_.end())
@@ -677,43 +703,16 @@ namespace helen
         std::vector<std::wstring> route_keys;
         for (const std::filesystem::path& path : original_paths)
         {
-            std::wstring full_path;
-            std::wstring lexical_key;
-            if (!ResolveFullPath(path, request_base_directory_, full_path) || !NormalizePathKey(full_path, lexical_key))
+            std::wstring route_key;
+            DWORD classification_error = ERROR_SUCCESS;
+            const PathDisposition path_disposition = ClassifyPathUnlocked(path, route_key, classification_error);
+            if (path_disposition == PathDisposition::Rejected)
             {
-                error = ERROR_INVALID_NAME;
+                error = classification_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : classification_error;
                 return nullptr;
             }
 
-            std::wstring route_key;
-            const auto alias = path_aliases_.find(lexical_key);
-            if (alias != path_aliases_.end())
-            {
-                route_key = alias->second;
-                InspectedPath inspection;
-                DWORD inspection_error = ERROR_SUCCESS;
-                if (InspectExistingPath(full_path, inspection, inspection_error) &&
-                    (inspection.HasReparseComponent || identity_routes_.find(inspection.Identity) == identity_routes_.end() || identity_routes_.at(inspection.Identity) != route_key || inspection.NumberOfLinks != 1))
-                {
-                    error = ERROR_ACCESS_DENIED;
-                    return nullptr;
-                }
-            }
-            else
-            {
-                InspectedPath inspection;
-                DWORD inspection_error = ERROR_SUCCESS;
-                if (InspectExistingPath(full_path, inspection, inspection_error))
-                {
-                    const auto identity = identity_routes_.find(inspection.Identity);
-                    if (identity != identity_routes_.end())
-                    {
-                        route_key = identity->second;
-                    }
-                }
-            }
-
-            if (!route_key.empty() && std::find(route_keys.begin(), route_keys.end(), route_key) == route_keys.end())
+            if (path_disposition == PathDisposition::Protected && std::find(route_keys.begin(), route_keys.end(), route_key) == route_keys.end())
             {
                 route_keys.push_back(route_key);
             }
@@ -761,9 +760,18 @@ namespace helen
             if (!ResolveFullPath(route->second.OriginalPath, request_base_directory_, full_path) ||
                 !InspectExistingPath(full_path, inspection, inspection_error) ||
                 inspection.HasReparseComponent ||
-                (identity != route_identities_.end() && inspection.Identity != identity->second))
+                !inspection.IsRegularFile ||
+                inspection.NumberOfLinks != 1)
             {
                 error = inspection_error == ERROR_SUCCESS ? ERROR_INVALID_DATA : inspection_error;
+                LatchRoutesFailed(route_keys);
+                return false;
+            }
+
+            const auto current_owner = identity_routes_.find(inspection.Identity);
+            if (current_owner != identity_routes_.end() && current_owner->second != route_key)
+            {
+                error = ERROR_INVALID_DATA;
                 LatchRoutesFailed(route_keys);
                 return false;
             }
@@ -773,6 +781,19 @@ namespace helen
                 error = GetLastError();
                 LatchRoutesFailed(route_keys);
                 return false;
+            }
+
+            if (identity != route_identities_.end())
+            {
+                identity_routes_.erase(identity->second);
+            }
+
+            route_identities_[route_key] = inspection.Identity;
+            identity_routes_[inspection.Identity] = route_key;
+            std::wstring canonical_key;
+            if (NormalizePathKey(inspection.CanonicalPath, canonical_key))
+            {
+                path_aliases_[canonical_key] = route_key;
             }
         }
 

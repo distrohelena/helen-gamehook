@@ -222,9 +222,78 @@ void RunFileWriteRoutingServiceTests()
 
         const HANDLE busy_handle = service.Open(redirect_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         Expect(busy_handle != INVALID_HANDLE_VALUE, "Busy-handle setup open failed.");
+        const std::string original_before_busy = ReadHandle(CreateFileW(redirect_path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
         const std::unique_ptr<helen::FileWriteRoutingTransaction> busy_transaction = service.BeginTrustedWrite({ redirect_path }, error);
         Expect(busy_transaction == nullptr && error == ERROR_SHARING_VIOLATION, "Busy routed handle did not block trusted write.");
+        Expect(ReadHandle(CreateFileW(redirect_path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)) == original_before_busy, "Busy transaction changed original bytes.");
         Expect(service.Close(busy_handle) != FALSE, "Busy-handle setup close failed.");
+
+        const HANDLE locked_original = CreateFileW(redirect_path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        Expect(locked_original != INVALID_HANDLE_VALUE, "Original-lock setup failed.");
+        const HANDLE verify_locked_original = CreateFileW(redirect_path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        const bool metadata_lock_verified = verify_locked_original == INVALID_HANDLE_VALUE;
+        if (verify_locked_original != INVALID_HANDLE_VALUE)
+        {
+            CloseHandle(verify_locked_original);
+        }
+        Expect(CloseHandle(locked_original) != FALSE, "Original-lock fixture close failed.");
+        Expect(metadata_lock_verified, "Original-lock fixture did not deny metadata sharing.");
+        const HANDLE locked_original_again = CreateFileW(redirect_path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        Expect(locked_original_again != INVALID_HANDLE_VALUE, "Original-lock setup retry failed.");
+        const bool locked_path_rejected = service.ClassifyPath(redirect_path) == helen::FileWriteRoutingService::PathDisposition::Rejected;
+        std::unique_ptr<helen::FileWriteRoutingTransaction> locked_transaction = service.BeginTrustedWrite({ redirect_path }, error);
+        const bool locked_transaction_acquired = locked_transaction != nullptr;
+        if (locked_transaction != nullptr)
+        {
+            locked_transaction->CancelWithoutWrite();
+            locked_transaction.reset();
+        }
+        const DWORD locked_transaction_error = error;
+        Expect(CloseHandle(locked_original_again) != FALSE, "Original-lock close failed.");
+        Expect(locked_path_rejected, "Locked protected path was not explicitly classified as rejected.");
+        Expect(!locked_transaction_acquired, "Trusted write accepted an unverifiable protected path.");
+        Expect(locked_transaction_error == ERROR_SHARING_VIOLATION, "Trusted write rejected a locked path with the wrong error.");
+
+        const std::filesystem::path replacement_original = request_base / "replacement.ini";
+        const std::filesystem::path replacement_source = request_base / "replacement.new";
+        WriteAllBytes(replacement_original, "Q");
+        WriteAllBytes(replacement_source, "R");
+        const helen::FileWriteRoute replacement_route = { "replacement", replacement_original, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected };
+        helen::FileWriteRoutingService replacement_service(root / "replacement-cache", request_base);
+        Expect(replacement_service.Initialize({ replacement_route }, error), "ReplaceFile setup initialization failed.");
+        const std::unique_ptr<helen::FileWriteRoutingTransaction> replacement_transaction = replacement_service.BeginTrustedWrite({ replacement_original }, error);
+        Expect(replacement_transaction != nullptr, "ReplaceFile transaction acquisition failed.");
+        Expect(ReplaceFileW(replacement_original.c_str(), replacement_source.c_str(), nullptr, REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr) != FALSE, "ReplaceFileW setup failed.");
+        Expect(replacement_transaction->Synchronize(error), "ReplaceFile synchronization failed.");
+        Expect(ReadThroughRouter(replacement_service, replacement_original) == "R", "ReplaceFile synchronization kept stale overlay bytes.");
+        Expect(ReadHandle(CreateFileW(replacement_original.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)) == "R", "ReplaceFile did not update original bytes.");
+
+        const std::filesystem::path alias_original = request_base / "alias-target.ini";
+        WriteAllBytes(alias_original, "S");
+        helen::FileWriteRoutingService alias_service(root / "alias-cache", request_base);
+        const helen::FileWriteRoute alias_route = { "alias", alias_original, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected };
+        Expect(alias_service.Initialize({ alias_route }, error), "Alias setup initialization failed.");
+        std::array<wchar_t, MAX_PATH> short_path_buffer{};
+        const DWORD short_path_length = GetShortPathNameW(alias_original.c_str(), short_path_buffer.data(), static_cast<DWORD>(short_path_buffer.size()));
+        if (short_path_length > 0 && short_path_length < short_path_buffer.size())
+        {
+            const std::filesystem::path short_path(short_path_buffer.data());
+            Expect(alias_service.ClassifyPath(short_path) == helen::FileWriteRoutingService::PathDisposition::Protected, "Short protected alias was not recognized.");
+        }
+
+        const std::filesystem::path hard_link_path = request_base / "alias-hardlink.ini";
+        if (CreateHardLinkW(hard_link_path.c_str(), alias_original.c_str(), nullptr) != FALSE)
+        {
+            Expect(alias_service.ClassifyPath(hard_link_path) == helen::FileWriteRoutingService::PathDisposition::Rejected, "Hard-link protected alias was not rejected.");
+            DeleteFileW(hard_link_path.c_str());
+        }
+
+        const std::filesystem::path reparse_path = request_base / "alias-reparse.ini";
+        if (CreateSymbolicLinkW(reparse_path.c_str(), alias_original.c_str(), 0) != FALSE)
+        {
+            Expect(alias_service.ClassifyPath(reparse_path) == helen::FileWriteRoutingService::PathDisposition::Rejected, "Reparse protected alias was not rejected.");
+            DeleteFileW(reparse_path.c_str());
+        }
 
         const std::unique_ptr<helen::FileWriteRoutingTransaction> transaction = service.BeginTrustedWrite({ redirect_path }, error);
         Expect(transaction != nullptr, "Trusted write transaction acquisition failed.");
