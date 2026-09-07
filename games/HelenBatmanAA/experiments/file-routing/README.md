@@ -1,6 +1,6 @@
 # Batman session file-routing candidates
 
-Task 5 produced two fresh, uninstalled routing candidates from committed source `e028c5d`.
+Task 5 produced two fresh, uninstalled routing candidates from committed source `455e88f`.
 Both use the verified retail `Frontend.umap` (`271916B888F83374122AF0FCCC5C685804F4C8286A92A772CD71E4F48A00F2CC`) and the read-only user input `C:\Users\Helena\Documents\Square Enix\Batman Arkham Asylum GOTY\BmGame\Config\BmEngine.ini`.
 
 The exact route in each candidate is:
@@ -82,3 +82,23 @@ rtk proxy powershell.exe -NoProfile -ExecutionPolicy Bypass -File games/HelenBat
 It returned nine `REJECTED_AS_EXPECTED` markers (five existing plus four routing) and `BATMAN_DIRECT_PACKAGE_REJECTIONS_PASS`. The earlier `candidate-d6fd...` path above is a retained historical no-route control; `candidate-215...` is the final control regenerated from `e028c5d`.
 
 The verifier utility owns BCrypt algorithm and hash handles with RAII, including error paths; this is test-only verifier hygiene and does not change production routing behavior. Live acceptance remains pending and no candidate was installed or launched.
+
+## Final fix-wave regeneration (455e88f)
+
+The authoritative final source is commit `455e88f03897c850b7e40abd2e2bb7cdb68645c8`. Its fresh normal native output is `output/routing-final-fix-native-20260907-d`; the no-save output is `output/routing-final-fix-nosave-20260907`. Both used Release/Win32/v143 and these isolated commands:
+
+```powershell
+rtk proxy powershell.exe -NoProfile -Command "& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' 'tests/HelenRuntime.Tests/HelenRuntime.Tests.vcxproj' /t:Rebuild /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143 /p:FreshOutput=C:\dev\helenhook\output\routing-final-fix-native-20260907-d /p:ForceImportBeforeCppTargets=C:\dev\helenhook\games\HelenBatmanAA\experiments\file-routing\FreshBuildIsolation.targets /m:1 /nodeReuse:false /v:minimal; exit `$LASTEXITCODE"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File games/HelenBatmanAA/experiments/windowed-resolution/Prepare-NoSaveProbe.ps1 -OutputRoot C:/dev/helenhook/output/routing-final-fix-nosave-20260907
+rtk proxy powershell.exe -NoProfile -Command "& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' 'HelenGameHook\HelenGameHook.vcxproj' /t:Rebuild /p:Configuration=Release /p:Platform=Win32 /p:ForceImportBeforeCppTargets=C:\dev\helenhook\games\HelenBatmanAA\experiments\windowed-resolution\NoSaveProbe.targets /p:NoSaveOutput=C:\dev\helenhook\output\routing-final-fix-nosave-20260907 /m:1 /nodeReuse:false /v:minimal; exit `$LASTEXITCODE"
+```
+
+Final uninstalled candidates:
+
+| Candidate | Path | DLL SHA-256 | Mode |
+| --- | --- | --- | --- |
+| Trusted-save routing | `C:\dev\helenhook\output\batman-direct-graphics\candidate-c818dbb877da42ca8a705acca365a5d0` | `B0FA2BDFBF1E8DC48DFE55966086FBA71A7E503B2A647BD5A66ACFBD6DC7924E` | `TrustedSaveRouting` |
+| Routing plus no-save probe | `C:\dev\helenhook\output\batman-direct-graphics\candidate-4699beb4b778468ca5030d6ae673fecc` | `1920EF2081956D236CBB8C195FEF6F8892A7B60E81FF03D140D8756D09A53FE0` | `RoutingNoSaveProbe` |
+| No-route control | `C:\dev\helenhook\output\batman-direct-graphics\candidate-aac36145d0ba4c03ad0f7f25d5ab28b1` | `B0FA2BDFBF1E8DC48DFE55966086FBA71A7E503B2A647BD5A66ACFBD6DC7924E` | `NoRoute` |
+
+The no-save generated source SHA-256 is `CD533AFDB711CCF06A8FA76C90C7EC8F38B564B869030457372A247C9E0134E1`. The fresh full suite printed `PASS` plus all Batman/routing child markers. Package/rejection verification printed all nine `REJECTED_AS_EXPECTED` markers and `BATMAN_DIRECT_PACKAGE_REJECTIONS_PASS`; `Test-NoSaveSession.ps1` printed `NO_SAVE_SESSION_PASS`. Candidates remain uninstalled and `liveTestPending` remains true.

@@ -24,19 +24,25 @@ The live guide now describes the trusted candidate as config-save-only: explicit
 
 ## TDD / verification evidence
 
-The regression assertions were written before the production edits. The pre-fix native test rebuild attempt was interrupted by the workspace MSBuild wrapper after partial compilation; the direct full-suite executable therefore was not available for a behavioral pre-fix run. This deviation is disclosed rather than represented as a passing RED run.
+The reviewed behavioral RED cases were real file operations, not compile-only checks: before the fixes, original-read `FILE_FLAG_DELETE_ON_CLOSE` removed the protected original, `GENERIC_ALL`/`OPEN_EXISTING` could select the original, an unrelated handle could rename over a protected destination, and a protected directory handle could rename its parent. The final service and imported fixtures now assert the corresponding physical bytes, existence, and no-mutation outcomes. The native GREEN run below covers the same operations after the fixes.
 
-Direct v143 Win32 compilation checks after the edits succeeded with no diagnostics:
+The authoritative build used the proven isolated wrapper (MSBuild 18.9.1, v143, Release, Win32, `/m:1`, `FreshBuildIsolation.targets`) from source commit `455e88f03897c850b7e40abd2e2bb7cdb68645c8`:
 
-```text
-FileApiHookSet.cpp
-FileWriteRoutingService.cpp
-FileWriteRoutingHookFixture.cpp
-FileWriteRoutingServiceTests.cpp
-BatmanDirectGraphicsPackageTests.cpp
+```powershell
+rtk proxy powershell.exe -NoProfile -Command "& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' 'tests/HelenRuntime.Tests/HelenRuntime.Tests.vcxproj' /t:Rebuild /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143 /p:FreshOutput=C:\dev\helenhook\output\routing-final-fix-native-20260907-d /p:ForceImportBeforeCppTargets=C:\dev\helenhook\games\HelenBatmanAA\experiments\file-routing\FreshBuildIsolation.targets /m:1 /nodeReuse:false /v:minimal; exit `$LASTEXITCODE"
 ```
 
-The normal MSBuild invocation is currently blocked in this environment by the inherited duplicate `Path`/`PATH` environment entries (`MSB6001`, `Item has already been added`); the `rtk proxy` child returned before the later build output. A fresh full native build and behavioral GREEN run remain required from the controller using its isolated build wrapper.
+Build completed successfully. The fresh artifacts hash to:
+
+```text
+HelenGameHook.dll (normal): B0FA2BDFBF1E8DC48DFE55966086FBA71A7E503B2A647BD5A66ACFBD6DC7924E
+HelenRuntime.lib (normal): C59533A7E662061E339A20555AA58BF5667A7D25EBD5377FE051A0FB4516F7FC
+HelenGameHook.dll (no-save): 1920EF2081956D236CBB8C195FEF6F8892A7B60E81FF03D140D8756D09A53FE0
+HelenRuntime.lib (no-save): D34699978DC6D9058C61876BC3FB0336F74E17BF01A00D6BCDB676D27EAD251B
+Generated no-save source: CD533AFDB711CCF06A8FA76C90C7EC8F38B564B869030457372A247C9E0134E1
+```
+
+The full console run through `Invoke-BatmanConsoleTool.ps1` exited 0 and printed `BATMAN_PARTIAL_SYNC_CHILD_PASS`, `BATMAN_RECOVERED_SYNC_CHILD_PASS`, `BATMAN_FAILED_SAVE_SYNC_CHILD_PASS`, `GENERATED_BATMAN_PROTOCOL_PASS`, `FILE_ROUTING_HOOK_CHILD_PASS`, `FILE_ROUTING_HOOK_CHILD_EXIT=0`, and `PASS`. The package builder printed `BATMAN_DIRECT_GRAPHICS_FRONTEND_PASS`, `BATMAN_DIRECT_PACKAGE_PASS`, `BATMAN_DIRECT_DELTA_PASS`, and `VERIFIED_DIRECT_GRAPHICS_CANDIDATE` for both fresh routing modes; the expected FFDec profile-lock warning remains environmental. The rejection verifier printed all nine `REJECTED_AS_EXPECTED` cases and `BATMAN_DIRECT_PACKAGE_REJECTIONS_PASS`. The no-save session check printed `NO_SAVE_SESSION_PASS` and confirmed both INIs unchanged.
 
 ## Files changed
 
@@ -47,4 +53,14 @@ The normal MSBuild invocation is currently blocked in this environment by the in
 - `tests/HelenRuntime.Tests/BatmanDirectGraphicsPackageTests.cpp`
 - `games/HelenBatmanAA/experiments/file-routing/README.md`
 
-No candidate artifacts were generated or installed in this wave. The controller must rebuild and regenerate candidates after committing source changes.
+## Final commits and candidates
+
+Finding commits are `8f4d2ac` (behavioral classification, rename guard, guide, RAII, and initial style), `7582063` (preserve unrelated sibling renames), `5c6d18e` (coverage, helper separation, fields-first layout, and final test fixes), and `455e88f` (range-limited final rename-helper/detour formatting). No commit amended or pushed; `batma/` remains untouched.
+
+Fresh uninstalled candidates were generated from `455e88f`:
+
+- Trusted routing: `C:\dev\helenhook\output\batman-direct-graphics\candidate-c818dbb877da42ca8a705acca365a5d0`; source/candidate DLL SHA-256 `B0FA2BDFBF1E8DC48DFE55966086FBA71A7E503B2A647BD5A66ACFBD6DC7924E`.
+- Routing plus no-save probe: `C:\dev\helenhook\output\batman-direct-graphics\candidate-4699beb4b778468ca5030d6ae673fecc`; source/candidate DLL SHA-256 `1920EF2081956D236CBB8C195FEF6F8892A7B60E81FF03D140D8756D09A53FE0`; generated source SHA-256 `CD533AFDB711CCF06A8FA76C90C7EC8F38B564B869030457372A247C9E0134E1`.
+- No-route control: `C:\dev\helenhook\output\batman-direct-graphics\candidate-aac36145d0ba4c03ad0f7f25d5ab28b1`.
+
+No candidate was installed or launched. Remaining concerns are the pre-existing `Hook.cpp` C4244 warning, FFDec's profile-lock warning, and `liveTestPending: true`; no real user INI was written.
