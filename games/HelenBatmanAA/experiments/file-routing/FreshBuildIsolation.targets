@@ -1,0 +1,7 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Keeps every fresh candidate build's outputs and project intermediates outside shared bin/obj trees. -->
+  <PropertyGroup>
+    <OutDir>$(FreshOutput)\native\</OutDir>
+    <IntDir>$(FreshOutput)\obj\$(MSBuildProjectName)\</IntDir>
+  </PropertyGroup>
+</Project>

@@ -1,7 +1,12 @@
 param(
     [Parameter(Mandatory = $true)][string]$NativeDllPath,
     [Parameter(Mandatory = $true)][string]$RuntimeLibraryPath,
-    [Parameter(Mandatory = $true)][string]$BatmanUserIniPath
+    [Parameter(Mandatory = $true)][string]$BatmanUserIniPath,
+    [switch]$EnableFileWriteRouting,
+    [ValidateSet('NoRoute', 'TrustedSaveRouting', 'RoutingNoSaveProbe')][string]$CandidateMode = 'NoRoute',
+    [string]$SourceCommit,
+    [string]$NativeOutputRoot,
+    [string]$GeneratedSourcePath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +26,19 @@ $patcherProject = Join-Path $builderRoot 'tools\NativeSubtitleExePatcher\BmGameG
 $builderDll = Join-Path (Split-Path -Parent $builderProject) 'bin\Release\net8.0\SubtitleSizeModBuilder.dll'
 $patcherDll = Join-Path (Split-Path -Parent $patcherProject) 'bin\Release\net8.0\BmGameGfxPatcher.dll'
 $ffdec = Join-Path $builderRoot 'extracted\ffdec\ffdec-cli.exe'
+
+if (-not $EnableFileWriteRouting -and $CandidateMode -ne 'NoRoute') {
+    throw 'A routing candidate mode requires -EnableFileWriteRouting.'
+}
+if ($EnableFileWriteRouting -and $CandidateMode -eq 'NoRoute') {
+    throw 'A routing candidate must identify its mode as TrustedSaveRouting or RoutingNoSaveProbe.'
+}
+if ([string]::IsNullOrWhiteSpace($SourceCommit)) {
+    $SourceCommit = ((& $consoleTool -FilePath git -Arguments @('-C', $repoRoot, 'rev-parse', 'HEAD')) | Select-Object -Last 1).Trim()
+}
+if ([string]::IsNullOrWhiteSpace($NativeOutputRoot)) {
+    $NativeOutputRoot = Split-Path -Parent ([IO.Path]::GetFullPath($NativeDllPath))
+}
 
 function Write-CandidateJson {
     <# Writes only newly constructed candidate metadata; never imports another pack's declarations. #>
@@ -61,11 +79,19 @@ Write-CandidateJson (Join-Path $packRoot 'pack.json') ([ordered]@{
     targets = @([ordered]@{ gameId = 'batman-arkham-asylum'; executables = @('ShippingPC-BmGame.exe') })
     config = @(); builds = @('steam-goty-1.0')
 })
-Write-CandidateJson (Join-Path $buildRoot 'build.json') ([ordered]@{
+$buildManifest = [ordered]@{
     id = 'steam-goty-1.0'; executable = 'ShippingPC-BmGame.exe'
     match = [ordered]@{ fileSize = 38758728; sha256 = '4DAC1F5E2AC6710B7378FDCE74601F616F4753E3756CB5FDA63C7519CC2EB028' }
     startupCommands = @()
-})
+}
+if ($EnableFileWriteRouting) {
+    $buildManifest.fileWriteRoutes = @([ordered]@{
+        id = 'engine-config'; root = 'documents'
+        path = 'Square Enix/Batman Arkham Asylum GOTY/BmGame/Config/BmEngine.ini'
+        writePolicy = 'redirect'; readPolicy = 'redirected'; lifetime = 'session'
+    })
+}
+Write-CandidateJson (Join-Path $buildRoot 'build.json') $buildManifest
 Write-CandidateJson (Join-Path $buildRoot 'bindings.json') ([ordered]@{ bindings = @() })
 Write-CandidateJson (Join-Path $buildRoot 'commands.json') ([ordered]@{ commands = @() })
 Write-CandidateJson (Join-Path $buildRoot 'hooks.json') ([ordered]@{
@@ -88,10 +114,19 @@ Write-CandidateJson (Join-Path $buildRoot 'files.json') ([ordered]@{ virtualFile
 }) })
 $candidateDll = Join-Path $candidateRoot 'HelenGameHook.dll'
 Copy-Item -LiteralPath $NativeDllPath -Destination $candidateDll
-& (Join-Path $PSScriptRoot 'Test-BatmanDirectGraphicsPackage.ps1') -PackParent $packParent -BasePath $basePath -TargetPath $targetPath -NativeDllPath $candidateDll -RuntimeLibraryPath $RuntimeLibraryPath
+$routeMode = if ($EnableFileWriteRouting) { 'engine-config' } else { 'none' }
+& (Join-Path $PSScriptRoot 'Test-BatmanDirectGraphicsPackage.ps1') -PackParent $packParent -BasePath $basePath -TargetPath $targetPath -NativeDllPath $candidateDll -RuntimeLibraryPath $RuntimeLibraryPath -ExpectedRouteMode $routeMode
+$generatedSourceHash = $null
+if (-not [string]::IsNullOrWhiteSpace($GeneratedSourcePath)) {
+    if (-not (Test-Path -LiteralPath $GeneratedSourcePath -PathType Leaf)) { throw "Generated source input missing: $GeneratedSourcePath" }
+    $generatedSourceHash = (Get-FileHash -LiteralPath $GeneratedSourcePath -Algorithm SHA256).Hash
+}
 Write-CandidateJson (Join-Path $candidateRoot 'provenance.json') ([ordered]@{
+    sourceCommit = $SourceCommit; mode = $CandidateMode; liveTestPending = $true
+    routingPolicy = if ($EnableFileWriteRouting) { 'engine-config: documents/Square Enix/Batman Arkham Asylum GOTY/BmGame/Config/BmEngine.ini; redirect writes; redirected reads; session lifetime' } else { 'none' }
     nativeInput = [IO.Path]::GetFullPath($NativeDllPath); nativeSha256 = (Get-FileHash -LiteralPath $candidateDll).Hash
     runtimeLibrary = [IO.Path]::GetFullPath($RuntimeLibraryPath); runtimeSha256 = (Get-FileHash -LiteralPath $RuntimeLibraryPath).Hash
+    nativeOutputRoot = [IO.Path]::GetFullPath($NativeOutputRoot); generatedNoSaveSource = if ($GeneratedSourcePath) { [IO.Path]::GetFullPath($GeneratedSourcePath) } else { $null }; generatedNoSaveSourceSha256 = $generatedSourceHash
     retailBaseSha256 = (Get-FileHash -LiteralPath $basePath).Hash; gfxSha256 = (Get-FileHash -LiteralPath $gfxPath).Hash
     targetSha256 = (Get-FileHash -LiteralPath $targetPath).Hash; deltaSha256 = (Get-FileHash -LiteralPath $deltaPath).Hash
     templateSha256 = (Get-FileHash -LiteralPath (Join-Path $builderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsShellScriptTemplates.cs')).Hash
