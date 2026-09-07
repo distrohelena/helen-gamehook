@@ -430,12 +430,17 @@ namespace
      * @brief Returns true when an access/disposition request can mutate a file.
      * @param access Desired access mask.
      * @param disposition Creation disposition.
+     * @param flags File flags whose delete-on-close semantics can mutate a file.
      * @return True for write, delete, truncate, or creation semantics.
      */
-    bool IsWriteRequest(DWORD access, DWORD disposition)
+    bool IsWriteRequest(DWORD access, DWORD disposition, DWORD flags)
     {
-        constexpr DWORD write_access = GENERIC_WRITE | FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | DELETE;
-        return (access & write_access) != 0 || disposition == CREATE_NEW || disposition == CREATE_ALWAYS || disposition == OPEN_ALWAYS || disposition == TRUNCATE_EXISTING;
+        constexpr DWORD mutation_access = GENERIC_WRITE | GENERIC_ALL | FILE_WRITE_DATA | FILE_APPEND_DATA |
+            FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | DELETE | WRITE_DAC | WRITE_OWNER | ACCESS_SYSTEM_SECURITY | MAXIMUM_ALLOWED;
+        const bool mutation_disposition = disposition == CREATE_NEW || disposition == CREATE_ALWAYS ||
+            disposition == OPEN_ALWAYS || disposition == TRUNCATE_EXISTING;
+        return (access & mutation_access) != 0 || mutation_disposition ||
+            (flags & FILE_FLAG_DELETE_ON_CLOSE) != 0;
     }
 
     /**
@@ -864,7 +869,7 @@ namespace helen
             return INVALID_HANDLE_VALUE;
         }
 
-        const bool write_request = IsWriteRequest(access, disposition);
+        const bool write_request = IsWriteRequest(access, disposition, flags);
         if (route->second.WritePolicy == FileWritePolicy::Deny && write_request)
         {
             SetLastError(ERROR_ACCESS_DENIED);
@@ -875,12 +880,6 @@ namespace helen
         if (route->second.WritePolicy == FileWritePolicy::Redirect && (write_request || route->second.ReadPolicy == FileReadPolicy::Redirected))
         {
             target_path = overlay_paths_.at(route_key);
-        }
-
-        if (route->second.WritePolicy == FileWritePolicy::Deny && (flags & FILE_FLAG_DELETE_ON_CLOSE) != 0)
-        {
-            SetLastError(ERROR_ACCESS_DENIED);
-            return INVALID_HANDLE_VALUE;
         }
 
         const HANDLE handle = CallNativeCreateFileW(target_path.wstring().c_str(), access, share, security_attributes, disposition, flags, template_file);

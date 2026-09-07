@@ -9,6 +9,8 @@
 #include "FileApiCodePageGuard.h"
 
 #include <array>
+#include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -118,6 +120,26 @@ namespace
         DWORD bytes_written = 0;
         ExpectHookFixture(WriteFile(handle, &value, 1, &bytes_written, nullptr) != FALSE && bytes_written == 1,
             "Imported WriteFile failed for routed fixture handle.");
+    }
+
+    /**
+     * @brief Encodes one bounded FILE_RENAME_INFO payload for imported handle-rename coverage.
+     * @param destination Destination name copied into the payload.
+     * @param root_directory Optional native directory handle used for relative names.
+     * @param flags Legacy replace byte or FileRenameInfoEx flags.
+     * @return Exact bytes and length passed to SetFileInformationByHandle.
+     */
+    std::vector<BYTE> BuildRenameInformation(const std::filesystem::path& destination, HANDLE root_directory, DWORD flags)
+    {
+        const std::wstring name = destination.wstring();
+        const std::size_t header_size = offsetof(FILE_RENAME_INFO, FileName);
+        std::vector<BYTE> payload(header_size + name.size() * sizeof(wchar_t));
+        std::memcpy(payload.data(), &flags, sizeof(flags));
+        std::memcpy(payload.data() + offsetof(FILE_RENAME_INFO, RootDirectory), &root_directory, sizeof(root_directory));
+        const DWORD name_length = static_cast<DWORD>(name.size() * sizeof(wchar_t));
+        std::memcpy(payload.data() + offsetof(FILE_RENAME_INFO, FileNameLength), &name_length, sizeof(name_length));
+        std::memcpy(payload.data() + header_size, name.data(), name_length);
+        return payload;
     }
 
     /**
@@ -261,6 +283,7 @@ void RunFileWriteRoutingHookFixtureTests()
 {
     const std::filesystem::path root = CreateUniqueHookFixtureRoot();
     const std::filesystem::path original_path = root / "BmEngine.ini";
+    const std::filesystem::path original_read_path = root / "OriginalRead.ini";
     const std::filesystem::path deny_path = root / "Deny.ini";
     const std::filesystem::path source_path = root / "BmEngine.tmp";
     const std::filesystem::path unrelated_path = root / "Unrelated.ini";
@@ -277,6 +300,7 @@ void RunFileWriteRoutingHookFixtureTests()
     const std::filesystem::path switched_attributes_path = switch_directory / "CapturedAttributes.ini";
     const std::filesystem::path ansi_native_switched_path = switch_directory / "NativeCapturedA.ini";
     WriteHookFixtureFile(original_path, "ORIGINAL");
+    WriteHookFixtureFile(original_read_path, "ORIGINAL-READ");
     WriteHookFixtureFile(deny_path, "DENY");
     WriteHookFixtureFile(source_path, "COPY");
     WriteHookFixtureFile(unrelated_path, "NATIVE");
@@ -308,6 +332,7 @@ void RunFileWriteRoutingHookFixtureTests()
         DWORD error = ERROR_SUCCESS;
         ExpectHookFixture(routing.Initialize({
             { "engine", original_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+            { "original-read", original_read_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Original },
             { "deny", deny_path, helen::FileWritePolicy::Deny, helen::FileReadPolicy::Original },
             { "captured", captured_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
             { "capturedAttributes", captured_attributes_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Original },
@@ -501,6 +526,31 @@ void RunFileWriteRoutingHookFixtureTests()
             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         ExpectHookFixture(denied == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED, "Imported denied CreateFileA was not rejected.");
 
+        std::filesystem::path original_read_overlay;
+        for (const helen::FileWriteRoutingService::RouteDiagnostics& route : routing.GetRouteDiagnostics())
+        {
+            if (route.Id == "original-read")
+            {
+                original_read_overlay = route.OverlayPath;
+            }
+        }
+        ExpectHookFixture(!original_read_overlay.empty(), "Imported original-read overlay diagnostics were missing.");
+        HANDLE original_read_full_access = imported_create_file_w(original_read_path.c_str(), GENERIC_ALL,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ExpectHookFixture(original_read_full_access != INVALID_HANDLE_VALUE, "Imported original-read full-access open failed.");
+        WriteHookedByte(original_read_full_access, 'Y');
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(original_read_full_access) != FALSE &&
+            ReadHookFixtureFile(original_read_path) == "ORIGINAL-READ" && ReadHookFixtureFile(original_read_overlay) == "Y",
+            "Imported original-read full-access write changed the original.");
+        HANDLE original_read_delete_on_close = imported_create_file_w(original_read_path.c_str(), GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+        ExpectHookFixture(original_read_delete_on_close != INVALID_HANDLE_VALUE,
+            "Imported original-read delete-on-close open was rejected unexpectedly.");
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(original_read_delete_on_close) != FALSE &&
+            std::filesystem::exists(original_read_path) && ReadHookFixtureFile(original_read_path) == "ORIGINAL-READ",
+            "Imported original-read delete-on-close removed or changed the original.");
+
         const std::filesystem::path extended_original = std::filesystem::path(L"\\\\?\\" + original_path.wstring());
         ExpectHookFixture(CallHookedImport<decltype(&CopyFileW)>("CopyFileW")(alias_source_path.c_str(), extended_original.c_str(), FALSE) != FALSE,
             "Extended protected destination did not redirect its overlay.");
@@ -530,6 +580,111 @@ void RunFileWriteRoutingHookFixtureTests()
             "Imported ReplaceFileW did not route destination.");
         ExpectHookFixture(CallHookedImport<decltype(&SetFileAttributesA)>("SetFileAttributesA")(original_path.string().c_str(), FILE_ATTRIBUTE_HIDDEN) != FALSE,
             "Imported SetFileAttributesA did not route destination.");
+
+        const std::filesystem::path rename_source_path = root / "handle-rename-source.tmp";
+        WriteHookFixtureFile(rename_source_path, "RENAME-SOURCE");
+        HANDLE rename_source = imported_create_file_w(rename_source_path.c_str(), DELETE | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ExpectHookFixture(rename_source != INVALID_HANDLE_VALUE, "Unprotected handle-rename source could not be opened.");
+        const std::vector<BYTE> protected_destination_rename = BuildRenameInformation(original_path, nullptr, 1);
+        ExpectHookFixture(CallHookedImport<decltype(&SetFileInformationByHandle)>("SetFileInformationByHandle")(
+            rename_source, FileRenameInfo, const_cast<BYTE*>(protected_destination_rename.data()),
+            static_cast<DWORD>(protected_destination_rename.size())) == FALSE && GetLastError() == ERROR_ACCESS_DENIED,
+            "Unprotected source handle renamed over a protected destination.");
+        ExpectHookFixture(ReadHookFixtureFile(rename_source_path) == "RENAME-SOURCE" && ReadHookFixtureFile(original_path) == "ORIGINAL",
+            "Rejected protected-destination rename mutated an operand.");
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(rename_source) != FALSE,
+            "Protected-destination rename source close failed.");
+
+        HANDLE protected_parent = imported_create_file_w(root.c_str(), DELETE | FILE_LIST_DIRECTORY,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        ExpectHookFixture(protected_parent != INVALID_HANDLE_VALUE, "Protected parent directory handle could not be opened.");
+        const std::vector<BYTE> parent_rename = BuildRenameInformation(root.parent_path() / "renamed-routing-parent", nullptr, 0);
+        ExpectHookFixture(CallHookedImport<decltype(&SetFileInformationByHandle)>("SetFileInformationByHandle")(
+            protected_parent, FileRenameInfo, const_cast<BYTE*>(parent_rename.data()), static_cast<DWORD>(parent_rename.size())) == FALSE &&
+            GetLastError() == ERROR_INVALID_PARAMETER,
+            "Protected parent directory handle rename was not rejected before mutation.");
+        ExpectHookFixture(std::filesystem::exists(root) && std::filesystem::exists(original_path) && ReadHookFixtureFile(original_path) == "ORIGINAL",
+            "Rejected protected-parent rename changed protected state.");
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(protected_parent) != FALSE,
+            "Protected parent directory handle close failed.");
+
+        const std::filesystem::path unrelated_rename_directory = root / "unrelated-rename";
+        ExpectHookFixture(CreateDirectoryW(unrelated_rename_directory.c_str(), nullptr) != FALSE,
+            "Unrelated handle-rename directory could not be created.");
+        const std::filesystem::path unrelated_rename_source_path = unrelated_rename_directory / "unrelated-handle-source.tmp";
+        const std::filesystem::path unrelated_rename_destination_path = unrelated_rename_directory / "unrelated-handle-destination.tmp";
+        WriteHookFixtureFile(unrelated_rename_source_path, "NATIVE-RENAME");
+        HANDLE unrelated_rename_source = imported_create_file_w(unrelated_rename_source_path.c_str(), DELETE | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ExpectHookFixture(unrelated_rename_source != INVALID_HANDLE_VALUE, "Unrelated handle-rename source could not be opened.");
+        const std::vector<BYTE> unrelated_rename = BuildRenameInformation(unrelated_rename_destination_path, nullptr, 0);
+        ExpectHookFixture(CallHookedImport<decltype(&SetFileInformationByHandle)>("SetFileInformationByHandle")(
+            unrelated_rename_source, FileRenameInfo, const_cast<BYTE*>(unrelated_rename.data()), static_cast<DWORD>(unrelated_rename.size())) != FALSE,
+            "Unrelated native handle rename no longer retained native behavior.");
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(unrelated_rename_source) != FALSE &&
+            !std::filesystem::exists(unrelated_rename_source_path) && ReadHookFixtureFile(unrelated_rename_destination_path) == "NATIVE-RENAME",
+            "Unrelated native handle rename did not publish its destination.");
+
+        WriteHookFixtureFile(rename_source_path, "MALFORMED");
+        HANDLE malformed_source = imported_create_file_w(rename_source_path.c_str(), DELETE | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ExpectHookFixture(malformed_source != INVALID_HANDLE_VALUE, "Malformed-rename source could not be opened.");
+        ExpectHookFixture(CallHookedImport<decltype(&SetFileInformationByHandle)>("SetFileInformationByHandle")(
+            malformed_source, FileRenameInfo, nullptr, sizeof(FILE_RENAME_INFO) - 1) == FALSE && GetLastError() == ERROR_INVALID_PARAMETER,
+            "Malformed rename buffer was not rejected safely.");
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(malformed_source) != FALSE &&
+            ReadHookFixtureFile(rename_source_path) == "MALFORMED",
+            "Malformed rename buffer changed its source.");
+
+        const std::filesystem::path rename_cwd_original = root / "rename-cwd-original";
+        const std::filesystem::path rename_cwd_switched = root / "rename-cwd-switched";
+        ExpectHookFixture(CreateDirectoryW(rename_cwd_original.c_str(), nullptr) != FALSE &&
+            CreateDirectoryW(rename_cwd_switched.c_str(), nullptr) != FALSE,
+            "CWD-switch rename directories could not be created.");
+        const std::filesystem::path cwd_rename_source_path = rename_cwd_original / "cwd-rename-source.tmp";
+        const std::filesystem::path cwd_rename_destination_path = rename_cwd_original / "cwd-rename-target.tmp";
+        const std::filesystem::path cwd_switched_destination_path = rename_cwd_switched / "cwd-rename-target.tmp";
+        WriteHookFixtureFile(cwd_rename_source_path, "CWD-RENAME");
+        HANDLE cwd_rename_source = imported_create_file_w(cwd_rename_source_path.c_str(), DELETE | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ExpectHookFixture(cwd_rename_source != INVALID_HANDLE_VALUE, "CWD-switch rename source could not be opened.");
+        {
+            CurrentDirectoryGuard current_directory_guard;
+            current_directory_guard.Set(rename_cwd_original);
+            CapturedPathSwitchGuard captured_path_switch(*main_module, L"cwd-rename-target.tmp", rename_cwd_switched);
+            const std::vector<BYTE> relative_cwd_rename = BuildRenameInformation(L"cwd-rename-target.tmp", nullptr, 0);
+            ExpectHookFixture(CallHookedImport<decltype(&SetFileInformationByHandle)>("SetFileInformationByHandle")(
+                cwd_rename_source, FileRenameInfo, const_cast<BYTE*>(relative_cwd_rename.data()),
+                static_cast<DWORD>(relative_cwd_rename.size())) != FALSE && captured_path_switch.Triggered(),
+                "CWD-switch handle rename did not capture its relative destination before dispatch.");
+        }
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(cwd_rename_source) != FALSE &&
+            ReadHookFixtureFile(cwd_rename_destination_path) == "CWD-RENAME" &&
+            !std::filesystem::exists(cwd_switched_destination_path) && !std::filesystem::exists(cwd_rename_source_path),
+            "CWD-switch handle rename dispatched its uncaptured relative destination.");
+
+        const std::filesystem::path native_root = root / "native-root";
+        CreateDirectoryW(native_root.c_str(), nullptr);
+        const std::filesystem::path rooted_source_path = native_root / "rooted-source.tmp";
+        const std::filesystem::path rooted_destination_path = native_root / "rooted-destination.tmp";
+        WriteHookFixtureFile(rooted_source_path, "ROOTED-RENAME");
+        HANDLE native_root_handle = imported_create_file_w(native_root.c_str(), FILE_LIST_DIRECTORY | DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        HANDLE rooted_source = imported_create_file_w(rooted_source_path.c_str(), DELETE | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ExpectHookFixture(native_root_handle != INVALID_HANDLE_VALUE && rooted_source != INVALID_HANDLE_VALUE,
+            "Valid RootDirectory rename handles could not be opened.");
+        const std::vector<BYTE> rooted_rename = BuildRenameInformation(L"rooted-destination.tmp", native_root_handle, 0);
+        ExpectHookFixture(CallHookedImport<decltype(&SetFileInformationByHandle)>("SetFileInformationByHandle")(
+            rooted_source, FileRenameInfo, const_cast<BYTE*>(rooted_rename.data()), static_cast<DWORD>(rooted_rename.size())) != FALSE,
+            "Valid unrelated RootDirectory rename was rejected.");
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(rooted_source) != FALSE &&
+            CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(native_root_handle) != FALSE &&
+            ReadHookFixtureFile(rooted_destination_path) == "ROOTED-RENAME" && !std::filesystem::exists(rooted_source_path),
+            "Valid RootDirectory rename did not publish its destination.");
+
         HANDLE routed_read = CreateFileW(original_path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         ExpectHookFixture(routed_read != INVALID_HANDLE_VALUE, "Imported routed read handle could not be opened.");

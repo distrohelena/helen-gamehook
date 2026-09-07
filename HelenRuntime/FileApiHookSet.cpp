@@ -1,7 +1,10 @@
 #include <filesystem>
+#include <cstddef>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <HelenHook/FileApiHookSet.h>
 
@@ -475,6 +478,207 @@ namespace
         }
 
         return process_handle != nullptr && GetProcessId(process_handle) == GetCurrentProcessId();
+    }
+
+    /**
+     * @brief Captures a stable normalized final path from a native handle.
+     * @param handle Native file or directory handle to inspect.
+     * @param path Receives the final path captured from the handle.
+     * @return True when the handle identifies an existing filesystem object.
+     */
+    bool TryGetHandleFinalPath(HANDLE handle, std::wstring& path)
+    {
+        std::vector<wchar_t> buffer(512);
+        for (;;)
+        {
+            const DWORD length = GetFinalPathNameByHandleW(handle, buffer.data(), static_cast<DWORD>(buffer.size()), FILE_NAME_NORMALIZED);
+            if (length == 0 || length >= 32768)
+            {
+                return false;
+            }
+
+            if (length < buffer.size())
+            {
+                path.assign(buffer.data(), length);
+                return true;
+            }
+
+            buffer.resize(static_cast<std::size_t>(length) + 1);
+        }
+    }
+
+    /**
+     * @brief Copies caller memory under a Windows guarded exception boundary.
+     * @param source Caller address to read.
+     * @param destination Owned buffer receiving the bytes.
+     * @param size Number of bytes to copy.
+     * @return True when the complete copy was readable.
+     */
+    bool TryCopyCallerMemory(const void* source, void* destination, std::size_t size) noexcept
+    {
+        __try
+        {
+            std::memcpy(destination, source, size);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    /**
+     * @brief Builds a native rename payload whose name is the already-classified absolute path.
+     * @param flags Captured legacy replace byte or FileRenameInfoEx flags.
+     * @param destination Absolute destination path selected for classification.
+     * @param payload Receives the payload with a null RootDirectory and absolute FileName.
+     * @return True when the destination fits the bounded FILE_RENAME_INFO representation.
+     */
+    bool BuildAbsoluteRenamePayload(DWORD flags, const std::filesystem::path& destination,
+        std::vector<BYTE>& payload)
+    {
+        const std::wstring name = destination.wstring();
+        constexpr std::size_t header_size = offsetof(FILE_RENAME_INFO, FileName);
+        if (name.empty() || name.size() > (32768u / sizeof(wchar_t)) ||
+            name.size() > (std::numeric_limits<DWORD>::max() / sizeof(wchar_t)))
+        {
+            return false;
+        }
+
+        const DWORD name_length = static_cast<DWORD>(name.size() * sizeof(wchar_t));
+        payload.assign(header_size + name_length, 0);
+        std::memcpy(payload.data(), &flags, sizeof(flags));
+        const HANDLE root_directory = nullptr;
+        std::memcpy(payload.data() + offsetof(FILE_RENAME_INFO, RootDirectory), &root_directory, sizeof(root_directory));
+        std::memcpy(payload.data() + offsetof(FILE_RENAME_INFO, FileNameLength), &name_length, sizeof(name_length));
+        std::memcpy(payload.data() + header_size, name.data(), name_length);
+        return true;
+    }
+
+    /**
+     * @brief Reads and bounds-checks one handle-rename payload before any native mutation.
+     * @param information_class Rename information class supplied by the caller.
+     * @param information Untrusted caller buffer containing the rename payload.
+     * @param information_size Number of bytes available in the caller buffer.
+     * @param destination Receives the absolute destination path captured from the payload.
+     * @param captured_payload Receives the exact bounded payload sent to native dispatch.
+     * @return True when the payload has supported, internally consistent operands.
+     */
+    bool TryCaptureRenameDestination(FILE_INFO_BY_HANDLE_CLASS information_class, LPVOID information,
+        DWORD information_size, std::filesystem::path& destination, std::vector<BYTE>& captured_payload)
+    {
+        if (information == nullptr || (information_class != FileRenameInfo && information_class != FileRenameInfoEx))
+        {
+            return false;
+        }
+
+        constexpr std::size_t header_size = offsetof(FILE_RENAME_INFO, FileName);
+        if (information_size < header_size)
+        {
+            return false;
+        }
+
+        HANDLE root_directory = nullptr;
+        DWORD file_name_length = 0;
+        DWORD flags = 0;
+        if (!TryCopyCallerMemory(static_cast<const BYTE*>(information) + offsetof(FILE_RENAME_INFO, RootDirectory),
+                &root_directory, sizeof(root_directory)) ||
+            !TryCopyCallerMemory(static_cast<const BYTE*>(information) + offsetof(FILE_RENAME_INFO, FileNameLength),
+                &file_name_length, sizeof(file_name_length)) ||
+            !TryCopyCallerMemory(information, &flags, sizeof(flags)))
+        {
+            return false;
+        }
+
+        if (file_name_length == 0 || (file_name_length % sizeof(wchar_t)) != 0 ||
+            file_name_length > information_size - header_size || file_name_length > 32768 * sizeof(wchar_t))
+        {
+            return false;
+        }
+
+        if (information_class == FileRenameInfo && static_cast<BOOLEAN>(flags & 0xFFu) > 1)
+        {
+            return false;
+        }
+
+        if (information_class == FileRenameInfoEx && (flags & ~(FILE_RENAME_FLAG_REPLACE_IF_EXISTS |
+            FILE_RENAME_FLAG_POSIX_SEMANTICS | FILE_RENAME_FLAG_SUPPRESS_PIN_STATE_INHERITANCE)) != 0)
+        {
+            return false;
+        }
+
+        std::vector<BYTE> payload(header_size + file_name_length);
+        if (!TryCopyCallerMemory(information, payload.data(), payload.size()))
+        {
+            return false;
+        }
+
+        HANDLE captured_root_directory = nullptr;
+        DWORD captured_file_name_length = 0;
+        std::memcpy(&captured_root_directory, payload.data() + offsetof(FILE_RENAME_INFO, RootDirectory), sizeof(captured_root_directory));
+        std::memcpy(&captured_file_name_length, payload.data() + offsetof(FILE_RENAME_INFO, FileNameLength), sizeof(captured_file_name_length));
+        DWORD captured_flags = 0;
+        std::memcpy(&captured_flags, payload.data(), sizeof(captured_flags));
+        const bool flags_match = information_class == FileRenameInfo
+            ? static_cast<BYTE>(captured_flags) == static_cast<BYTE>(flags)
+            : captured_flags == flags;
+        if (captured_root_directory != root_directory || captured_file_name_length != file_name_length || !flags_match)
+        {
+            return false;
+        }
+
+        const auto* captured_name = reinterpret_cast<const wchar_t*>(payload.data() + header_size);
+        const std::wstring file_name(captured_name, file_name_length / sizeof(wchar_t));
+        if (file_name.empty() || file_name.find(L'\0') != std::wstring::npos)
+        {
+            return false;
+        }
+
+        const std::size_t drive_colon = file_name.size() > 1 && file_name[1] == L':' ? 1 : std::wstring::npos;
+        const std::size_t stream_colon = file_name.find(L':', drive_colon == std::wstring::npos ? 0 : 2);
+        if (stream_colon != std::wstring::npos)
+        {
+            return false;
+        }
+
+        const std::filesystem::path relative_or_absolute(file_name);
+        if (root_directory != nullptr)
+        {
+            std::wstring root_path;
+            if (relative_or_absolute.is_absolute() || !TryGetHandleFinalPath(root_directory, root_path))
+            {
+                return false;
+            }
+            const DWORD root_attributes = CallRealGetFileAttributesW(root_path.c_str());
+            if (root_attributes == INVALID_FILE_ATTRIBUTES || (root_attributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+            {
+                return false;
+            }
+            destination = std::filesystem::path(root_path) / relative_or_absolute;
+            return BuildAbsoluteRenamePayload(flags, destination, captured_payload);
+        }
+
+        if (relative_or_absolute.is_absolute())
+        {
+            destination = relative_or_absolute;
+            return BuildAbsoluteRenamePayload(flags, destination, captured_payload);
+        }
+
+        std::vector<wchar_t> full_path(512);
+        for (;;)
+        {
+            const DWORD length = GetFullPathNameW(file_name.c_str(), static_cast<DWORD>(full_path.size()), full_path.data(), nullptr);
+            if (length == 0)
+            {
+                return false;
+            }
+            if (length < full_path.size())
+            {
+                destination = std::filesystem::path(std::wstring(full_path.data(), length));
+                return BuildAbsoluteRenamePayload(flags, destination, captured_payload);
+            }
+            full_path.resize(static_cast<std::size_t>(length) + 1);
+        }
     }
 
     /**
@@ -1654,11 +1858,40 @@ namespace helen
     {
         FileApiHookSet* const active = Current();
         if (active == nullptr) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
-        if (active->file_write_routing_ != nullptr &&
-            (active->file_write_routing_->IsTrackedHandle(hFile) || active->file_write_routing_->ClassifyHandle(hFile) != FileWriteRoutingService::PathDisposition::Unrelated))
+        if (active->file_write_routing_ != nullptr)
         {
-            SetLastError(ERROR_ACCESS_DENIED);
-            return FALSE;
+            const bool source_is_protected = active->file_write_routing_->IsTrackedHandle(hFile) ||
+                active->file_write_routing_->ClassifyHandle(hFile) != FileWriteRoutingService::PathDisposition::Unrelated;
+            if (FileInformationClass == FileRenameInfo || FileInformationClass == FileRenameInfoEx)
+            {
+                std::wstring source_path;
+                std::filesystem::path destination_path;
+                std::vector<BYTE> captured_rename_payload;
+                if (!TryGetHandleFinalPath(hFile, source_path) ||
+                    active->file_write_routing_->IsProtectedParentPath(source_path) ||
+                    !TryCaptureRenameDestination(FileInformationClass, lpFileInformation, dwBufferSize, destination_path, captured_rename_payload))
+                {
+                    SetLastError(ERROR_INVALID_PARAMETER);
+                    return FALSE;
+                }
+
+                const FileWriteRoutingService::PathDisposition destination_disposition =
+                    active->file_write_routing_->ClassifyPath(destination_path);
+                if (source_is_protected || destination_disposition != FileWriteRoutingService::PathDisposition::Unrelated ||
+                    active->file_write_routing_->IsProtectedParentPath(destination_path.parent_path()))
+                {
+                    SetLastError(ERROR_ACCESS_DENIED);
+                    return FALSE;
+                }
+
+                return CallRealSetFileInformationByHandle(hFile, FileInformationClass, captured_rename_payload.data(),
+                    static_cast<DWORD>(captured_rename_payload.size()));
+            }
+            else if (source_is_protected)
+            {
+                SetLastError(ERROR_ACCESS_DENIED);
+                return FALSE;
+            }
         }
         return CallRealSetFileInformationByHandle(hFile, FileInformationClass, lpFileInformation, dwBufferSize);
     }

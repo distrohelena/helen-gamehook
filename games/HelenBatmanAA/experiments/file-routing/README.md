@@ -65,7 +65,7 @@ The no-save candidate intentionally exercises automatic engine resize writes onl
 
 ## Live acceptance steps (pending)
 
-When a controlled, user-approved Batman session is available, test the trusted-save candidate first: automatic engine resize writes must affect only the redirected overlay; an explicit Helen save must persist both the original and active overlay; and restart must ignore abandoned scratch. Repeat the automatic-resize-only observation with the separately labeled no-save candidate. Compare the original user INI and session overlay before/after each action, retain logs, and mark acceptance only after the controlled session. `liveTestPending` remains `true` in both provenance files.
+When a controlled, user-approved Batman session is available, test the trusted-save candidate as the normal production configuration-save flow: perform an explicit Helen save, verify that the original and active session overlay synchronize, then restart and verify abandoned scratch is ignored. The normal session does not claim automatic engine-resize writes; exercise those writes only with the separately labeled `RoutingNoSaveProbe` candidate, and do not promote that experiment to production. Compare the original user INI and session overlay before and after each action, retain logs, and mark acceptance only after the controlled session. `liveTestPending` remains `true` in both provenance files.
 
 ## Review-fix regeneration
 
@@ -81,4 +81,4 @@ rtk proxy powershell.exe -NoProfile -ExecutionPolicy Bypass -File games/HelenBat
 
 It returned nine `REJECTED_AS_EXPECTED` markers (five existing plus four routing) and `BATMAN_DIRECT_PACKAGE_REJECTIONS_PASS`. The earlier `candidate-d6fd...` path above is a retained historical no-route control; `candidate-215...` is the final control regenerated from `e028c5d`.
 
-The verifier utility still performs manual BCrypt handle cleanup on its error paths; this is a test-only verifier concern, not production routing code. Live acceptance remains pending and no candidate was installed or launched.
+The verifier utility owns BCrypt algorithm and hash handles with RAII, including error paths; this is test-only verifier hygiene and does not change production routing behavior. Live acceptance remains pending and no candidate was installed or launched.

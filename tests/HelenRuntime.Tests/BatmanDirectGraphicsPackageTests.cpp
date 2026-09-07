@@ -11,6 +11,44 @@
 #include <windows.h>
 
 namespace {
+    /**
+     * @brief Owns a BCrypt algorithm provider and closes it on every verifier exit path.
+     */
+    class BcryptAlgorithmHandle {
+        BCRYPT_ALG_HANDLE handle_ = nullptr;
+
+    public:
+        /** @brief Takes ownership of one BCrypt algorithm provider handle. */
+        explicit BcryptAlgorithmHandle(BCRYPT_ALG_HANDLE handle) noexcept : handle_(handle) {}
+        /** @brief Closes the provider when acquisition succeeded. */
+        ~BcryptAlgorithmHandle() { if (handle_ != nullptr) { BCryptCloseAlgorithmProvider(handle_, 0); } }
+        /** @brief Prevents accidental copying of a unique native provider handle. */
+        BcryptAlgorithmHandle(const BcryptAlgorithmHandle&) = delete;
+        /** @brief Prevents accidental assignment of a unique native provider handle. */
+        BcryptAlgorithmHandle& operator=(const BcryptAlgorithmHandle&) = delete;
+        /** @brief Returns the owned provider handle to BCrypt calls. */
+        BCRYPT_ALG_HANDLE Get() const noexcept { return handle_; }
+    };
+
+    /**
+     * @brief Owns a BCrypt hash object and destroys it on every verifier exit path.
+     */
+    class BcryptHashHandle {
+        BCRYPT_HASH_HANDLE handle_ = nullptr;
+
+    public:
+        /** @brief Takes ownership of one BCrypt hash handle. */
+        explicit BcryptHashHandle(BCRYPT_HASH_HANDLE handle) noexcept : handle_(handle) {}
+        /** @brief Destroys the hash when acquisition succeeded. */
+        ~BcryptHashHandle() { if (handle_ != nullptr) { BCryptDestroyHash(handle_); } }
+        /** @brief Prevents accidental copying of a unique native hash handle. */
+        BcryptHashHandle(const BcryptHashHandle&) = delete;
+        /** @brief Prevents accidental assignment of a unique native hash handle. */
+        BcryptHashHandle& operator=(const BcryptHashHandle&) = delete;
+        /** @brief Returns the owned hash handle to BCrypt calls. */
+        BCRYPT_HASH_HANDLE Get() const noexcept { return handle_; }
+    };
+
     /** @brief Fails the console verifier immediately when a shipping contract is violated. */
     void Require(bool condition, const char* message) {
         if (!condition) { throw std::runtime_error(message); }
@@ -57,6 +95,7 @@ namespace {
         std::vector<unsigned char> digest;
         NTSTATUS status = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
         Require(status == 0, "Cannot open SHA-256 provider.");
+        BcryptAlgorithmHandle algorithm_guard(algorithm);
         status = BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&object_length), sizeof(object_length), &result_length, 0);
         Require(status == 0, "Cannot read SHA-256 object length.");
         status = BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hash_length), sizeof(hash_length), &result_length, 0);
@@ -65,12 +104,11 @@ namespace {
         digest.resize(hash_length);
         status = BCryptCreateHash(algorithm, &hash, object.data(), object_length, nullptr, 0, 0);
         Require(status == 0, "Cannot create SHA-256 hash.");
+        BcryptHashHandle hash_guard(hash);
         status = BCryptHashData(hash, const_cast<PUCHAR>(bytes.data()), static_cast<ULONG>(bytes.size()), 0);
         Require(status == 0, "Cannot hash candidate DLL.");
         status = BCryptFinishHash(hash, digest.data(), hash_length, 0);
         Require(status == 0, "Cannot finish candidate DLL hash.");
-        BCryptDestroyHash(hash);
-        BCryptCloseAlgorithmProvider(algorithm, 0);
         return ToLowerHex(digest);
     }
 }

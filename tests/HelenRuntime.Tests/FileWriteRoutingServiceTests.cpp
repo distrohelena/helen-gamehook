@@ -206,8 +206,53 @@ void RunFileWriteRoutingServiceTests()
 
         const HANDLE denied_handle = service.Open(deny_path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         Expect(denied_handle == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED, "Deny route allowed a writable open.");
+        const HANDLE denied_delete_on_close = service.Open(deny_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+        Expect(denied_delete_on_close == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED,
+            "Deny route allowed a read-only delete-on-close request.");
+        const HANDLE denied_full_access = service.Open(deny_path, GENERIC_ALL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        Expect(denied_full_access == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED,
+            "Deny route allowed a full-access request.");
         Expect(ReadThroughRouter(service, deny_path) == "D", "Deny route did not read the original.");
         Expect(ReadThroughRouter(service, original_read_path) == "O", "Original-read route did not read the original.");
+
+        const HANDLE delete_on_close_read = service.Open(original_read_path, GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+        Expect(delete_on_close_read != INVALID_HANDLE_VALUE, "Redirected read with delete-on-close was rejected unexpectedly.");
+        Expect(service.Close(delete_on_close_read) != FALSE, "Redirected delete-on-close handle did not close.");
+        Expect(std::filesystem::exists(original_read_path), "Mutation-capable delete-on-close read removed the protected original.");
+        Expect(ReadThroughRouter(service, original_read_path) == "O", "Delete-on-close read did not preserve the original-read route.");
+
+        std::filesystem::path original_read_overlay;
+        for (const helen::FileWriteRoutingService::RouteDiagnostics& route : service.GetRouteDiagnostics())
+        {
+            if (route.Id == "original")
+            {
+                original_read_overlay = route.OverlayPath;
+            }
+        }
+        Expect(!original_read_overlay.empty(), "Original-read overlay diagnostics were missing.");
+        const HANDLE recreate_original_read_overlay = service.Open(original_read_path, GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        Expect(recreate_original_read_overlay != INVALID_HANDLE_VALUE, "Original-read overlay recreation failed.");
+        bytes_written = 0;
+        Expect(WriteFile(recreate_original_read_overlay, "P", 1, &bytes_written, nullptr) != FALSE && bytes_written == 1,
+            "Original-read overlay seed write failed.");
+        Expect(service.Close(recreate_original_read_overlay) != FALSE, "Original-read overlay seed close failed.");
+
+        const HANDLE full_access_redirect = service.Open(original_read_path, GENERIC_ALL,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL, nullptr);
+        Expect(full_access_redirect != INVALID_HANDLE_VALUE, "Redirected full-access open failed.");
+        bytes_written = 0;
+        Expect(WriteFile(full_access_redirect, "Y", 1, &bytes_written, nullptr) != FALSE && bytes_written == 1,
+            "Redirected full-access write failed.");
+        Expect(service.Close(full_access_redirect) != FALSE, "Redirected full-access close failed.");
+        Expect(ReadThroughRouter(service, original_read_path) == "O", "Original-read policy exposed the full-access overlay write.");
+        Expect(ReadNativePath(original_read_overlay) == "Y", "Full-access write was not routed to the original-read overlay.");
+        Expect(ReadNativePath(original_read_path) == "O", "Full-access write changed the protected original.");
 
         const HANDLE original_policy_write = service.Open(original_read_path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         Expect(original_policy_write != INVALID_HANDLE_VALUE, "Original-read redirect write open failed.");
