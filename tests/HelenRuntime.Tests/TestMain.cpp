@@ -186,6 +186,14 @@ void RunBatmanGraphicsPersistenceTests();
 void RunBatmanGraphicsPartialSyncFailureChild();
 /** @brief Launches the fresh child scenario for process-global partial-sync lockout coverage. */
 void RunBatmanGraphicsPartialSyncFailureChildProcess();
+/** @brief Runs the fresh child scenario where a failed publication is fully recovered and synchronized. */
+void RunBatmanGraphicsRecoveredFailureSyncChild();
+/** @brief Launches the fresh child scenario for recovered-failure synchronization coverage. */
+void RunBatmanGraphicsRecoveredFailureSyncChildProcess();
+/** @brief Runs the fresh child scenario where original save and session synchronization both fail. */
+void RunBatmanGraphicsFailedSaveSyncFailureChild();
+/** @brief Launches the fresh child scenario for failed-save synchronization coverage. */
+void RunBatmanGraphicsFailedSaveSyncFailureChildProcess();
 
 /** @brief Runs native tests with console-only failure reporting and no Windows crash dialogs. */
 int wmain(int argc, wchar_t** argv)
@@ -205,10 +213,24 @@ int wmain(int argc, wchar_t** argv)
             std::cout << "BATMAN_PARTIAL_SYNC_CHILD_PASS\n";
             return 0;
         }
+        if (argc > 1 && std::wstring_view(argv[1]) == L"--batman-recovered-sync-child")
+        {
+            RunBatmanGraphicsRecoveredFailureSyncChild();
+            std::cout << "BATMAN_RECOVERED_SYNC_CHILD_PASS\n";
+            return 0;
+        }
+        if (argc > 1 && std::wstring_view(argv[1]) == L"--batman-failed-save-sync-child")
+        {
+            RunBatmanGraphicsFailedSaveSyncFailureChild();
+            std::cout << "BATMAN_FAILED_SAVE_SYNC_CHILD_PASS\n";
+            return 0;
+        }
 
         RunBatmanGraphicsSnapshotTests();
         RunBatmanGraphicsPersistenceTests();
         RunBatmanGraphicsPartialSyncFailureChildProcess();
+        RunBatmanGraphicsRecoveredFailureSyncChildProcess();
+        RunBatmanGraphicsFailedSaveSyncFailureChildProcess();
         RunActivePackSetBuilderTests();
         RunBatmanDisplayModeServiceTests();
         RunBatmanDisplayModeResponseProviderTests();

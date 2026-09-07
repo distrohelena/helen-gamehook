@@ -23,6 +23,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <cmath>
 #include <optional>
 #include <stdexcept>
@@ -1848,10 +1849,91 @@ void RunBatmanGraphicsPartialSyncFailureChild()
 }
 
 /**
- * @brief Launches one fresh native test process for the process-global partial-sync failure latch.
- * @throws std::runtime_error Thrown when the child cannot be launched or does not report success.
+ * @brief Verifies that a failed original publication which fully recovers still synchronizes the session and remains NotApplied.
  */
-void RunBatmanGraphicsPartialSyncFailureChildProcess()
+void RunBatmanGraphicsRecoveredFailureSyncChild()
+{
+    const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath("routing-recovered-sync-child");
+    const std::filesystem::path user_ini_path = GetSiblingBatmanUserEngineIniPath(engine_ini_path);
+    WriteAllText(engine_ini_path, CreateBatmanGraphicsIniText());
+    WriteAsciiAsUtf16LittleEndianText(user_ini_path, CreateBatmanLauncherOwnedGraphicsIniText(true));
+    const std::string original_engine_bytes = ReadAllBytes(engine_ini_path);
+    const std::string original_user_bytes = ReadAllBytes(user_ini_path);
+    const std::shared_ptr<helen::FileWriteRoutingService> routing_service =
+        std::make_shared<helen::FileWriteRoutingService>(engine_ini_path.parent_path() / "routing-cache", engine_ini_path.parent_path());
+    DWORD routing_error = ERROR_SUCCESS;
+    Expect(routing_service->Initialize({
+        { "engine", engine_ini_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+        { "user", user_ini_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+    }, routing_error), "Recovered-sync routing initialization failed.");
+
+    std::filesystem::path engine_overlay_path;
+    for (const helen::FileWriteRoutingService::RouteDiagnostics& route : routing_service->GetRouteDiagnostics())
+    {
+        if (route.Id == "engine")
+        {
+            engine_overlay_path = route.OverlayPath;
+        }
+    }
+    OverlayLockingBatmanGraphicsFileOperations files(engine_overlay_path, true, false, false);
+    helen::BatmanDisplayModeService display_mode_service;
+    helen::BatmanGraphicsConfigService config(engine_ini_path, display_mode_service, files, routing_service);
+    std::optional<helen::BatmanGraphicsDraftState> draft = config.CaptureReadSnapshot().TryCreateDraft();
+    Expect(draft.has_value(), "Recovered-sync fixture did not produce a complete draft.");
+    Expect(draft->TrySet(helen::BatmanGraphicsField::Fullscreen, 1), "Recovered-sync fixture draft could not be edited.");
+    const helen::BatmanGraphicsApplyResult result = config.ApplyDraft(*draft);
+    Expect(result.Outcome == helen::BatmanGraphicsApplyOutcome::NotApplied,
+        "Fully recovered original failure did not remain NotApplied after synchronization.");
+    Expect(ReadAllBytes(engine_ini_path) == original_engine_bytes && ReadAllBytes(user_ini_path) == original_user_bytes,
+        "Fully recovered original failure changed a persisted target.");
+    Expect(!config.IsApplyLocked(), "Successful synchronization after recovery incorrectly latched integrity lockout.");
+}
+
+/**
+ * @brief Verifies that an original publication failure plus failed recovery and failed synchronization reports disk uncertainty.
+ */
+void RunBatmanGraphicsFailedSaveSyncFailureChild()
+{
+    const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath("routing-failed-save-sync-child");
+    const std::filesystem::path user_ini_path = GetSiblingBatmanUserEngineIniPath(engine_ini_path);
+    WriteAllText(engine_ini_path, CreateBatmanGraphicsIniText());
+    WriteAsciiAsUtf16LittleEndianText(user_ini_path, CreateBatmanLauncherOwnedGraphicsIniText(true));
+    const std::string original_engine_bytes = ReadAllBytes(engine_ini_path);
+    const std::shared_ptr<helen::FileWriteRoutingService> routing_service =
+        std::make_shared<helen::FileWriteRoutingService>(engine_ini_path.parent_path() / "routing-cache", engine_ini_path.parent_path());
+    DWORD routing_error = ERROR_SUCCESS;
+    Expect(routing_service->Initialize({
+        { "engine", engine_ini_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+        { "user", user_ini_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+    }, routing_error), "Failed-save-sync routing initialization failed.");
+
+    std::filesystem::path engine_overlay_path;
+    for (const helen::FileWriteRoutingService::RouteDiagnostics& route : routing_service->GetRouteDiagnostics())
+    {
+        if (route.Id == "engine")
+        {
+            engine_overlay_path = route.OverlayPath;
+        }
+    }
+    OverlayLockingBatmanGraphicsFileOperations files(engine_overlay_path, true, true, true);
+    helen::BatmanDisplayModeService display_mode_service;
+    helen::BatmanGraphicsConfigService config(engine_ini_path, display_mode_service, files, routing_service);
+    std::optional<helen::BatmanGraphicsDraftState> draft = config.CaptureReadSnapshot().TryCreateDraft();
+    Expect(draft.has_value(), "Failed-save-sync fixture did not produce a complete draft.");
+    Expect(draft->TrySet(helen::BatmanGraphicsField::Fullscreen, 1), "Failed-save-sync fixture draft could not be edited.");
+    const helen::BatmanGraphicsApplyResult result = config.ApplyDraft(*draft);
+    Expect(result.Outcome == helen::BatmanGraphicsApplyOutcome::IntegrityUncertain,
+        "Failed original save plus failed synchronization was not reported as integrity uncertain.");
+    Expect(ReadAllBytes(engine_ini_path) != original_engine_bytes && config.IsApplyLocked(),
+        "Failed-save-sync scenario did not retain partial original state and lockout.");
+}
+
+/**
+ * @brief Launches one fresh native test process for a process-global Batman persistence failure scenario.
+ * @param mode Child command-line mode selecting one isolated failure scenario.
+ * @param failure_message Diagnostic used when the child exits unsuccessfully.
+ */
+void RunBatmanGraphicsPersistenceChildProcess(const wchar_t* mode, const char* failure_message)
 {
     std::array<wchar_t, MAX_PATH> executable_buffer{};
     const DWORD executable_length = GetModuleFileNameW(nullptr, executable_buffer.data(), static_cast<DWORD>(executable_buffer.size()));
@@ -1860,7 +1942,7 @@ void RunBatmanGraphicsPartialSyncFailureChildProcess()
         throw std::runtime_error("Failed to resolve the Batman persistence child executable.");
     }
 
-    std::wstring command_line = L"\"" + std::wstring(executable_buffer.data(), executable_length) + L"\" --batman-partial-sync-child";
+    std::wstring command_line = L"\"" + std::wstring(executable_buffer.data(), executable_length) + L"\" " + mode;
     std::vector<wchar_t> mutable_command(command_line.begin(), command_line.end());
     mutable_command.push_back(L'\0');
     STARTUPINFOW startup_info{};
@@ -1877,7 +1959,28 @@ void RunBatmanGraphicsPartialSyncFailureChildProcess()
     GetExitCodeProcess(process_info.hProcess, &exit_code);
     CloseHandle(process_info.hThread);
     CloseHandle(process_info.hProcess);
-    Expect(exit_code == 0, "Batman persistence partial-sync child failed.");
+    Expect(exit_code == 0, failure_message);
+}
+
+/** @brief Launches the fresh child that proves original commit plus failed session synchronization reports outcome 4. */
+void RunBatmanGraphicsPartialSyncFailureChildProcess()
+{
+    RunBatmanGraphicsPersistenceChildProcess(L"--batman-partial-sync-child", "Batman persistence partial-sync child failed.");
+    std::cout << "BATMAN_PARTIAL_SYNC_CHILD_PASS\n";
+}
+
+/** @brief Launches the fresh child that proves fully recovered original failure plus successful sync remains NotApplied. */
+void RunBatmanGraphicsRecoveredFailureSyncChildProcess()
+{
+    RunBatmanGraphicsPersistenceChildProcess(L"--batman-recovered-sync-child", "Batman persistence recovered-sync child failed.");
+    std::cout << "BATMAN_RECOVERED_SYNC_CHILD_PASS\n";
+}
+
+/** @brief Launches the fresh child that proves failed original save plus failed sync remains integrity uncertain. */
+void RunBatmanGraphicsFailedSaveSyncFailureChildProcess()
+{
+    RunBatmanGraphicsPersistenceChildProcess(L"--batman-failed-save-sync-child", "Batman persistence failed-save-sync child failed.");
+    std::cout << "BATMAN_FAILED_SAVE_SYNC_CHILD_PASS\n";
 }
 
 /**
