@@ -1000,6 +1000,18 @@ namespace helen
                     hTemplateFile);
             }
 
+            if (active->file_write_routing_ != nullptr && has_normalized_path)
+            {
+                return CallRealCreateFileW(
+                    normalized_path.c_str(),
+                    dwDesiredAccess,
+                    dwShareMode,
+                    lpSecurityAttributes,
+                    dwCreationDisposition,
+                    dwFlagsAndAttributes,
+                    hTemplateFile);
+            }
+
             return CallRealCreateFileA(
                 lpFileName,
                 dwDesiredAccess,
@@ -1027,6 +1039,18 @@ namespace helen
         {
             return CallRealCreateFileA(
                 normalized_ansi_path->c_str(),
+                dwDesiredAccess,
+                dwShareMode,
+                lpSecurityAttributes,
+                dwCreationDisposition,
+                dwFlagsAndAttributes,
+                hTemplateFile);
+        }
+
+        if (active->file_write_routing_ != nullptr && has_normalized_path)
+        {
+            return CallRealCreateFileW(
+                normalized_path.c_str(),
                 dwDesiredAccess,
                 dwShareMode,
                 lpSecurityAttributes,
@@ -1117,8 +1141,17 @@ namespace helen
             }
         }
 
-        return CallRealGetFileAttributesA(
-            normalized_ansi_path.has_value() ? normalized_ansi_path->c_str() : lpFileName);
+        if (normalized_ansi_path.has_value())
+        {
+            return CallRealGetFileAttributesA(normalized_ansi_path->c_str());
+        }
+
+        if (active->file_write_routing_ != nullptr && has_normalized_path)
+        {
+            return CallRealGetFileAttributesW(normalized_path.c_str());
+        }
+
+        return CallRealGetFileAttributesA(lpFileName);
     }
 
     BOOL WINAPI FileApiHookSet::ReadFileDetour(

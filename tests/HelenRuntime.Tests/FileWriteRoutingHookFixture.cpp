@@ -3,8 +3,10 @@
 #include <HelenHook/FileWriteRoute.h>
 #include <HelenHook/FileWriteRoutingService.h>
 #include <HelenHook/Memory.h>
-#include <HelenHook/Hook.h>
 #include <HelenHook/VirtualFileService.h>
+
+#include "CapturedPathSwitchGuard.h"
+#include "FileApiCodePageGuard.h"
 
 #include <array>
 #include <filesystem>
@@ -32,6 +34,8 @@ namespace
     volatile decltype(&CreateFileA) CreateFileAImportAnchor = &CreateFileA;
     /** @brief Keeps GetFileAttributesW materialized for captured-path attribute routing coverage. */
     volatile decltype(&GetFileAttributesW) GetFileAttributesWImportAnchor = &GetFileAttributesW;
+    /** @brief Keeps GetFileAttributesA materialized for active-code-page attribute routing coverage. */
+    volatile decltype(&GetFileAttributesA) GetFileAttributesAImportAnchor = &GetFileAttributesA;
     /** @brief Keeps CopyFileW materialized for protected-destination alias mutation coverage. */
     volatile decltype(&CopyFileW) CopyFileWImportAnchor = &CopyFileW;
     /** @brief Keeps MoveFileExA materialized for ANSI delayed and routed publication coverage. */
@@ -163,132 +167,6 @@ namespace
         std::wstring original_directory_;
     };
 
-    /** @brief Exact function-pointer type used to call the unpatched native path-normalization export. */
-    using GetFullPathNameWFunction = decltype(&GetFullPathNameW);
-    /** @brief Original GetFullPathNameW export captured by the one-shot import-boundary guard. */
-    GetFullPathNameWFunction CapturedPathOriginalGetFullPathNameW = nullptr;
-    /** @brief Relative request spelling that triggers the deterministic post-normalization CWD change. */
-    std::wstring CapturedPathSwitchName;
-    /** @brief Destination CWD selected after the native normalization result has been returned. */
-    std::filesystem::path CapturedPathSwitchDirectory;
-    /** @brief One-shot state preventing later normalization calls from changing the fixture's CWD again. */
-    bool CapturedPathSwitchTriggered = false;
-
-    /**
-     * @brief Changes CWD after one real GetFullPathNameW call to expose adapters that dispatch the original relative operand.
-     * @param file_name Relative or absolute path being normalized.
-     * @param buffer_size Number of UTF-16 elements available in the caller buffer.
-     * @param buffer Receives the real absolute path spelling.
-     * @param file_part Receives the native file-part pointer when requested.
-     * @return The native GetFullPathNameW result from the unpatched kernel32 export.
-     */
-    DWORD WINAPI CapturedPathGetFullPathNameWDetour(LPCWSTR file_name, DWORD buffer_size, LPWSTR buffer, LPWSTR* file_part)
-    {
-        const DWORD result = CapturedPathOriginalGetFullPathNameW(file_name, buffer_size, buffer, file_part);
-        if (!CapturedPathSwitchTriggered && file_name != nullptr && CapturedPathSwitchName == file_name)
-        {
-            ExpectHookFixture(SetCurrentDirectoryW(CapturedPathSwitchDirectory.c_str()) != FALSE,
-                "Captured-path CWD switch failed after native path normalization.");
-            CapturedPathSwitchTriggered = true;
-        }
-        return result;
-    }
-
-    /**
-     * @brief Installs a one-shot real import-boundary CWD switch for a named relative request.
-     *
-     * The guard uses the test executable's production import slot, so the service and adapter
-     * cross the same native normalization boundary as the game fixture without a production test seam.
-     */
-    class CapturedPathSwitchGuard
-    {
-    public:
-        /**
-         * @brief Installs the one-shot GetFullPathNameW boundary switch.
-         * @param module Main test executable whose imported normalization slot is patched.
-         * @param request_name Exact path operand that triggers the CWD switch.
-         * @param switch_directory Directory that becomes CWD after normalization returns.
-         */
-        CapturedPathSwitchGuard(const helen::ModuleView& module, std::wstring request_name,
-            std::filesystem::path switch_directory)
-            : request_name_(std::move(request_name)), switch_directory_(std::move(switch_directory))
-        {
-            CapturedPathOriginalGetFullPathNameW = nullptr;
-            CapturedPathSwitchName = request_name_;
-            CapturedPathSwitchDirectory = switch_directory_;
-            CapturedPathSwitchTriggered = false;
-            ExpectHookFixture(hook_.Install(module, "kernel32.dll", "GetFullPathNameW",
-                reinterpret_cast<void*>(&CapturedPathGetFullPathNameWDetour)),
-                "Captured-path GetFullPathNameW import hook installation failed.");
-            CapturedPathOriginalGetFullPathNameW = hook_.Original<GetFullPathNameWFunction>();
-            ExpectHookFixture(CapturedPathOriginalGetFullPathNameW != nullptr,
-                "Captured-path GetFullPathNameW original was not captured.");
-        }
-
-        /** @brief Removes the production import-boundary hook and clears shared one-shot state. */
-        ~CapturedPathSwitchGuard()
-        {
-            hook_.Remove();
-            CapturedPathOriginalGetFullPathNameW = nullptr;
-            CapturedPathSwitchName.clear();
-            CapturedPathSwitchDirectory.clear();
-            CapturedPathSwitchTriggered = false;
-        }
-
-        CapturedPathSwitchGuard(const CapturedPathSwitchGuard&) = delete;
-        CapturedPathSwitchGuard& operator=(const CapturedPathSwitchGuard&) = delete;
-
-        /** @brief Reports whether the native normalization boundary performed the requested one-shot CWD switch. */
-        bool Triggered() const noexcept
-        {
-            return CapturedPathSwitchTriggered;
-        }
-
-    private:
-        /** @brief Import patch whose lifetime brackets exactly one normalization-boundary regression. */
-        helen::IatHook hook_;
-        /** @brief Relative operand that should trigger the boundary switch. */
-        std::wstring request_name_;
-        /** @brief Destination CWD selected after the native normalization result is captured. */
-        std::filesystem::path switch_directory_;
-    };
-
-    /**
-     * @brief Temporarily selects the OEM file-API code page so CreateFileA routing exercises its active-byte contract.
-     *
-     * The guard changes the process-wide Win32 file API mode only when the fixture began in ANSI mode,
-     * then restores that exact mode before another test can observe it.
-     */
-    class FileApiCodePageGuard
-    {
-    public:
-        /** @brief Selects OEM decoding when the process currently uses ANSI file APIs. */
-        FileApiCodePageGuard()
-            : restore_ansi_(AreFileApisANSI() != FALSE)
-        {
-            if (restore_ansi_)
-            {
-                SetFileApisToOEM();
-            }
-        }
-
-        /** @brief Restores ANSI file APIs when this guard changed the process mode. */
-        ~FileApiCodePageGuard()
-        {
-            if (restore_ansi_)
-            {
-                SetFileApisToANSI();
-            }
-        }
-
-        FileApiCodePageGuard(const FileApiCodePageGuard&) = delete;
-        FileApiCodePageGuard& operator=(const FileApiCodePageGuard&) = delete;
-
-    private:
-        /** @brief True when destruction must restore the pre-fixture ANSI file API mode. */
-        bool restore_ansi_;
-    };
-
     /**
      * @brief Encodes one Unicode filename with the file API's currently selected narrow code page.
      * @param path Unicode path whose narrow request spelling should be produced.
@@ -310,6 +188,36 @@ namespace
         {
             throw std::runtime_error("Failed to materialize active file API fixture path.");
         }
+        encoded.resize(static_cast<std::size_t>(actual_length - 1));
+        return encoded;
+    }
+
+    /**
+     * @brief Attempts an active-code-page conversion without allowing default-character substitution.
+     * @param path Unicode path whose exact narrow representability should be checked.
+     * @return Exact active-code-page spelling, or no value when any character is unrepresentable.
+     */
+    std::optional<std::string> TryEncodeActiveFileApiPath(const std::filesystem::path& path)
+    {
+        const std::wstring wide_path = path.wstring();
+        const UINT code_page = AreFileApisANSI() != FALSE ? CP_ACP : CP_OEMCP;
+        BOOL used_default_character = FALSE;
+        const int required_length = WideCharToMultiByte(code_page, WC_NO_BEST_FIT_CHARS, wide_path.c_str(), -1,
+            nullptr, 0, nullptr, code_page == CP_UTF8 ? nullptr : &used_default_character);
+        if (required_length <= 0 || used_default_character != FALSE)
+        {
+            return std::nullopt;
+        }
+
+        std::string encoded(static_cast<std::size_t>(required_length), '\0');
+        used_default_character = FALSE;
+        const int actual_length = WideCharToMultiByte(code_page, WC_NO_BEST_FIT_CHARS, wide_path.c_str(), -1,
+            encoded.data(), required_length, nullptr, code_page == CP_UTF8 ? nullptr : &used_default_character);
+        if (actual_length != required_length || used_default_character != FALSE)
+        {
+            return std::nullopt;
+        }
+
         encoded.resize(static_cast<std::size_t>(actual_length - 1));
         return encoded;
     }
@@ -363,8 +271,11 @@ void RunFileWriteRoutingHookFixtureTests()
     const std::filesystem::path captured_attributes_path = root / "CapturedAttributes.ini";
     const std::filesystem::path ansi_path = root / std::filesystem::path(L"Ansi-\u00E9.ini");
     const std::filesystem::path switch_directory = root / "cwd-switch";
+    const std::filesystem::path ansi_unicode_switch_directory = root / std::filesystem::path(L"cwd-\u0416");
+    const std::filesystem::path ansi_native_captured_path = ansi_unicode_switch_directory / "NativeCapturedA.ini";
     const std::filesystem::path switched_captured_path = switch_directory / "Captured.ini";
     const std::filesystem::path switched_attributes_path = switch_directory / "CapturedAttributes.ini";
+    const std::filesystem::path ansi_native_switched_path = switch_directory / "NativeCapturedA.ini";
     WriteHookFixtureFile(original_path, "ORIGINAL");
     WriteHookFixtureFile(deny_path, "DENY");
     WriteHookFixtureFile(source_path, "COPY");
@@ -373,15 +284,23 @@ void RunFileWriteRoutingHookFixtureTests()
     WriteHookFixtureFile(alias_backup_path, "ALIAS-BACKUP");
     ExpectHookFixture(CreateDirectoryW(switch_directory.c_str(), nullptr) != FALSE,
         "Failed to create captured-path CWD switch directory.");
+    ExpectHookFixture(CreateDirectoryW(ansi_unicode_switch_directory.c_str(), nullptr) != FALSE,
+        "Failed to create ANSI Unicode-CWD switch directory.");
     WriteHookFixtureFile(captured_path, "CAPTURED-ORIGINAL");
     WriteHookFixtureFile(captured_attributes_path, "ATTRIBUTES-ORIGINAL");
     WriteHookFixtureFile(ansi_path, "ANSI-ORIGINAL");
+    WriteHookFixtureFile(ansi_native_captured_path, "NATIVE-CAPTURED");
     WriteHookFixtureFile(switched_captured_path, "CAPTURED-SWITCH");
     WriteHookFixtureFile(switched_attributes_path, "ATTRIBUTES-SWITCH");
+    WriteHookFixtureFile(ansi_native_switched_path, "NATIVE-SWITCH");
     ExpectHookFixture(SetFileAttributesW(captured_attributes_path.c_str(), FILE_ATTRIBUTE_HIDDEN) != FALSE,
         "Failed to set distinct captured-path original attributes.");
     ExpectHookFixture(SetFileAttributesW(switched_attributes_path.c_str(), FILE_ATTRIBUTE_NORMAL) != FALSE,
         "Failed to set distinct captured-path switched attributes.");
+    ExpectHookFixture(SetFileAttributesW(ansi_native_captured_path.c_str(), FILE_ATTRIBUTE_HIDDEN) != FALSE,
+        "Failed to set distinct ANSI captured-file attributes.");
+    ExpectHookFixture(SetFileAttributesW(ansi_native_switched_path.c_str(), FILE_ATTRIBUTE_NORMAL) != FALSE,
+        "Failed to set distinct ANSI switched-file attributes.");
 
     try
     {
@@ -485,6 +404,52 @@ void RunFileWriteRoutingHookFixtureTests()
                 }
             }
             ExpectHookFixture(ansi_overlay_verified, "Active-code-page route diagnostics omitted the ANSI overlay.");
+        }
+        {
+            FileApiCodePageGuard file_api_code_page_guard;
+            const std::optional<std::string> unicode_directory_narrow = TryEncodeActiveFileApiPath(
+                ansi_unicode_switch_directory.filename());
+            if (!unicode_directory_narrow.has_value())
+            {
+                {
+                    CurrentDirectoryGuard current_directory_guard;
+                    current_directory_guard.Set(ansi_unicode_switch_directory);
+                    ExpectHookFixture(SetFileAttributesW(ansi_native_captured_path.c_str(), FILE_ATTRIBUTE_NORMAL) != FALSE,
+                        "Failed to clear captured-file attributes before native CreateFileA dispatch.");
+                    CapturedPathSwitchGuard captured_path_switch(*main_module, L"NativeCapturedA.ini", switch_directory);
+                    const auto imported_create_file_a = CallHookedImport<decltype(&CreateFileA)>("CreateFileA");
+                    HANDLE captured_handle = imported_create_file_a("NativeCapturedA.ini", GENERIC_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    ExpectHookFixture(captured_handle != INVALID_HANDLE_VALUE && captured_path_switch.Triggered(),
+                        "Captured-path CreateFileA did not cross the Unicode-CWD boundary.");
+                    WriteHookedByte(captured_handle, 'A');
+                    ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(captured_handle) != FALSE,
+                        "Captured-path CreateFileA handle close failed.");
+                    ExpectHookFixture(ReadHookFixtureFile(ansi_native_captured_path) == "A",
+                        "Captured-path CreateFileA did not update the captured native file.");
+                    ExpectHookFixture(ReadHookFixtureFile(ansi_native_switched_path) == "NATIVE-SWITCH",
+                        "Captured-path CreateFileA mutated the switched native target.");
+                }
+                {
+                    CurrentDirectoryGuard current_directory_guard;
+                    current_directory_guard.Set(ansi_unicode_switch_directory);
+                    ExpectHookFixture(SetFileAttributesW(ansi_native_captured_path.c_str(), FILE_ATTRIBUTE_HIDDEN) != FALSE,
+                        "Failed to set captured-file attributes before native GetFileAttributesA dispatch.");
+                    CapturedPathSwitchGuard captured_path_switch(*main_module, L"NativeCapturedA.ini", switch_directory);
+                    const auto imported_get_file_attributes_a = CallHookedImport<decltype(&GetFileAttributesA)>("GetFileAttributesA");
+                    const DWORD attributes = imported_get_file_attributes_a("NativeCapturedA.ini");
+                    ExpectHookFixture(attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_HIDDEN) != 0 &&
+                        captured_path_switch.Triggered(),
+                        "Captured-path GetFileAttributesA did not retain the Unicode-CWD file after dispatch.");
+                    ExpectHookFixture((GetFileAttributesW(ansi_native_switched_path.c_str()) & FILE_ATTRIBUTE_HIDDEN) == 0,
+                        "Captured-path GetFileAttributesA changed the switched target attributes.");
+                }
+            }
+            else
+            {
+                std::cout << "FILE_ROUTING_A_UNICODE_CWD_BRANCH_SKIPPED codepage="
+                    << (AreFileApisANSI() != FALSE ? CP_ACP : CP_OEMCP) << "\n";
+            }
         }
         {
             CurrentDirectoryGuard current_directory_guard;
