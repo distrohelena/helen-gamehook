@@ -546,8 +546,78 @@ namespace
      * @param value UTF-8 path bytes read from JSON.
      * @return Filesystem path carrying the original Unicode spelling.
      */
-    std::filesystem::path PathFromUtf8(std::string_view value)
+    bool TryPathFromUtf8(std::string_view value, std::filesystem::path& path)
     {
+        const auto is_continuation = [](unsigned char byte) {
+            return byte >= 0x80 && byte <= 0xBF;
+        };
+
+        for (std::size_t index = 0; index < value.size(); ++index)
+        {
+            const unsigned char first = static_cast<unsigned char>(value[index]);
+            if (first <= 0x7F)
+            {
+                continue;
+            }
+
+            if (first >= 0xC2 && first <= 0xDF)
+            {
+                if (index + 1 >= value.size() || !is_continuation(static_cast<unsigned char>(value[index + 1])))
+                {
+                    return false;
+                }
+                ++index;
+                continue;
+            }
+
+            if (first >= 0xE0 && first <= 0xEF)
+            {
+                if (index + 2 >= value.size())
+                {
+                    return false;
+                }
+
+                const unsigned char second = static_cast<unsigned char>(value[index + 1]);
+                const unsigned char third = static_cast<unsigned char>(value[index + 2]);
+                const bool valid_second = first == 0xE0
+                    ? second >= 0xA0 && second <= 0xBF
+                    : first == 0xED
+                        ? second >= 0x80 && second <= 0x9F
+                        : is_continuation(second);
+                if (!valid_second || !is_continuation(third))
+                {
+                    return false;
+                }
+                index += 2;
+                continue;
+            }
+
+            if (first >= 0xF0 && first <= 0xF4)
+            {
+                if (index + 3 >= value.size())
+                {
+                    return false;
+                }
+
+                const unsigned char second = static_cast<unsigned char>(value[index + 1]);
+                const unsigned char third = static_cast<unsigned char>(value[index + 2]);
+                const unsigned char fourth = static_cast<unsigned char>(value[index + 3]);
+                const bool valid_second = first == 0xF0
+                    ? second >= 0x90 && second <= 0xBF
+                    : first == 0xF4
+                        ? second >= 0x80 && second <= 0x8F
+                        : is_continuation(second);
+                if (!valid_second || !is_continuation(third) || !is_continuation(fourth))
+                {
+                    return false;
+                }
+                index += 3;
+                continue;
+            }
+
+            return false;
+        }
+
         std::u8string utf8_value;
         utf8_value.reserve(value.size());
         for (const char character : value)
@@ -555,7 +625,8 @@ namespace
             utf8_value.push_back(static_cast<char8_t>(static_cast<unsigned char>(character)));
         }
 
-        return std::filesystem::path(utf8_value);
+        path = std::filesystem::path(utf8_value);
+        return true;
     }
 
     /**
@@ -592,7 +663,11 @@ namespace
             component_start = separator + 1;
         }
 
-        const std::filesystem::path filesystem_path = PathFromUtf8(path);
+        std::filesystem::path filesystem_path;
+        if (!TryPathFromUtf8(path, filesystem_path))
+        {
+            return false;
+        }
         return !filesystem_path.empty() && !filesystem_path.is_absolute() && !filesystem_path.has_root_name() &&
             !filesystem_path.has_root_directory() && filesystem_path.has_filename();
     }
@@ -618,7 +693,13 @@ namespace
         const std::optional<std::string> lifetime = TryGetString(FindObjectMember(value, "lifetime"));
         if (!id.has_value() || id->empty() || !root.has_value() || !path.has_value() || !write_policy.has_value() ||
             !read_policy.has_value() || !lifetime.has_value() || *lifetime != "session" ||
-            (*root != "game" && *root != "documents") || !IsSafeRoutePath(*path))
+            (*root != "game" && *root != "documents"))
+        {
+            return false;
+        }
+
+        std::filesystem::path parsed_path;
+        if (!TryPathFromUtf8(*path, parsed_path) || !IsSafeRoutePath(*path))
         {
             return false;
         }
@@ -651,7 +732,7 @@ namespace
             : helen::FileReadPolicy::Original;
         definition.Id = *id;
         definition.Root = *root;
-        definition.Path = PathFromUtf8(*path);
+        definition.Path = std::move(parsed_path);
         return true;
     }
 

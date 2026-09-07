@@ -823,16 +823,20 @@ namespace helen
             return INVALID_HANDLE_VALUE;
         }
 
+        std::filesystem::path normalized_path;
+        bool has_normalized_path = false;
         if (lpFileName != nullptr)
         {
             const std::filesystem::path requested_path(lpFileName);
+            normalized_path = requested_path;
             if (active->file_write_routing_ != nullptr)
             {
-                const FileWriteRoutingService::PathDisposition disposition = active->file_write_routing_->ClassifyPath(requested_path);
+                has_normalized_path = active->file_write_routing_->TryNormalizeRequestPath(requested_path, normalized_path);
+                const FileWriteRoutingService::PathDisposition disposition = active->file_write_routing_->ClassifyPath(normalized_path);
                 if (disposition != FileWriteRoutingService::PathDisposition::Unrelated)
                 {
                     return active->file_write_routing_->Open(
-                        requested_path, dwDesiredAccess, dwShareMode, lpSecurityAttributes,
+                        normalized_path, dwDesiredAccess, dwShareMode, lpSecurityAttributes,
                         dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
                 }
             }
@@ -849,7 +853,7 @@ namespace helen
         if (!CanVirtualizeOpen(dwDesiredAccess, dwCreationDisposition, dwFlagsAndAttributes))
         {
             return CallRealCreateFileW(
-                lpFileName,
+                active->file_write_routing_ != nullptr && has_normalized_path ? normalized_path.c_str() : lpFileName,
                 dwDesiredAccess,
                 dwShareMode,
                 lpSecurityAttributes,
@@ -867,14 +871,23 @@ namespace helen
             }
         }
 
-        return CallRealCreateFileW(
-            lpFileName,
-            dwDesiredAccess,
-            dwShareMode,
-            lpSecurityAttributes,
-            dwCreationDisposition,
-            dwFlagsAndAttributes,
-            hTemplateFile);
+        return active->file_write_routing_ != nullptr && has_normalized_path
+            ? CallRealCreateFileW(
+                normalized_path.c_str(),
+                dwDesiredAccess,
+                dwShareMode,
+                lpSecurityAttributes,
+                dwCreationDisposition,
+                dwFlagsAndAttributes,
+                hTemplateFile)
+            : CallRealCreateFileW(
+                lpFileName,
+                dwDesiredAccess,
+                dwShareMode,
+                lpSecurityAttributes,
+                dwCreationDisposition,
+                dwFlagsAndAttributes,
+                hTemplateFile);
     }
 
     HANDLE WINAPI FileApiHookSet::CreateFileADetour(
@@ -893,6 +906,8 @@ namespace helen
             return INVALID_HANDLE_VALUE;
         }
 
+        std::filesystem::path normalized_path;
+        bool has_normalized_path = false;
         if (lpFileName != nullptr)
         {
             const std::optional<std::filesystem::path> hidden_path = TryConvertAnsiPath(lpFileName);
@@ -903,11 +918,13 @@ namespace helen
             }
             if (active->file_write_routing_ != nullptr && hidden_path.has_value())
             {
-                const FileWriteRoutingService::PathDisposition disposition = active->file_write_routing_->ClassifyPath(*hidden_path);
+                normalized_path = *hidden_path;
+                has_normalized_path = active->file_write_routing_->TryNormalizeRequestPath(*hidden_path, normalized_path);
+                const FileWriteRoutingService::PathDisposition disposition = active->file_write_routing_->ClassifyPath(normalized_path);
                 if (disposition != FileWriteRoutingService::PathDisposition::Unrelated)
                 {
                     return active->file_write_routing_->Open(
-                        *hidden_path, dwDesiredAccess, dwShareMode, lpSecurityAttributes,
+                        normalized_path, dwDesiredAccess, dwShareMode, lpSecurityAttributes,
                         dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
                 }
             }
@@ -926,6 +943,18 @@ namespace helen
 
         if (!CanVirtualizeOpen(dwDesiredAccess, dwCreationDisposition, dwFlagsAndAttributes))
         {
+            if (active->file_write_routing_ != nullptr && has_normalized_path)
+            {
+                return CallRealCreateFileW(
+                    normalized_path.c_str(),
+                    dwDesiredAccess,
+                    dwShareMode,
+                    lpSecurityAttributes,
+                    dwCreationDisposition,
+                    dwFlagsAndAttributes,
+                    hTemplateFile);
+            }
+
             return CallRealCreateFileA(
                 lpFileName,
                 dwDesiredAccess,
@@ -947,6 +976,18 @@ namespace helen
                     return *virtual_handle;
                 }
             }
+        }
+
+        if (active->file_write_routing_ != nullptr && has_normalized_path)
+        {
+            return CallRealCreateFileW(
+                normalized_path.c_str(),
+                dwDesiredAccess,
+                dwShareMode,
+                lpSecurityAttributes,
+                dwCreationDisposition,
+                dwFlagsAndAttributes,
+                hTemplateFile);
         }
 
         return CallRealCreateFileA(

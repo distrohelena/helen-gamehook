@@ -93,6 +93,16 @@ namespace helen
         std::vector<RouteDiagnostics> GetRouteDiagnostics() const;
 
         /**
+         * @brief Captures one caller path as an absolute native path using the current process CWD.
+         * @param path Caller-supplied path, which may be relative or a supported native device path.
+         * @param normalized_path Receives the exact absolute path used for classification and native dispatch.
+         * @return True when the path can be normalized without losing native path semantics.
+         */
+        bool TryNormalizeRequestPath(
+            const std::filesystem::path& path,
+            std::filesystem::path& normalized_path) const;
+
+        /**
          * @brief Reports whether a path is a protected route or an unsafe spelling that must fail closed.
          * @param path Native path supplied by an API caller.
          * @return True for a declared route and for an alias/reparse form that resolves to a declared route.
@@ -239,6 +249,11 @@ namespace helen
 
         /** @brief Checks parent-directory coverage while the service mutex is already held. */
         bool IsProtectedParentPathUnlocked(const std::filesystem::path& path) const;
+
+        /** @brief Normalizes one request while the service mutex is already held. */
+        bool TryNormalizeRequestPathUnlocked(
+            const std::filesystem::path& path,
+            std::filesystem::path& normalized_path) const;
 
         /** @brief Runtime cache root from which this service creates exactly one unique child. */
         std::filesystem::path cache_directory_;

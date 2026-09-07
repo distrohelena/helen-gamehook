@@ -163,7 +163,8 @@ void RunActivePackSetBuilderTests()
 
         loaded_pack_set.Packs[1].Build.FileWriteRoutes[0].Id = "routeB";
         loaded_pack_set.Packs[1].Build.FileWriteRoutes[0].Root = "game";
-        loaded_pack_set.Packs[1].Build.FileWriteRoutes[0].Path = std::filesystem::path("Game") / "A.bin";
+        loaded_pack_set.Packs[1].Build.VirtualFiles[0].GamePath = std::filesystem::path("Config") / "A.bin";
+        loaded_pack_set.Packs[1].Build.FileWriteRoutes[0].Path = std::filesystem::path("BmGame") / "Config" / "A.bin";
         helen::ActivePackSet virtual_conflict_set;
         failure_reason.clear();
         Expect(!builder.TryBuild(loaded_pack_set, virtual_conflict_set, failure_reason),

@@ -32,7 +32,8 @@ namespace
      */
     std::string NormalizeGamePathText(std::string path)
     {
-        std::replace(path.begin(), path.end(), '\\', '/');
+        std::filesystem::path filesystem_path(path);
+        path = filesystem_path.lexically_normal().generic_string();
         path = ToLowerAscii(std::move(path));
         while (!path.empty() && path.front() == '/')
         {
@@ -40,6 +41,29 @@ namespace
         }
 
         return path;
+    }
+
+    /**
+     * @brief Returns whether a route path can select the same effective file as a virtual/missing path.
+     * @param route_path Normalized route game-relative path.
+     * @param occupied_path Normalized virtual or missing game-relative path.
+     * @return True for exact normalized identity or the virtual service's declared-path suffix match.
+     */
+    bool IsEffectiveGamePathOverlap(const std::string& route_path, const std::string& occupied_path)
+    {
+        if (route_path == occupied_path)
+        {
+            return true;
+        }
+
+        if (route_path.size() <= occupied_path.size())
+        {
+            return false;
+        }
+
+        const std::size_t suffix_offset = route_path.size() - occupied_path.size();
+        return route_path.compare(suffix_offset, occupied_path.size(), occupied_path) == 0 &&
+            suffix_offset > 0 && route_path[suffix_offset - 1] == '/';
     }
 
     /**
@@ -319,7 +343,14 @@ namespace helen
                     return false;
                 }
 
-                if (definition.Root == "game" && occupied_game_file_targets.find(normalized_path) != occupied_game_file_targets.end())
+                const bool overlaps_occupied_game_path = definition.Root == "game" &&
+                    std::any_of(
+                        occupied_game_file_targets.begin(),
+                        occupied_game_file_targets.end(),
+                        [&normalized_path](const std::string& occupied_path) {
+                            return IsEffectiveGamePathOverlap(normalized_path, occupied_path);
+                        });
+                if (overlaps_occupied_game_path)
                 {
                     failure_reason = BuildConflictReason("file-write route target", normalized_path, pack.Pack.Id, "virtual-or-missing-file");
                     return false;

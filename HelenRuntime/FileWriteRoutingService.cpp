@@ -674,6 +674,34 @@ namespace helen
         return diagnostics;
     }
 
+    bool FileWriteRoutingService::TryNormalizeRequestPath(
+        const std::filesystem::path& path,
+        std::filesystem::path& normalized_path) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return TryNormalizeRequestPathUnlocked(path, normalized_path);
+    }
+
+    bool FileWriteRoutingService::TryNormalizeRequestPathUnlocked(
+        const std::filesystem::path& path,
+        std::filesystem::path& normalized_path) const
+    {
+        if (IsKnownNativeNonFilesystemPath(path))
+        {
+            normalized_path = path;
+            return true;
+        }
+
+        std::wstring full_path;
+        if (!ResolveFullPath(path, {}, full_path))
+        {
+            return false;
+        }
+
+        normalized_path = std::filesystem::path(full_path);
+        return !normalized_path.empty();
+    }
+
     bool FileWriteRoutingService::IsProtectedPath(const std::filesystem::path& path) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -803,12 +831,18 @@ namespace helen
         HANDLE template_file)
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        std::filesystem::path effective_path;
+        const bool normalized = TryNormalizeRequestPathUnlocked(path, effective_path);
+        if (!normalized)
+        {
+            effective_path = path;
+        }
         std::wstring route_key;
         DWORD classification_error = ERROR_SUCCESS;
-        const PathDisposition path_disposition = ClassifyPathUnlocked(path, route_key, classification_error);
+        const PathDisposition path_disposition = ClassifyPathUnlocked(effective_path, route_key, classification_error);
         if (path_disposition == PathDisposition::Unrelated)
         {
-            return CallNativeCreateFileW(path.wstring().c_str(), access, share, security_attributes, disposition, flags, template_file);
+            return CallNativeCreateFileW(effective_path.wstring().c_str(), access, share, security_attributes, disposition, flags, template_file);
         }
 
         if (path_disposition == PathDisposition::Rejected)
@@ -880,12 +914,18 @@ namespace helen
     DWORD FileWriteRoutingService::GetAttributes(const std::filesystem::path& path)
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        std::filesystem::path effective_path;
+        const bool normalized = TryNormalizeRequestPathUnlocked(path, effective_path);
+        if (!normalized)
+        {
+            effective_path = path;
+        }
         std::wstring route_key;
         DWORD classification_error = ERROR_SUCCESS;
-        const PathDisposition path_disposition = ClassifyPathUnlocked(path, route_key, classification_error);
+        const PathDisposition path_disposition = ClassifyPathUnlocked(effective_path, route_key, classification_error);
         if (path_disposition == PathDisposition::Unrelated)
         {
-            return CallNativeGetFileAttributesW(path.wstring().c_str());
+            return CallNativeGetFileAttributesW(effective_path.wstring().c_str());
         }
 
         if (path_disposition == PathDisposition::Rejected)
@@ -908,12 +948,18 @@ namespace helen
     BOOL FileWriteRoutingService::Delete(const std::filesystem::path& path)
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        std::filesystem::path effective_path;
+        const bool normalized = TryNormalizeRequestPathUnlocked(path, effective_path);
+        if (!normalized)
+        {
+            effective_path = path;
+        }
         std::wstring route_key;
         DWORD classification_error = ERROR_SUCCESS;
-        const PathDisposition disposition = ClassifyPathUnlocked(path, route_key, classification_error);
+        const PathDisposition disposition = ClassifyPathUnlocked(effective_path, route_key, classification_error);
         if (disposition == PathDisposition::Unrelated)
         {
-            return CallNativeDeleteFileW(path.wstring().c_str());
+            return CallNativeDeleteFileW(effective_path.wstring().c_str());
         }
 
         if (disposition == PathDisposition::Rejected)
@@ -949,12 +995,24 @@ namespace helen
         DWORD flags)
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        std::filesystem::path effective_existing_path;
+        std::filesystem::path effective_new_path;
+        const bool normalized_existing = TryNormalizeRequestPathUnlocked(existing_path, effective_existing_path);
+        const bool normalized_new = TryNormalizeRequestPathUnlocked(new_path, effective_new_path);
+        if (!normalized_existing)
+        {
+            effective_existing_path = existing_path;
+        }
+        if (!normalized_new)
+        {
+            effective_new_path = new_path;
+        }
         std::wstring source_route;
         std::wstring destination_route;
         DWORD source_error = ERROR_SUCCESS;
         DWORD destination_error = ERROR_SUCCESS;
-        const PathDisposition source_disposition = ClassifyPathUnlocked(existing_path, source_route, source_error);
-        const PathDisposition destination_disposition = ClassifyPathUnlocked(new_path, destination_route, destination_error);
+        const PathDisposition source_disposition = ClassifyPathUnlocked(effective_existing_path, source_route, source_error);
+        const PathDisposition destination_disposition = ClassifyPathUnlocked(effective_new_path, destination_route, destination_error);
         if (source_disposition == PathDisposition::Rejected || destination_disposition == PathDisposition::Rejected)
         {
             SetLastError(source_disposition == PathDisposition::Rejected
@@ -970,7 +1028,7 @@ namespace helen
             return FALSE;
         }
 
-        if (IsProtectedParentPathUnlocked(existing_path) || IsProtectedParentPathUnlocked(new_path))
+        if (IsProtectedParentPathUnlocked(effective_existing_path) || IsProtectedParentPathUnlocked(effective_new_path))
         {
             SetLastError(ERROR_ACCESS_DENIED);
             return FALSE;
@@ -991,7 +1049,7 @@ namespace helen
 
         if (destination_disposition == PathDisposition::Unrelated)
         {
-            return CallNativeMoveFileExW(existing_path.wstring().c_str(), new_path.wstring().c_str(), flags);
+            return CallNativeMoveFileExW(effective_existing_path.wstring().c_str(), effective_new_path.wstring().c_str(), flags);
         }
 
         const auto route = routes_.find(destination_route);
@@ -1013,7 +1071,7 @@ namespace helen
         }
 
         return CallNativeMoveFileExW(
-            existing_path.wstring().c_str(),
+            effective_existing_path.wstring().c_str(),
             overlay_paths_.at(destination_route).wstring().c_str(),
             flags);
     }
@@ -1033,12 +1091,33 @@ namespace helen
             return FALSE;
         }
 
+        std::filesystem::path effective_replaced_path;
+        std::filesystem::path effective_replacement_path;
+        const bool normalized_replaced = TryNormalizeRequestPathUnlocked(replaced_path, effective_replaced_path);
+        const bool normalized_replacement = TryNormalizeRequestPathUnlocked(replacement_path, effective_replacement_path);
+        if (!normalized_replaced)
+        {
+            effective_replaced_path = replaced_path;
+        }
+        if (!normalized_replacement)
+        {
+            effective_replacement_path = replacement_path;
+        }
+        std::filesystem::path effective_backup_path;
+        if (backup_file_name != nullptr)
+        {
+            if (!TryNormalizeRequestPathUnlocked(std::filesystem::path(backup_file_name), effective_backup_path))
+            {
+                effective_backup_path = std::filesystem::path(backup_file_name);
+            }
+        }
+
         std::wstring replaced_route;
         std::wstring replacement_route;
         DWORD replaced_error = ERROR_SUCCESS;
         DWORD replacement_error = ERROR_SUCCESS;
-        const PathDisposition replaced_disposition = ClassifyPathUnlocked(replaced_path, replaced_route, replaced_error);
-        const PathDisposition replacement_disposition = ClassifyPathUnlocked(replacement_path, replacement_route, replacement_error);
+        const PathDisposition replaced_disposition = ClassifyPathUnlocked(effective_replaced_path, replaced_route, replaced_error);
+        const PathDisposition replacement_disposition = ClassifyPathUnlocked(effective_replacement_path, replacement_route, replacement_error);
         if (replaced_disposition == PathDisposition::Rejected || replacement_disposition == PathDisposition::Rejected)
         {
             SetLastError(replaced_disposition == PathDisposition::Rejected
@@ -1053,7 +1132,7 @@ namespace helen
             {
                 std::wstring backup_route;
                 DWORD backup_error = ERROR_SUCCESS;
-                const PathDisposition backup_disposition = ClassifyPathUnlocked(std::filesystem::path(backup_file_name), backup_route, backup_error);
+                const PathDisposition backup_disposition = ClassifyPathUnlocked(effective_backup_path, backup_route, backup_error);
                 if (backup_disposition != PathDisposition::Unrelated)
                 {
                     SetLastError(backup_disposition == PathDisposition::Rejected
@@ -1062,7 +1141,8 @@ namespace helen
                     return FALSE;
                 }
             }
-            return CallNativeReplaceFileW(replaced_path.wstring().c_str(), replacement_path.wstring().c_str(), backup_file_name,
+            return CallNativeReplaceFileW(effective_replaced_path.wstring().c_str(), effective_replacement_path.wstring().c_str(),
+                backup_file_name == nullptr ? nullptr : effective_backup_path.wstring().c_str(),
                 replace_flags, nullptr, nullptr);
         }
 
@@ -1098,7 +1178,7 @@ namespace helen
 
         return CallNativeReplaceFileW(
             overlay_paths_.at(replaced_route).wstring().c_str(),
-            replacement_path.wstring().c_str(),
+            effective_replacement_path.wstring().c_str(),
             nullptr,
             replace_flags,
             nullptr,
@@ -1111,12 +1191,24 @@ namespace helen
         BOOL fail_if_exists)
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        std::filesystem::path effective_existing_path;
+        std::filesystem::path effective_new_path;
+        const bool normalized_existing = TryNormalizeRequestPathUnlocked(existing_path, effective_existing_path);
+        const bool normalized_new = TryNormalizeRequestPathUnlocked(new_path, effective_new_path);
+        if (!normalized_existing)
+        {
+            effective_existing_path = existing_path;
+        }
+        if (!normalized_new)
+        {
+            effective_new_path = new_path;
+        }
         std::wstring source_route;
         std::wstring destination_route;
         DWORD source_error = ERROR_SUCCESS;
         DWORD destination_error = ERROR_SUCCESS;
-        const PathDisposition source_disposition = ClassifyPathUnlocked(existing_path, source_route, source_error);
-        const PathDisposition destination_disposition = ClassifyPathUnlocked(new_path, destination_route, destination_error);
+        const PathDisposition source_disposition = ClassifyPathUnlocked(effective_existing_path, source_route, source_error);
+        const PathDisposition destination_disposition = ClassifyPathUnlocked(effective_new_path, destination_route, destination_error);
         if (source_disposition == PathDisposition::Rejected || destination_disposition == PathDisposition::Rejected)
         {
             SetLastError(source_disposition == PathDisposition::Rejected
@@ -1139,7 +1231,7 @@ namespace helen
 
         if (destination_disposition == PathDisposition::Unrelated)
         {
-            return CallNativeCopyFileW(existing_path.wstring().c_str(), new_path.wstring().c_str(), fail_if_exists);
+            return CallNativeCopyFileW(effective_existing_path.wstring().c_str(), effective_new_path.wstring().c_str(), fail_if_exists);
         }
 
         const auto route = routes_.find(destination_route);
@@ -1161,7 +1253,7 @@ namespace helen
         }
 
         return CallNativeCopyFileW(
-            existing_path.wstring().c_str(),
+            effective_existing_path.wstring().c_str(),
             overlay_paths_.at(destination_route).wstring().c_str(),
             fail_if_exists);
     }
@@ -1169,12 +1261,18 @@ namespace helen
     BOOL FileWriteRoutingService::SetAttributes(const std::filesystem::path& path, DWORD attributes)
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        std::filesystem::path effective_path;
+        const bool normalized = TryNormalizeRequestPathUnlocked(path, effective_path);
+        if (!normalized)
+        {
+            effective_path = path;
+        }
         std::wstring route_key;
         DWORD classification_error = ERROR_SUCCESS;
-        const PathDisposition disposition = ClassifyPathUnlocked(path, route_key, classification_error);
+        const PathDisposition disposition = ClassifyPathUnlocked(effective_path, route_key, classification_error);
         if (disposition == PathDisposition::Unrelated)
         {
-            return CallNativeSetFileAttributesW(path.wstring().c_str(), attributes);
+            return CallNativeSetFileAttributesW(effective_path.wstring().c_str(), attributes);
         }
 
         if (disposition == PathDisposition::Rejected)
@@ -1250,9 +1348,15 @@ namespace helen
         std::vector<std::wstring> route_keys;
         for (const std::filesystem::path& path : original_paths)
         {
+            std::filesystem::path effective_path;
+            const bool normalized = TryNormalizeRequestPathUnlocked(path, effective_path);
+            if (!normalized)
+            {
+                effective_path = path;
+            }
             std::wstring route_key;
             DWORD classification_error = ERROR_SUCCESS;
-            const PathDisposition path_disposition = ClassifyPathUnlocked(path, route_key, classification_error);
+            const PathDisposition path_disposition = ClassifyPathUnlocked(effective_path, route_key, classification_error);
             if (path_disposition == PathDisposition::Rejected)
             {
                 error = classification_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : classification_error;

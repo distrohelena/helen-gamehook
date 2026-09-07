@@ -103,6 +103,21 @@ void RunFileWriteRouteDeclarationTests()
         1,
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     Expect(!rejected.has_value(), "Invalid route lifetime was silently accepted.");
+
+    std::string malformed_path = "Bad";
+    malformed_path.push_back(static_cast<char>(0xC3));
+    malformed_path.push_back(static_cast<char>(0x28));
+    const std::string malformed_build =
+        "{\"id\":\"route-build\",\"executable\":\"RouteGame.exe\",\"match\":{\"fileSize\":1,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},"
+        "\"fileWriteRoutes\":[{\"id\":\"engine-config\",\"root\":\"documents\",\"path\":\"" + malformed_path +
+        "\",\"writePolicy\":\"redirect\",\"readPolicy\":\"redirected\",\"lifetime\":\"session\"}]}";
+    WritePackFixture(root / "malformed-utf8", malformed_build, "route-build");
+    const std::optional<helen::LoadedBuildPack> malformed = repository.LoadForExecutable(
+        root / "malformed-utf8",
+        "RouteGame.exe",
+        1,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    Expect(!malformed.has_value(), "Malformed UTF-8 route path was not rejected.");
 }
 
 /**
