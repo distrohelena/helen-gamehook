@@ -87,3 +87,44 @@ PASS
 ```
 
 The correction commit SHA is recorded in the final handoff message.
+
+## Evidence command ledger
+
+The round-1 behavioral RED was run with the required Release build command:
+
+```text
+rtk proxy powershell.exe -NoProfile -Command "& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' 'tests/HelenRuntime.Tests/HelenRuntime.Tests.vcxproj' /t:Build /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143 /m:1 /nodeReuse:false /v:minimal; exit `$LASTEXITCODE"
+```
+
+followed by:
+
+```text
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& './games/HelenBatmanAA/scripts/Invoke-BatmanConsoleTool.ps1' -FilePath 'C:/dev/helenhook/bin/Win32/Release/tests/HelenRuntimeTests.exe' -Arguments @()"
+```
+
+Observed RED output:
+
+```text
+GENERATED_BATMAN_PROTOCOL_PASS
+Trusted write accepted an unverifiable protected path.
+Console tool 'C:/dev/helenhook/bin/Win32/Release/tests/HelenRuntimeTests.exe' exited with code 1.
+```
+
+Focused GREEN used the same required console invocation against the same exact executable after temporarily making `TestMain.cpp` call only `RunFileWriteRoutingServiceTests`; the wrapper retained no text output in that run, so the executable was additionally invoked directly:
+
+```text
+& 'C:/dev/helenhook/bin/Win32/Release/tests/HelenRuntimeTests.exe'; Write-Output "EXIT=$LASTEXITCODE"
+```
+
+with:
+
+```text
+EXIT=0
+```
+
+The temporary focused entry-point change was reverted before the full run. Final full GREEN used the exact required Release build command above, then the exact required console invocation above, producing:
+
+```text
+GENERATED_BATMAN_PROTOCOL_PASS
+PASS
+```
