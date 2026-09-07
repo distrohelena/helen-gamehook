@@ -169,6 +169,9 @@
     <ClInclude Include="..\include\HelenHook\FileWriteRoutingRuntimeOwner.h" />
     <ClInclude Include="..\include\HelenHook\FileWriteRoutingService.h" />
     <ClInclude Include="..\include\HelenHook\FileWriteRoutingTransaction.h" />
+    <ClInclude Include="..\include\HelenHook\FileWriteRoutingInspectedPath.h" />
+    <ClInclude Include="..\include\HelenHook\FileWriteRoutingPendingRoute.h" />
+    <ClInclude Include="..\include\HelenHook\FileWriteRoutingDiagnostics.h" />
     <ClInclude Include="..\include\HelenHook\HiddenPathMatcher.h" />
     <ClInclude Include="..\include\HelenHook\FullFileVirtualFileSource.h" />
     <ClInclude Include="..\include\HelenHook\Hook.h" />

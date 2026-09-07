@@ -118,6 +118,10 @@
     <ClCompile Include="TestMain.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="BcryptAlgorithmHandle.h" />
+    <ClInclude Include="BcryptHashHandle.h" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\HelenGameHook\HelenGameHook.vcxproj">
       <Project>{1705CBAF-34E5-4E7D-AC8C-7DCA99ABF2D6}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>

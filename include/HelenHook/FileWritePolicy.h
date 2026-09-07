@@ -1,7 +1,6 @@
 #pragma once
 
-namespace helen
-{
+namespace helen {
     /**
      * @brief Selects whether writes to a declared original are denied or session redirected.
      */

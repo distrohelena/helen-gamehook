@@ -1,5 +1,7 @@
 #include <HelenHook/PackRepository.h>
 #include <HelenHook/DeltaVirtualFileSource.h>
+#include "BcryptAlgorithmHandle.h"
+#include "BcryptHashHandle.h"
 #include <bcrypt.h>
 #include <fstream>
 #include <iostream>
@@ -11,44 +13,6 @@
 #include <windows.h>
 
 namespace {
-    /**
-     * @brief Owns a BCrypt algorithm provider and closes it on every verifier exit path.
-     */
-    class BcryptAlgorithmHandle {
-        BCRYPT_ALG_HANDLE handle_ = nullptr;
-
-    public:
-        /** @brief Takes ownership of one BCrypt algorithm provider handle. */
-        explicit BcryptAlgorithmHandle(BCRYPT_ALG_HANDLE handle) noexcept : handle_(handle) {}
-        /** @brief Closes the provider when acquisition succeeded. */
-        ~BcryptAlgorithmHandle() { if (handle_ != nullptr) { BCryptCloseAlgorithmProvider(handle_, 0); } }
-        /** @brief Prevents accidental copying of a unique native provider handle. */
-        BcryptAlgorithmHandle(const BcryptAlgorithmHandle&) = delete;
-        /** @brief Prevents accidental assignment of a unique native provider handle. */
-        BcryptAlgorithmHandle& operator=(const BcryptAlgorithmHandle&) = delete;
-        /** @brief Returns the owned provider handle to BCrypt calls. */
-        BCRYPT_ALG_HANDLE Get() const noexcept { return handle_; }
-    };
-
-    /**
-     * @brief Owns a BCrypt hash object and destroys it on every verifier exit path.
-     */
-    class BcryptHashHandle {
-        BCRYPT_HASH_HANDLE handle_ = nullptr;
-
-    public:
-        /** @brief Takes ownership of one BCrypt hash handle. */
-        explicit BcryptHashHandle(BCRYPT_HASH_HANDLE handle) noexcept : handle_(handle) {}
-        /** @brief Destroys the hash when acquisition succeeded. */
-        ~BcryptHashHandle() { if (handle_ != nullptr) { BCryptDestroyHash(handle_); } }
-        /** @brief Prevents accidental copying of a unique native hash handle. */
-        BcryptHashHandle(const BcryptHashHandle&) = delete;
-        /** @brief Prevents accidental assignment of a unique native hash handle. */
-        BcryptHashHandle& operator=(const BcryptHashHandle&) = delete;
-        /** @brief Returns the owned hash handle to BCrypt calls. */
-        BCRYPT_HASH_HANDLE Get() const noexcept { return handle_; }
-    };
-
     /** @brief Fails the console verifier immediately when a shipping contract is violated. */
     void Require(bool condition, const char* message) {
         if (!condition) { throw std::runtime_error(message); }

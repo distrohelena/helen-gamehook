@@ -8,6 +8,7 @@
 #include "CapturedPathSwitchGuard.h"
 #include "FileApiCodePageGuard.h"
 
+#include <Aclapi.h>
 #include <array>
 #include <cstddef>
 #include <cstring>
@@ -18,6 +19,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#pragma comment(lib, "advapi32.lib")
 
 namespace
 {
@@ -535,12 +538,19 @@ void RunFileWriteRoutingHookFixtureTests()
             }
         }
         ExpectHookFixture(!original_read_overlay.empty(), "Imported original-read overlay diagnostics were missing.");
+        WriteHookFixtureFile(original_read_overlay, "P");
+        ExpectHookFixture(SetNamedSecurityInfoW(const_cast<LPWSTR>(original_read_overlay.wstring().c_str()), SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS,
+            "Imported original-read overlay test security setup failed.");
         HANDLE original_read_full_access = imported_create_file_w(original_read_path.c_str(), GENERIC_ALL,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         ExpectHookFixture(original_read_full_access != INVALID_HANDLE_VALUE, "Imported original-read full-access open failed.");
         WriteHookedByte(original_read_full_access, 'Y');
-        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(original_read_full_access) != FALSE &&
-            ReadHookFixtureFile(original_read_path) == "ORIGINAL-READ" && ReadHookFixtureFile(original_read_overlay) == "Y",
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(original_read_full_access) != FALSE,
+            "Imported original-read full-access close failed.");
+        const std::string original_read_bytes = ReadHookFixtureFile(original_read_path);
+        const std::string original_read_overlay_bytes = ReadHookFixtureFile(original_read_overlay);
+        ExpectHookFixture(original_read_bytes == "ORIGINAL-READ" && original_read_overlay_bytes == "Y",
             "Imported original-read full-access write changed the original.");
         HANDLE original_read_delete_on_close = imported_create_file_w(original_read_path.c_str(), GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
@@ -550,6 +560,8 @@ void RunFileWriteRoutingHookFixtureTests()
         ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(original_read_delete_on_close) != FALSE &&
             std::filesystem::exists(original_read_path) && ReadHookFixtureFile(original_read_path) == "ORIGINAL-READ",
             "Imported original-read delete-on-close removed or changed the original.");
+        ExpectHookFixture(!std::filesystem::exists(original_read_overlay),
+            "Imported original-read delete-on-close did not delete only the overlay.");
 
         const std::filesystem::path extended_original = std::filesystem::path(L"\\\\?\\" + original_path.wstring());
         ExpectHookFixture(CallHookedImport<decltype(&CopyFileW)>("CopyFileW")(alias_source_path.c_str(), extended_original.c_str(), FALSE) != FALSE,
@@ -591,10 +603,58 @@ void RunFileWriteRoutingHookFixtureTests()
             rename_source, FileRenameInfo, const_cast<BYTE*>(protected_destination_rename.data()),
             static_cast<DWORD>(protected_destination_rename.size())) == FALSE && GetLastError() == ERROR_ACCESS_DENIED,
             "Unprotected source handle renamed over a protected destination.");
-        ExpectHookFixture(ReadHookFixtureFile(rename_source_path) == "RENAME-SOURCE" && ReadHookFixtureFile(original_path) == "ORIGINAL",
-            "Rejected protected-destination rename mutated an operand.");
         ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(rename_source) != FALSE,
             "Protected-destination rename source close failed.");
+        ExpectHookFixture(ReadHookFixtureFile(rename_source_path) == "RENAME-SOURCE" && ReadHookFixtureFile(original_path) == "ORIGINAL",
+            "Rejected protected-destination rename mutated an operand.");
+
+        WriteHookFixtureFile(rename_source_path, "RENAME-EX-SOURCE");
+        HANDLE rename_ex_source = imported_create_file_w(rename_source_path.c_str(), DELETE | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ExpectHookFixture(rename_ex_source != INVALID_HANDLE_VALUE, "FileRenameInfoEx source could not be opened.");
+        const std::vector<BYTE> protected_destination_rename_ex = BuildRenameInformation(original_path, nullptr,
+            FILE_RENAME_FLAG_REPLACE_IF_EXISTS);
+        ExpectHookFixture(CallHookedImport<decltype(&SetFileInformationByHandle)>("SetFileInformationByHandle")(
+            rename_ex_source, FileRenameInfoEx, const_cast<BYTE*>(protected_destination_rename_ex.data()),
+            static_cast<DWORD>(protected_destination_rename_ex.size())) == FALSE && GetLastError() == ERROR_ACCESS_DENIED,
+            "FileRenameInfoEx escaped the protected destination guard.");
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(rename_ex_source) != FALSE,
+            "FileRenameInfoEx source close failed.");
+        ExpectHookFixture(ReadHookFixtureFile(rename_source_path) == "RENAME-EX-SOURCE" && ReadHookFixtureFile(original_path) == "ORIGINAL",
+            "Rejected FileRenameInfoEx mutated an operand.");
+
+        WriteHookFixtureFile(rename_source_path, "MALFORMED-TRUNCATED");
+        HANDLE malformed_truncated_source = imported_create_file_w(rename_source_path.c_str(), DELETE | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ExpectHookFixture(malformed_truncated_source != INVALID_HANDLE_VALUE, "Truncated-rename source could not be opened.");
+        std::vector<BYTE> malformed_truncated = BuildRenameInformation(original_path, nullptr, 1);
+        ExpectHookFixture(malformed_truncated.size() > 2 &&
+            CallHookedImport<decltype(&SetFileInformationByHandle)>("SetFileInformationByHandle")(
+                malformed_truncated_source, FileRenameInfo, malformed_truncated.data(),
+                static_cast<DWORD>(malformed_truncated.size() - 2)) == FALSE && GetLastError() == ERROR_INVALID_PARAMETER,
+            "Truncated non-null rename payload was not rejected safely.");
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(malformed_truncated_source) != FALSE,
+            "Truncated rename source close failed.");
+        ExpectHookFixture(ReadHookFixtureFile(rename_source_path) == "MALFORMED-TRUNCATED",
+            "Truncated rename payload changed its source.");
+
+        WriteHookFixtureFile(rename_source_path, "RENAME-ALIAS-SOURCE");
+        HANDLE rename_alias_source = imported_create_file_w(rename_source_path.c_str(), DELETE | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ExpectHookFixture(rename_alias_source != INVALID_HANDLE_VALUE, "Protected-alias rename source could not be opened.");
+        const std::filesystem::path extended_original_rename = std::filesystem::path(L"\\\\?\\" + original_path.wstring());
+        const std::vector<BYTE> protected_alias_rename = BuildRenameInformation(extended_original_rename, nullptr, 1);
+        const BOOL protected_alias_result = CallHookedImport<decltype(&SetFileInformationByHandle)>("SetFileInformationByHandle")(
+            rename_alias_source, FileRenameInfo, const_cast<BYTE*>(protected_alias_rename.data()),
+            static_cast<DWORD>(protected_alias_rename.size()));
+        const DWORD protected_alias_error = GetLastError();
+        ExpectHookFixture(protected_alias_result == FALSE &&
+            (protected_alias_error == ERROR_ACCESS_DENIED || protected_alias_error == ERROR_INVALID_PARAMETER),
+            "Extended protected destination alias escaped the rename guard.");
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(rename_alias_source) != FALSE,
+            "Protected destination alias source close failed.");
+        ExpectHookFixture(ReadHookFixtureFile(rename_source_path) == "RENAME-ALIAS-SOURCE" && ReadHookFixtureFile(original_path) == "ORIGINAL",
+            "Rejected protected destination alias rename mutated an operand.");
 
         HANDLE protected_parent = imported_create_file_w(root.c_str(), DELETE | FILE_LIST_DIRECTORY,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
@@ -605,10 +665,10 @@ void RunFileWriteRoutingHookFixtureTests()
             protected_parent, FileRenameInfo, const_cast<BYTE*>(parent_rename.data()), static_cast<DWORD>(parent_rename.size())) == FALSE &&
             GetLastError() == ERROR_INVALID_PARAMETER,
             "Protected parent directory handle rename was not rejected before mutation.");
-        ExpectHookFixture(std::filesystem::exists(root) && std::filesystem::exists(original_path) && ReadHookFixtureFile(original_path) == "ORIGINAL",
-            "Rejected protected-parent rename changed protected state.");
         ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(protected_parent) != FALSE,
             "Protected parent directory handle close failed.");
+        ExpectHookFixture(std::filesystem::exists(root) && std::filesystem::exists(original_path) && ReadHookFixtureFile(original_path) == "ORIGINAL",
+            "Rejected protected-parent rename changed protected state.");
 
         const std::filesystem::path unrelated_rename_directory = root / "unrelated-rename";
         ExpectHookFixture(CreateDirectoryW(unrelated_rename_directory.c_str(), nullptr) != FALSE,
@@ -648,8 +708,9 @@ void RunFileWriteRoutingHookFixtureTests()
         ExpectHookFixture(CallHookedImport<decltype(&SetFileInformationByHandle)>("SetFileInformationByHandle")(
             malformed_source, FileRenameInfo, nullptr, sizeof(FILE_RENAME_INFO) - 1) == FALSE && GetLastError() == ERROR_INVALID_PARAMETER,
             "Malformed rename buffer was not rejected safely.");
-        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(malformed_source) != FALSE &&
-            ReadHookFixtureFile(rename_source_path) == "MALFORMED",
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(malformed_source) != FALSE,
+            "Malformed rename source close failed.");
+        ExpectHookFixture(ReadHookFixtureFile(rename_source_path) == "MALFORMED",
             "Malformed rename buffer changed its source.");
 
         const std::filesystem::path rename_cwd_original = root / "rename-cwd-original";

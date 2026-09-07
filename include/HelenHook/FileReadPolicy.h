@@ -1,7 +1,6 @@
 #pragma once
 
-namespace helen
-{
+namespace helen {
     /**
      * @brief Selects the source used by later reads of a declared original.
      */

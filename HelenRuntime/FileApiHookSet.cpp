@@ -547,7 +547,7 @@ namespace
         }
 
         const DWORD name_length = static_cast<DWORD>(name.size() * sizeof(wchar_t));
-        payload.assign(header_size + name_length, 0);
+        payload.assign(header_size + name_length + sizeof(wchar_t), 0);
         std::memcpy(payload.data(), &flags, sizeof(flags));
         const HANDLE root_directory = nullptr;
         std::memcpy(payload.data() + offsetof(FILE_RENAME_INFO, RootDirectory), &root_directory, sizeof(root_directory));
@@ -1887,8 +1887,8 @@ namespace helen
                     return FALSE;
                 }
 
-                return CallRealSetFileInformationByHandle(hFile, FileInformationClass, captured_rename_payload.data(),
-                    static_cast<DWORD>(captured_rename_payload.size()));
+                return CallRealSetFileInformationByHandle(hFile, FileInformationClass,
+                    captured_rename_payload.data(), static_cast<DWORD>(captured_rename_payload.size()));
             }
             else if (source_is_protected)
             {

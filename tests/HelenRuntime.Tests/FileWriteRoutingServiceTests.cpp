@@ -4,6 +4,7 @@
 #include <HelenHook/FileWriteRoutingService.h>
 #include <HelenHook/FileWriteRoutingTransaction.h>
 
+#include <Aclapi.h>
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -11,6 +12,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#pragma comment(lib, "advapi32.lib")
 
 namespace
 {
@@ -234,6 +237,7 @@ void RunFileWriteRoutingServiceTests()
             }
         }
         Expect(!original_read_overlay.empty(), "Original-read overlay diagnostics were missing.");
+        Expect(!std::filesystem::exists(original_read_overlay), "Delete-on-close did not delete only the original-read overlay.");
         const HANDLE recreate_original_read_overlay = service.Open(original_read_path, GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         Expect(recreate_original_read_overlay != INVALID_HANDLE_VALUE, "Original-read overlay recreation failed.");
@@ -241,6 +245,9 @@ void RunFileWriteRoutingServiceTests()
         Expect(WriteFile(recreate_original_read_overlay, "P", 1, &bytes_written, nullptr) != FALSE && bytes_written == 1,
             "Original-read overlay seed write failed.");
         Expect(service.Close(recreate_original_read_overlay) != FALSE, "Original-read overlay seed close failed.");
+        Expect(SetNamedSecurityInfoW(const_cast<LPWSTR>(original_read_overlay.wstring().c_str()), SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS,
+            "Original-read overlay test security setup failed.");
 
         const HANDLE full_access_redirect = service.Open(original_read_path, GENERIC_ALL,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
@@ -253,6 +260,23 @@ void RunFileWriteRoutingServiceTests()
         Expect(ReadThroughRouter(service, original_read_path) == "O", "Original-read policy exposed the full-access overlay write.");
         Expect(ReadNativePath(original_read_overlay) == "Y", "Full-access write was not routed to the original-read overlay.");
         Expect(ReadNativePath(original_read_path) == "O", "Full-access write changed the protected original.");
+
+        for (const DWORD security_access : { WRITE_DAC, WRITE_OWNER, ACCESS_SYSTEM_SECURITY, MAXIMUM_ALLOWED })
+        {
+            const HANDLE security_handle = service.Open(original_read_path, security_access,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (security_handle != INVALID_HANDLE_VALUE)
+            {
+                Expect(service.Close(security_handle) != FALSE, "Security/max-access routed handle close failed.");
+            }
+            else
+            {
+                const DWORD security_error = GetLastError();
+                Expect(security_error == ERROR_ACCESS_DENIED || security_error == ERROR_PRIVILEGE_NOT_HELD,
+                    "Security/max-access request failed with an unexpected error.");
+            }
+        }
+        Expect(ReadNativePath(original_read_path) == "O", "Security/max-access requests changed the protected original.");
 
         const HANDLE original_policy_write = service.Open(original_read_path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         Expect(original_policy_write != INVALID_HANDLE_VALUE, "Original-read redirect write open failed.");

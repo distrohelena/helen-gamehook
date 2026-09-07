@@ -6,16 +6,14 @@
 #include <HelenHook/FileReadPolicy.h>
 #include <HelenHook/FileWritePolicy.h>
 
-namespace helen
-{
+namespace helen {
     /**
      * @brief Describes one exact original file and the read/write policy applied to it for a session.
      *
      * The path is resolved and validated by FileWriteRoutingService::Initialize. Route declarations are exact files;
      * callers must not use a directory, wildcard, alternate stream, or path that escapes the request base directory.
      */
-    struct FileWriteRoute
-    {
+    struct FileWriteRoute {
         /** @brief Stable pack-provided identifier used for diagnostics and route uniqueness. */
         std::string Id;
 

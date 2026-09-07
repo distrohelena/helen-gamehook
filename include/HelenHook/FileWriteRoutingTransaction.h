@@ -6,65 +6,61 @@
 
 #include <windows.h>
 
-namespace helen
-{
-    class FileWriteRoutingService;
+namespace helen {
+class FileWriteRoutingService;
+
+/**
+ * @brief Retains routing serialization while HelenHook writes originals and synchronizes session overlays.
+ *
+ * A transaction has no global bypass mode. It either synchronizes verified originals, is explicitly canceled without
+ * a write, or fails closed on destruction so stale session data cannot be presented as a successful save.
+ */
+class FileWriteRoutingTransaction {
+  public:
+    /**
+     * @brief Latches affected routes failed when a transaction is abandoned before settlement.
+     */
+    ~FileWriteRoutingTransaction();
+
+    FileWriteRoutingTransaction(const FileWriteRoutingTransaction &) = delete;
+    FileWriteRoutingTransaction &operator=(const FileWriteRoutingTransaction &) = delete;
+    FileWriteRoutingTransaction(FileWriteRoutingTransaction &&) = delete;
+    FileWriteRoutingTransaction &operator=(FileWriteRoutingTransaction &&) = delete;
 
     /**
-     * @brief Retains routing serialization while HelenHook writes originals and synchronizes session overlays.
-     *
-     * A transaction has no global bypass mode. It either synchronizes verified originals, is explicitly canceled without
-     * a write, or fails closed on destruction so stale session data cannot be presented as a successful save.
+     * @brief Copies verified current originals to overlays and releases the retained routing lock.
+     * @param error Receives ERROR_SUCCESS or the synchronization failure.
+     * @return True when all affected overlays were synchronized.
      */
-    class FileWriteRoutingTransaction
-    {
-    public:
-        /**
-         * @brief Latches affected routes failed when a transaction is abandoned before settlement.
-         */
-        ~FileWriteRoutingTransaction();
+    bool Synchronize(DWORD &error);
 
-        FileWriteRoutingTransaction(const FileWriteRoutingTransaction&) = delete;
-        FileWriteRoutingTransaction& operator=(const FileWriteRoutingTransaction&) = delete;
-        FileWriteRoutingTransaction(FileWriteRoutingTransaction&&) = delete;
-        FileWriteRoutingTransaction& operator=(FileWriteRoutingTransaction&&) = delete;
+    /**
+     * @brief Settles a transaction without changing originals or overlays and releases its routing lock.
+     */
+    void CancelWithoutWrite();
 
-        /**
-         * @brief Copies verified current originals to overlays and releases the retained routing lock.
-         * @param error Receives ERROR_SUCCESS or the synchronization failure.
-         * @return True when all affected overlays were synchronized.
-         */
-        bool Synchronize(DWORD& error);
+  private:
+    /** @brief Service whose route state is retained for the transaction lifetime. */
+    FileWriteRoutingService *service_;
 
-        /**
-         * @brief Settles a transaction without changing originals or overlays and releases its routing lock.
-         */
-        void CancelWithoutWrite();
+    /** @brief Canonical route keys affected by this trusted save. */
+    std::vector<std::wstring> route_keys_;
 
-    private:
-        friend class FileWriteRoutingService;
+    /** @brief Mutex lock retained from acquisition through original writing and synchronization. */
+    std::unique_lock<std::mutex> lock_;
 
-        /**
-         * @brief Constructs a transaction from the service's retained serialization lock.
-         * @param service Routing service that owns the affected route state.
-         * @param route_keys Canonical routes named by the trusted save.
-         * @param lock Retained service mutex lock.
-         */
-        FileWriteRoutingTransaction(
-            FileWriteRoutingService& service,
-            std::vector<std::wstring> route_keys,
-            std::unique_lock<std::mutex>&& lock);
+    /** @brief True after synchronization or explicit no-write cancellation. */
+    bool settled_ = false;
 
-        /** @brief Service whose route state is retained for the transaction lifetime. */
-        FileWriteRoutingService* service_;
+    friend class FileWriteRoutingService;
 
-        /** @brief Canonical route keys affected by this trusted save. */
-        std::vector<std::wstring> route_keys_;
-
-        /** @brief Mutex lock retained from acquisition through original writing and synchronization. */
-        std::unique_lock<std::mutex> lock_;
-
-        /** @brief True after synchronization or explicit no-write cancellation. */
-        bool settled_ = false;
-    };
-}
+    /**
+     * @brief Constructs a transaction from the service's retained serialization lock.
+     * @param service Routing service that owns the affected route state.
+     * @param route_keys Canonical routes named by the trusted save.
+     * @param lock Retained service mutex lock.
+     */
+    FileWriteRoutingTransaction(FileWriteRoutingService &service, std::vector<std::wstring> route_keys,
+                                std::unique_lock<std::mutex> &&lock);
+};
+} // namespace helen
