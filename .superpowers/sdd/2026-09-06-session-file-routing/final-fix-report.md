@@ -24,7 +24,7 @@ The live guide now describes the trusted candidate as config-save-only: explicit
 
 ## TDD / verification evidence
 
-The reviewed behavioral RED cases were real file operations, not compile-only checks: before the fixes, original-read `FILE_FLAG_DELETE_ON_CLOSE` removed the protected original, `GENERIC_ALL`/`OPEN_EXISTING` could select the original, an unrelated handle could rename over a protected destination, and a protected directory handle could rename its parent. The final service and imported fixtures now assert the corresponding physical bytes, existence, and no-mutation outcomes. The native GREEN run below covers the same operations after the fixes.
+No router-level pre-fix regression executable was run in this wave, so there is no executed router RED result to claim. The native characterization probe did confirm that unhooked `GENERIC_READ | FILE_FLAG_DELETE_ON_CLOSE` deletes a temporary file on close; code review identified the original-read `GENERIC_ALL`/`OPEN_EXISTING`, protected-destination handle rename, and protected-parent handle rename bypasses. These are distinguished from the final behavioral GREEN below, which executes the service and imported fixtures against the corrected code and asserts physical bytes, existence, and no-mutation outcomes.
 
 The authoritative build used the proven isolated wrapper (MSBuild 18.9.1, v143, Release, Win32, `/m:1`, `FreshBuildIsolation.targets`) from source commit `455e88f03897c850b7e40abd2e2bb7cdb68645c8`:
 
@@ -43,6 +43,16 @@ Generated no-save source: CD533AFDB711CCF06A8FA76C90C7EC8F38B564B869030457372A24
 ```
 
 The full console run through `Invoke-BatmanConsoleTool.ps1` exited 0 and printed `BATMAN_PARTIAL_SYNC_CHILD_PASS`, `BATMAN_RECOVERED_SYNC_CHILD_PASS`, `BATMAN_FAILED_SAVE_SYNC_CHILD_PASS`, `GENERATED_BATMAN_PROTOCOL_PASS`, `FILE_ROUTING_HOOK_CHILD_PASS`, `FILE_ROUTING_HOOK_CHILD_EXIT=0`, and `PASS`. The package builder printed `BATMAN_DIRECT_GRAPHICS_FRONTEND_PASS`, `BATMAN_DIRECT_PACKAGE_PASS`, `BATMAN_DIRECT_DELTA_PASS`, and `VERIFIED_DIRECT_GRAPHICS_CANDIDATE` for both fresh routing modes; the expected FFDec profile-lock warning remains environmental. The rejection verifier printed all nine `REJECTED_AS_EXPECTED` cases and `BATMAN_DIRECT_PACKAGE_REJECTIONS_PASS`. The no-save session check printed `NO_SAVE_SESSION_PASS` and confirmed both INIs unchanged.
+
+The exact final verification commands were:
+
+```powershell
+rtk proxy powershell.exe -NoProfile -ExecutionPolicy Bypass -File games/HelenBatmanAA/scripts/Invoke-BatmanConsoleTool.ps1 -FilePath output/routing-final-fix-native-20260907-d/native/HelenRuntimeTests.exe -Arguments x
+rtk proxy powershell.exe -NoProfile -ExecutionPolicy Bypass -File games/HelenBatmanAA/scripts/Test-BatmanDirectGraphicsPackageRejections.ps1 -CandidateRoot output/batman-direct-graphics/candidate-aac36145d0ba4c03ad0f7f25d5ab28b1 -RuntimeLibraryPath output/routing-final-fix-native-20260907-d/native/HelenRuntime.lib -RoutingCandidateRoot output/batman-direct-graphics/candidate-c818dbb877da42ca8a705acca365a5d0
+rtk proxy powershell.exe -NoProfile -ExecutionPolicy Bypass -File games/HelenBatmanAA/experiments/windowed-resolution/Test-NoSaveSession.ps1 -RuntimeLibraryPath output/routing-final-fix-nosave-20260907/native/HelenRuntime.lib
+```
+
+Both candidate builds ran the emitted frontend check and the FFDec-decompiled frontend behavior check; FFDec's profile-lock warning is recorded and did not prevent either PASS.
 
 ## Files changed
 
