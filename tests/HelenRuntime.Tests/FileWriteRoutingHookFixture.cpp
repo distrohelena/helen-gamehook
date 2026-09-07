@@ -17,28 +17,40 @@
 
 namespace
 {
-    /** @brief Keeps required and safety-sensitive kernel32 imports materialized in the fixture PE import table. */
+    /** @brief Keeps SetFilePointerEx materialized so the fixture exercises routed-handle cursor behavior through its patched IAT. */
     volatile decltype(&SetFilePointerEx) SetFilePointerExImportAnchor = &SetFilePointerEx;
 
-    /** @brief Keeps duplicate-handle coverage present even when the call is resolved through the inspected IAT. */
+    /** @brief Keeps DuplicateHandle materialized so local and foreign-process duplication tests resolve through the patched IAT. */
     volatile decltype(&DuplicateHandle) DuplicateHandleImportAnchor = &DuplicateHandle;
 
-    /** @brief Keeps handle-information coverage present even when the call is resolved through the inspected IAT. */
+    /** @brief Keeps SetFileInformationByHandle materialized so protected-handle mutation tests resolve through the patched IAT. */
     volatile decltype(&SetFileInformationByHandle) SetFileInformationByHandleImportAnchor = &SetFileInformationByHandle;
 
-    /** @brief Keeps every A/W mutation import used by the fixture in the child PE. */
+    /** @brief Keeps CreateFileW materialized for the Unicode routed-open fixture calls. */
     volatile decltype(&CreateFileW) CreateFileWImportAnchor = &CreateFileW;
+    /** @brief Keeps CreateFileA materialized for the ANSI deny-route fixture call. */
     volatile decltype(&CreateFileA) CreateFileAImportAnchor = &CreateFileA;
+    /** @brief Keeps CopyFileW materialized for protected-destination alias mutation coverage. */
     volatile decltype(&CopyFileW) CopyFileWImportAnchor = &CopyFileW;
+    /** @brief Keeps MoveFileExA materialized for ANSI delayed and routed publication coverage. */
     volatile decltype(&MoveFileExA) MoveFileExAImportAnchor = &MoveFileExA;
+    /** @brief Keeps MoveFileExW materialized for Unicode source-escape and native coexistence coverage. */
     volatile decltype(&MoveFileExW) MoveFileExWImportAnchor = &MoveFileExW;
+    /** @brief Keeps ReplaceFileW materialized for protected overlay replacement and backup rejection coverage. */
     volatile decltype(&ReplaceFileW) ReplaceFileWImportAnchor = &ReplaceFileW;
+    /** @brief Keeps SetFileAttributesA materialized for ANSI protected-overlay attribute coverage. */
     volatile decltype(&SetFileAttributesA) SetFileAttributesAImportAnchor = &SetFileAttributesA;
+    /** @brief Keeps CreateFileMappingW materialized for writable and named mapping guards. */
     volatile decltype(&CreateFileMappingW) CreateFileMappingWImportAnchor = &CreateFileMappingW;
+    /** @brief Keeps RemoveDirectoryW materialized for protected-parent mutation coverage. */
     volatile decltype(&RemoveDirectoryW) RemoveDirectoryWImportAnchor = &RemoveDirectoryW;
+    /** @brief Keeps DeleteFileW materialized for overlay-only deletion and alias mutation coverage. */
     volatile decltype(&DeleteFileW) DeleteFileWImportAnchor = &DeleteFileW;
+    /** @brief Keeps CloseHandle materialized for tracked, virtual, and native handle ownership coverage. */
     volatile decltype(&CloseHandle) CloseHandleImportAnchor = &CloseHandle;
+    /** @brief Keeps WriteFile materialized for tracked and preactivation protected-handle write coverage. */
     volatile decltype(&WriteFile) WriteFileImportAnchor = &WriteFile;
+    /** @brief Keeps SetEndOfFile materialized for preactivation protected-handle truncation coverage. */
     volatile decltype(&SetEndOfFile) SetEndOfFileImportAnchor = &SetEndOfFile;
 
     /** @brief Throws a descriptive failure when one real hooked-fixture assertion is false. */
@@ -144,10 +156,15 @@ void RunFileWriteRoutingHookFixtureTests()
     const std::filesystem::path deny_path = root / "Deny.ini";
     const std::filesystem::path source_path = root / "BmEngine.tmp";
     const std::filesystem::path unrelated_path = root / "Unrelated.ini";
+    const std::filesystem::path alias_source_path = root / "AliasSource.tmp";
+    const std::filesystem::path alias_backup_path = root / "AliasBackup.bak";
+    const std::filesystem::path alias_escape_path = root / "AliasEscape.ini";
     WriteHookFixtureFile(original_path, "ORIGINAL");
     WriteHookFixtureFile(deny_path, "DENY");
     WriteHookFixtureFile(source_path, "COPY");
     WriteHookFixtureFile(unrelated_path, "NATIVE");
+    WriteHookFixtureFile(alias_source_path, "ALIAS-SOURCE");
+    WriteHookFixtureFile(alias_backup_path, "ALIAS-BACKUP");
 
     try
     {
@@ -209,6 +226,20 @@ void RunFileWriteRoutingHookFixtureTests()
         HANDLE denied = CallHookedImport<decltype(&CreateFileA)>("CreateFileA")(deny_path.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         ExpectHookFixture(denied == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED, "Imported denied CreateFileA was not rejected.");
+
+        const std::filesystem::path extended_original = std::filesystem::path(L"\\\\?\\" + original_path.wstring());
+        ExpectHookFixture(CallHookedImport<decltype(&CopyFileW)>("CopyFileW")(alias_source_path.c_str(), extended_original.c_str(), FALSE) != FALSE,
+            "Extended protected destination did not redirect its overlay.");
+        ExpectHookFixture(CallHookedImport<decltype(&DeleteFileW)>("DeleteFileW")(extended_original.c_str()) != FALSE,
+            "Extended protected alias did not delete only its overlay.");
+        ExpectHookFixture(std::filesystem::exists(original_path) && std::filesystem::exists(alias_source_path) && std::filesystem::exists(alias_backup_path),
+            "Extended alias overlay deletion removed a literal operand.");
+        ExpectHookFixture(CallHookedImport<decltype(&MoveFileExW)>("MoveFileExW")(extended_original.c_str(), alias_escape_path.c_str(), MOVEFILE_REPLACE_EXISTING) == FALSE &&
+            GetLastError() == ERROR_ACCESS_DENIED, "Extended protected source escaped to an unrelated destination.");
+        ExpectHookFixture(!std::filesystem::exists(alias_escape_path), "Rejected extended alias move created its destination.");
+        ExpectHookFixture(CallHookedImport<decltype(&ReplaceFileW)>("ReplaceFileW")(extended_original.c_str(), alias_source_path.c_str(), alias_backup_path.c_str(),
+            REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr) == FALSE && GetLastError() == ERROR_NOT_SUPPORTED,
+            "Extended protected replacement accepted an unsafe backup operand.");
 
         WriteHookFixtureFile(source_path, "C");
         ExpectHookFixture(CallHookedImport<decltype(&CopyFileW)>("CopyFileW")(source_path.c_str(), original_path.c_str(), FALSE) != FALSE, "Imported CopyFileW did not route destination.");
@@ -290,6 +321,9 @@ void RunFileWriteRoutingHookFixtureTests()
             "Unrelated MoveFileExW lost native COPY_ALLOWED behavior.");
         hooks.Remove();
         ExpectHookFixture(ReadHookFixtureFile(original_path) == "ORIGINAL", "Redirected imported mutations changed the original file.");
+        ExpectHookFixture(ReadHookFixtureFile(alias_source_path) == "ALIAS-SOURCE", "Rejected extended alias mutation changed its source operand.");
+        ExpectHookFixture(ReadHookFixtureFile(alias_backup_path) == "ALIAS-BACKUP", "Rejected extended alias mutation changed its backup operand.");
+        ExpectHookFixture(!std::filesystem::exists(alias_escape_path), "Rejected extended alias mutation left an escape destination.");
         ExpectHookFixture(ReadHookFixtureFile(unrelated_path) == "UATIVE", "Unrelated imported write did not retain native behavior.");
         ExpectHookFixture(ReadHookFixtureFile(native_move_destination) == "MOVE", "Unrelated native MoveFileExW did not publish its destination.");
     }
