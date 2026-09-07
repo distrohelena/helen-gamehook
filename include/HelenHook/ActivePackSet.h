@@ -6,6 +6,7 @@
 #include <HelenHook/CommandDefinition.h>
 #include <HelenHook/ConfigEntryDefinition.h>
 #include <HelenHook/ExternalBindingDefinition.h>
+#include <HelenHook/FileWriteRouteDefinition.h>
 #include <HelenHook/FeatureDefinition.h>
 #include <HelenHook/LoadedBuildPack.h>
 #include <HelenHook/MemoryStateObserverDefinition.h>
@@ -52,6 +53,9 @@ namespace helen
 
         /** @brief Deduplicated hidden game-relative paths declared across every enabled pack. */
         std::vector<std::string> MissingPaths;
+
+        /** @brief Unified exact file routes declared by the enabled packs. */
+        std::vector<FileWriteRouteDefinition> FileWriteRoutes;
 
         /** @brief Pack-scoped virtual file registrations keyed later by virtual file service registration. */
         std::vector<PackScopedVirtualFileRegistration> VirtualFiles;

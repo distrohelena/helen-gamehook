@@ -155,6 +155,8 @@ void RunVirtualFileServiceTests();
 
 /** @brief Runs real temporary-file session routing and trusted transaction coverage. */
 void RunFileWriteRoutingServiceTests();
+void RunFileWriteRouteDeclarationTests();
+void RunFileWriteRouteResolverTests();
 
 /** @brief Runs the real imported Win32 IAT routing fixture for session mutations. */
 void RunFileWriteRoutingHookFixtureTests();
@@ -222,6 +224,8 @@ int wmain(int argc, wchar_t** argv)
         RunMemoryStateObserverServiceTests();
         RunVirtualFileServiceTests();
         RunFileWriteRoutingServiceTests();
+        RunFileWriteRouteDeclarationTests();
+        RunFileWriteRouteResolverTests();
         RunFileWriteRoutingHookFixtureChildProcess();
         RunDebugTraceServiceTests();
         RunWindowBehaviorConfigTests();

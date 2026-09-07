@@ -118,6 +118,8 @@
     <ClInclude Include="..\include\HelenHook\RuntimeLayout.h" />
     <ClInclude Include="..\include\HelenHook\RuntimeValueStore.h" />
     <ClInclude Include="..\include\HelenHook\VirtualFileService.h" />
+    <ClInclude Include="..\include\HelenHook\FileWriteRouteResolver.h" />
+    <ClInclude Include="..\include\HelenHook\FileWriteRoutingRuntimeOwner.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

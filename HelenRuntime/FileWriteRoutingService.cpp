@@ -238,9 +238,9 @@ namespace
     }
 
     /**
-     * @brief Resolves a possibly relative request against the service request base.
+     * @brief Resolves a path through Win32 so relative requests use the process current directory.
      * @param path Caller-supplied path.
-     * @param request_base Base directory used for relative requests.
+     * @param request_base Optional declaration base used only when initialization resolves a relative route.
      * @param full_path Receives GetFullPathNameW output.
      * @return True when Win32 accepted the path.
      */
@@ -651,6 +651,29 @@ namespace helen
         return true;
     }
 
+    std::vector<FileWriteRoutingService::RouteDiagnostics> FileWriteRoutingService::GetRouteDiagnostics() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<RouteDiagnostics> diagnostics;
+        diagnostics.reserve(routes_.size());
+        for (const auto& [route_key, route] : routes_)
+        {
+            RouteDiagnostics detail;
+            detail.Id = route.Id;
+            detail.OriginalPath = route.OriginalPath;
+            const auto overlay = overlay_paths_.find(route_key);
+            if (overlay != overlay_paths_.end())
+            {
+                detail.OverlayPath = overlay->second;
+            }
+            detail.WritePolicy = route.WritePolicy;
+            detail.ReadPolicy = route.ReadPolicy;
+            diagnostics.push_back(std::move(detail));
+        }
+
+        return diagnostics;
+    }
+
     bool FileWriteRoutingService::IsProtectedPath(const std::filesystem::path& path) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -680,7 +703,7 @@ namespace helen
             return PathDisposition::Rejected;
         }
         std::wstring full_path;
-        if (!ResolveFullPath(path, request_base_directory_, full_path))
+        if (!ResolveFullPath(path, {}, full_path))
         {
             error = ERROR_INVALID_NAME;
             return IsKnownNativeNonFilesystemPath(path) ? PathDisposition::Unrelated : PathDisposition::Rejected;
@@ -1181,7 +1204,7 @@ namespace helen
     bool FileWriteRoutingService::IsProtectedParentPathUnlocked(const std::filesystem::path& path) const
     {
         std::wstring full_path;
-        if (!ResolveFullPath(path, request_base_directory_, full_path))
+        if (!ResolveFullPath(path, {}, full_path))
         {
             return false;
         }

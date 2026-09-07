@@ -6,6 +6,7 @@
 #include <HelenHook/BuildMatchDefinition.h>
 #include <HelenHook/CommandDefinition.h>
 #include <HelenHook/ExternalBindingDefinition.h>
+#include <HelenHook/FileWriteRouteDefinition.h>
 #include <HelenHook/HookDefinition.h>
 #include <HelenHook/MemoryStateObserverDefinition.h>
 #include <HelenHook/RuntimeSlotDefinition.h>
@@ -34,6 +35,8 @@ namespace helen
         std::vector<std::string> StartupCommandIds;
         /** @brief Canonical relative game paths that the runtime should report as missing when this build is active. */
         std::vector<std::string> MissingPaths;
+        /** @brief Exact pack-declared files that receive session write-routing policies at runtime. */
+        std::vector<FileWriteRouteDefinition> FileWriteRoutes;
         /** @brief Virtual file declarations served when this build is active. */
         std::vector<VirtualFileDefinition> VirtualFiles;
         /** @brief External callback bindings available to patched gameplay assets. */

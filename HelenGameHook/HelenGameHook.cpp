@@ -11,6 +11,8 @@
 #include <HelenHook/ExecutableFingerprint.h>
 #include <HelenHook/ExternalBindingService.h>
 #include <HelenHook/FileApiHookSet.h>
+#include <HelenHook/FileWriteRouteResolver.h>
+#include <HelenHook/FileWriteRoutingRuntimeOwner.h>
 #include <HelenHook/JsonConfigStore.h>
 #include <HelenHook/LoadedBuildPack.h>
 #include <HelenHook/LoadedBuildPackSet.h>
@@ -76,6 +78,8 @@ namespace
     std::unique_ptr<helen::VirtualFileService> g_virtual_files;
     /** @brief Win32 API hook set that redirects declared virtual files into RAM-backed handles. */
     std::unique_ptr<helen::FileApiHookSet> g_file_hooks;
+    /** @brief Heap-owned shared routing service retained across hook and direct-callback lifetimes. */
+    std::unique_ptr<helen::FileWriteRoutingRuntimeOwner> g_file_write_routing_owner;
     /** @brief Optional Direct3D 9 texture replacement hook set driven by build texture metadata. */
     std::unique_ptr<helen::D3d9TextureReplacementHookSet> g_d3d9_texture_hooks;
     /** @brief Optional window behavior hook set driven by generic `window.*` runtime config keys. */
@@ -386,6 +390,29 @@ namespace
             "BmEngine.ini";
         CoTaskMemFree(documents_path);
         return ini_path;
+    }
+
+    /**
+     * @brief Resolves the Windows Documents known-folder root for pack-declared document routes.
+     * @return Absolute Documents directory, or no value when the known-folder API fails.
+     */
+    std::optional<std::filesystem::path> TryGetDocumentsRoot()
+    {
+        PWSTR documents_path = nullptr;
+        const HRESULT result = SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT, nullptr, &documents_path);
+        if (FAILED(result) || documents_path == nullptr)
+        {
+            if (documents_path != nullptr)
+            {
+                CoTaskMemFree(documents_path);
+            }
+
+            return std::nullopt;
+        }
+
+        const std::filesystem::path root(documents_path);
+        CoTaskMemFree(documents_path);
+        return root;
     }
 
     /**
@@ -776,6 +803,77 @@ namespace
             return false;
         }
 
+        if (!active_pack_set.FileWriteRoutes.empty())
+        {
+            const bool needs_documents_root = std::any_of(
+                active_pack_set.FileWriteRoutes.begin(),
+                active_pack_set.FileWriteRoutes.end(),
+                [](const helen::FileWriteRouteDefinition& definition) { return definition.Root == "documents"; });
+            const std::optional<std::filesystem::path> documents_root = needs_documents_root
+                ? TryGetDocumentsRoot()
+                : std::optional<std::filesystem::path>();
+            if (needs_documents_root && !documents_root.has_value())
+            {
+                helen::Log(L"[runtime] file-write routing requires a Documents known-folder root, but lookup failed.");
+                return false;
+            }
+
+            const helen::FileWriteRouteResolver resolver(
+                layout.GameRoot.parent_path(),
+                documents_root.value_or(std::filesystem::path()));
+            std::vector<helen::FileWriteRoute> resolved_routes;
+            std::string route_failure_reason;
+            if (!resolver.TryResolve(active_pack_set.FileWriteRoutes, resolved_routes, route_failure_reason))
+            {
+                helen::Logf(L"[runtime] file-write route resolution failed reason=%ls", ToWideString(route_failure_reason).c_str());
+                return false;
+            }
+
+            const std::shared_ptr<helen::FileWriteRoutingService> routing_service =
+                std::make_shared<helen::FileWriteRoutingService>(layout.CacheDirectory, layout.GameRoot);
+            DWORD routing_error = ERROR_SUCCESS;
+            if (!routing_service->Initialize(resolved_routes, routing_error))
+            {
+                helen::Logf(L"[runtime] file-write routing initialization failed error=%lu", routing_error);
+                return false;
+            }
+
+            g_file_write_routing_owner = std::make_unique<helen::FileWriteRoutingRuntimeOwner>(routing_service);
+            for (const helen::FileWriteRoutingService::RouteDiagnostics& route : routing_service->GetRouteDiagnostics())
+            {
+                const wchar_t* write_policy = route.WritePolicy == helen::FileWritePolicy::Deny ? L"deny" : L"redirect";
+                const wchar_t* read_policy = route.ReadPolicy == helen::FileReadPolicy::Original ? L"original" : L"redirected";
+                helen::Logf(L"[runtime] active file route id=%hs writePolicy=%ls readPolicy=%ls original=%ls overlay=%ls",
+                    route.Id.c_str(), write_policy, read_policy, route.OriginalPath.c_str(), route.OverlayPath.c_str());
+            }
+        }
+
+        if (g_file_write_routing_owner != nullptr)
+        {
+            const std::shared_ptr<helen::FileWriteRoutingService> routing_service = g_file_write_routing_owner->GetService();
+            g_file_hooks = std::make_unique<helen::FileApiHookSet>(
+                *g_virtual_files,
+                *routing_service,
+                layout.GameRoot.parent_path(),
+                layout.GameRoot,
+                active_pack_set.MissingPaths);
+        }
+        else
+        {
+            g_file_hooks = std::make_unique<helen::FileApiHookSet>(
+                *g_virtual_files,
+                layout.GameRoot.parent_path(),
+                layout.GameRoot,
+                active_pack_set.MissingPaths);
+        }
+        helen::Log(L"[runtime] active-pack init file api hook set created.");
+        if (!g_file_hooks->Install())
+        {
+            helen::Log(L"[runtime] failed to install file API hooks.");
+            return false;
+        }
+        helen::Log(L"[runtime] active-pack init file API hooks installed.");
+
         g_build_hooks = std::make_unique<helen::BuildHookInstaller>();
         helen::InitializeBatmanGraphicsRuntime(*batman_engine_ini_path);
         helen::Log(L"[runtime] active-pack init build hook installer created.");
@@ -785,19 +883,6 @@ namespace
             return false;
         }
         helen::Log(L"[runtime] active-pack init build hooks installed.");
-
-        g_file_hooks = std::make_unique<helen::FileApiHookSet>(
-            *g_virtual_files,
-            layout.GameRoot.parent_path(),
-            layout.GameRoot,
-            active_pack_set.MissingPaths);
-        helen::Log(L"[runtime] active-pack init file api hook set created.");
-        if (!g_file_hooks->Install())
-        {
-            helen::Log(L"[runtime] failed to install file API hooks.");
-            return false;
-        }
-        helen::Log(L"[runtime] active-pack init file API hooks installed.");
 
         g_d3d9_texture_hooks = std::make_unique<helen::D3d9TextureReplacementHookSet>(
             active_pack_set.EnableD3d9TextureReplacementHooks,
@@ -882,6 +967,7 @@ namespace
         g_window_behavior_hooks.reset();
         g_d3d9_texture_hooks.reset();
         g_file_hooks.reset();
+        g_file_write_routing_owner.reset();
         g_build_hooks.reset();
         helen::ResetBatmanGraphicsRuntime();
         g_virtual_files.reset();
@@ -921,6 +1007,7 @@ namespace
         static_cast<void>(g_d3d9_texture_hooks.release());
         static_cast<void>(g_build_hooks.release());
         static_cast<void>(g_file_hooks.release());
+        static_cast<void>(g_file_write_routing_owner.release());
         static_cast<void>(g_virtual_files.release());
         static_cast<void>(g_external_bindings.release());
         static_cast<void>(g_command_executor.release());

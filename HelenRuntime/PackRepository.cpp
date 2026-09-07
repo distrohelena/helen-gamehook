@@ -522,6 +522,184 @@ namespace
     }
 
     /**
+     * @brief Normalizes a route path for duplicate-target checks without resolving it on disk.
+     * @param path Relative route text using either slash spelling.
+     * @return Lowercase slash-normalized route text.
+     */
+    std::string NormalizeRoutePath(std::string_view path)
+    {
+        std::string normalized;
+        normalized.reserve(path.size());
+        for (const char character : path)
+        {
+            const char folded = character == '\\'
+                ? '/'
+                : static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+            normalized.push_back(folded);
+        }
+
+        return normalized;
+    }
+
+    /**
+     * @brief Converts UTF-8 manifest bytes into a Windows filesystem path without ACP decoding.
+     * @param value UTF-8 path bytes read from JSON.
+     * @return Filesystem path carrying the original Unicode spelling.
+     */
+    std::filesystem::path PathFromUtf8(std::string_view value)
+    {
+        std::u8string utf8_value;
+        utf8_value.reserve(value.size());
+        for (const char character : value)
+        {
+            utf8_value.push_back(static_cast<char8_t>(static_cast<unsigned char>(character)));
+        }
+
+        return std::filesystem::path(utf8_value);
+    }
+
+    /**
+     * @brief Validates one exact route path before any filesystem root is selected.
+     * @param path Route path text from build.json.
+     * @return True only for a non-rooted, non-traversing ordinary relative file path.
+     */
+    bool IsSafeRoutePath(std::string_view path)
+    {
+        if (path.empty() || path.front() == '/' || path.front() == '\\' || path.find(':') != std::string_view::npos ||
+            path.find('\0') != std::string_view::npos)
+        {
+            return false;
+        }
+
+        std::size_t component_start = 0;
+        while (component_start <= path.size())
+        {
+            const std::size_t separator = path.find_first_of("/\\", component_start);
+            const std::size_t component_length = separator == std::string_view::npos
+                ? path.size() - component_start
+                : separator - component_start;
+            const std::string_view component = path.substr(component_start, component_length);
+            if (component.empty() || component == "." || component == "..")
+            {
+                return false;
+            }
+
+            if (separator == std::string_view::npos)
+            {
+                break;
+            }
+
+            component_start = separator + 1;
+        }
+
+        const std::filesystem::path filesystem_path = PathFromUtf8(path);
+        return !filesystem_path.empty() && !filesystem_path.is_absolute() && !filesystem_path.has_root_name() &&
+            !filesystem_path.has_root_directory() && filesystem_path.has_filename();
+    }
+
+    /**
+     * @brief Parses one strict exact-file route declaration.
+     * @param value JSON object containing one route declaration.
+     * @param definition Receives the route declaration on success.
+     * @return True when every required member and policy constraint is valid.
+     */
+    bool ParseFileWriteRouteDefinition(const helen::JsonValue& value, helen::FileWriteRouteDefinition& definition)
+    {
+        if (!value.IsObject())
+        {
+            return false;
+        }
+
+        const std::optional<std::string> id = TryGetString(FindObjectMember(value, "id"));
+        const std::optional<std::string> root = TryGetString(FindObjectMember(value, "root"));
+        const std::optional<std::string> path = TryGetString(FindObjectMember(value, "path"));
+        const std::optional<std::string> write_policy = TryGetString(FindObjectMember(value, "writePolicy"));
+        const std::optional<std::string> read_policy = TryGetString(FindObjectMember(value, "readPolicy"));
+        const std::optional<std::string> lifetime = TryGetString(FindObjectMember(value, "lifetime"));
+        if (!id.has_value() || id->empty() || !root.has_value() || !path.has_value() || !write_policy.has_value() ||
+            !read_policy.has_value() || !lifetime.has_value() || *lifetime != "session" ||
+            (*root != "game" && *root != "documents") || !IsSafeRoutePath(*path))
+        {
+            return false;
+        }
+
+        if (*write_policy == "deny")
+        {
+            if (*read_policy != "original")
+            {
+                return false;
+            }
+
+            definition.WritePolicy = helen::FileWritePolicy::Deny;
+        }
+        else if (*write_policy == "redirect")
+        {
+            if (*read_policy != "original" && *read_policy != "redirected")
+            {
+                return false;
+            }
+
+            definition.WritePolicy = helen::FileWritePolicy::Redirect;
+        }
+        else
+        {
+            return false;
+        }
+
+        definition.ReadPolicy = *read_policy == "redirected"
+            ? helen::FileReadPolicy::Redirected
+            : helen::FileReadPolicy::Original;
+        definition.Id = *id;
+        definition.Root = *root;
+        definition.Path = PathFromUtf8(*path);
+        return true;
+    }
+
+    /**
+     * @brief Parses the optional exact-file route list from build.json.
+     * @param root JSON build manifest root.
+     * @param definition Build definition receiving route declarations.
+     * @return True when the field is absent or every route is valid and unique.
+     */
+    bool ParseFileWriteRoutes(const helen::JsonValue& root, helen::BuildDefinition& definition)
+    {
+        definition.FileWriteRoutes.clear();
+        const helen::JsonValue* routes_value = FindObjectMember(root, "fileWriteRoutes");
+        if (routes_value == nullptr)
+        {
+            return true;
+        }
+
+        const helen::JsonValue::Array* routes = routes_value->AsArray();
+        if (routes == nullptr)
+        {
+            return false;
+        }
+
+        std::set<std::string> route_ids;
+        std::set<std::string> route_targets;
+        for (const helen::JsonValue& route_value : *routes)
+        {
+            helen::FileWriteRouteDefinition route;
+            if (!ParseFileWriteRouteDefinition(route_value, route))
+            {
+                return false;
+            }
+
+            const std::string id_key = NormalizeRoutePath(route.Id);
+            const std::string target_key = route.Root + "|" + NormalizeRoutePath(route.Path.generic_string());
+            if (!route_ids.insert(id_key).second || !route_targets.insert(target_key).second)
+            {
+                return false;
+            }
+
+            definition.FileWriteRoutes.push_back(std::move(route));
+        }
+
+        return true;
+    }
+
+    /**
      * @brief Parses one optional build-level hidden-path list from `build.json`.
      * @param root JSON root object loaded from the build manifest.
      * @param definition Receives the normalized hidden-path list on success.
@@ -757,6 +935,11 @@ namespace
         }
 
         if (!ParseMissingPaths(root, definition))
+        {
+            return false;
+        }
+
+        if (!ParseFileWriteRoutes(root, definition))
         {
             return false;
         }

@@ -95,6 +95,8 @@
     <ClCompile Include="FileApiHookSet.cpp" />
     <ClCompile Include="FileWriteRoutingService.cpp" />
     <ClCompile Include="FileWriteRoutingTransaction.cpp" />
+    <ClCompile Include="FileWriteRouteResolver.cpp" />
+    <ClCompile Include="FileWriteRoutingRuntimeOwner.cpp" />
     <ClCompile Include="HiddenPathMatcher.cpp" />
     <ClCompile Include="FullFileVirtualFileSource.cpp" />
     <ClCompile Include="Hook.cpp" />
@@ -162,6 +164,9 @@
     <ClInclude Include="..\include\HelenHook\FileReadPolicy.h" />
     <ClInclude Include="..\include\HelenHook\FileWritePolicy.h" />
     <ClInclude Include="..\include\HelenHook\FileWriteRoute.h" />
+    <ClInclude Include="..\include\HelenHook\FileWriteRouteDefinition.h" />
+    <ClInclude Include="..\include\HelenHook\FileWriteRouteResolver.h" />
+    <ClInclude Include="..\include\HelenHook\FileWriteRoutingRuntimeOwner.h" />
     <ClInclude Include="..\include\HelenHook\FileWriteRoutingService.h" />
     <ClInclude Include="..\include\HelenHook\FileWriteRoutingTransaction.h" />
     <ClInclude Include="..\include\HelenHook\HiddenPathMatcher.h" />

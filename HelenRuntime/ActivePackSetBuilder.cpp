@@ -150,9 +150,25 @@ namespace helen
         std::map<std::string, std::string> observer_owners;
         std::map<std::string, std::string> hook_owners;
         std::map<std::string, std::string> virtual_file_owners;
+        std::map<std::string, std::string> file_write_route_id_owners;
+        std::map<std::string, std::string> file_write_route_target_owners;
         std::map<std::string, std::string> texture_id_owners;
         std::map<std::string, std::string> texture_match_owners;
         std::set<std::string> missing_path_set;
+        std::set<std::string> occupied_game_file_targets;
+
+        for (const LoadedBuildPack& pack : loaded_pack_set.Packs)
+        {
+            for (const VirtualFileDefinition& definition : pack.Build.VirtualFiles)
+            {
+                occupied_game_file_targets.insert(NormalizeGamePathText(definition.GamePath.generic_string()));
+            }
+
+            for (const std::string& missing_path : pack.Build.MissingPaths)
+            {
+                occupied_game_file_targets.insert(NormalizeGamePathText(missing_path));
+            }
+        }
 
         for (const LoadedBuildPack& pack : loaded_pack_set.Packs)
         {
@@ -285,6 +301,31 @@ namespace helen
                     pack.Build.Id,
                     PackAssetResolver(pack.PackDirectory, pack.BuildDirectory),
                     definition);
+            }
+
+            for (const FileWriteRouteDefinition& definition : pack.Build.FileWriteRoutes)
+            {
+                if (!TryClaimKey(file_write_route_id_owners, NormalizeGamePathText(definition.Id), pack.Pack.Id,
+                    "file-write route id", failure_reason))
+                {
+                    return false;
+                }
+
+                const std::string normalized_path = NormalizeGamePathText(definition.Path.generic_string());
+                const std::string target_key = NormalizeGamePathText(definition.Root) + "|" + normalized_path;
+                if (!TryClaimKey(file_write_route_target_owners, target_key, pack.Pack.Id,
+                    "file-write route target", failure_reason))
+                {
+                    return false;
+                }
+
+                if (definition.Root == "game" && occupied_game_file_targets.find(normalized_path) != occupied_game_file_targets.end())
+                {
+                    failure_reason = BuildConflictReason("file-write route target", normalized_path, pack.Pack.Id, "virtual-or-missing-file");
+                    return false;
+                }
+
+                merged_pack_set.FileWriteRoutes.push_back(definition);
             }
         }
 

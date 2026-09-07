@@ -120,6 +120,18 @@ void RunActivePackSetBuilderTests()
         helen::LoadedBuildPackSet loaded_pack_set;
         loaded_pack_set.Packs.push_back(CreatePack(root, "pack-a", "commandA", "vfA", "Game/A.bin"));
         loaded_pack_set.Packs.push_back(CreatePack(root, "pack-b", "commandB", "vfB", "Game/B.bin"));
+        loaded_pack_set.Packs[0].Build.FileWriteRoutes.push_back({
+            "routeA",
+            "game",
+            std::filesystem::path("Config") / "A.ini",
+            helen::FileWritePolicy::Redirect,
+            helen::FileReadPolicy::Redirected});
+        loaded_pack_set.Packs[1].Build.FileWriteRoutes.push_back({
+            "routeB",
+            "documents",
+            std::filesystem::path("Config") / "B.ini",
+            helen::FileWritePolicy::Deny,
+            helen::FileReadPolicy::Original});
 
         helen::ActivePackSet active_pack_set;
         std::string failure_reason;
@@ -132,6 +144,7 @@ void RunActivePackSetBuilderTests()
         Expect(active_pack_set.StartupCommandIds[1] == "commandB", "Startup command ordering mismatch for the second pack.");
         Expect(active_pack_set.VirtualFiles.size() == 2, "Merged virtual-file count mismatch.");
         Expect(active_pack_set.MissingPaths.size() == 2, "Merged missing-path count mismatch.");
+        Expect(active_pack_set.FileWriteRoutes.size() == 2, "Merged file-write route count mismatch.");
         Expect(active_pack_set.EnableD3d9TextureReplacementHooks, "Merged D3D9 texture hook enable flag mismatch.");
 
         loaded_pack_set.Packs[1].Build.Commands[0].Id = "commandA";
@@ -140,6 +153,21 @@ void RunActivePackSetBuilderTests()
         const bool conflict_succeeded = builder.TryBuild(loaded_pack_set, conflicting_pack_set, failure_reason);
         Expect(!conflict_succeeded, "Expected duplicate command ids to reject the whole active pack set.");
         Expect(failure_reason.find("commandA") != std::string::npos, "Expected the failure reason to name the duplicate command id.");
+
+        loaded_pack_set.Packs[1].Build.Commands[0].Id = "commandB";
+        loaded_pack_set.Packs[1].Build.FileWriteRoutes[0].Id = "routeA";
+        helen::ActivePackSet duplicate_route_id_set;
+        failure_reason.clear();
+        Expect(!builder.TryBuild(loaded_pack_set, duplicate_route_id_set, failure_reason),
+            "Expected duplicate file-write route ids to reject the active pack set.");
+
+        loaded_pack_set.Packs[1].Build.FileWriteRoutes[0].Id = "routeB";
+        loaded_pack_set.Packs[1].Build.FileWriteRoutes[0].Root = "game";
+        loaded_pack_set.Packs[1].Build.FileWriteRoutes[0].Path = std::filesystem::path("Game") / "A.bin";
+        helen::ActivePackSet virtual_conflict_set;
+        failure_reason.clear();
+        Expect(!builder.TryBuild(loaded_pack_set, virtual_conflict_set, failure_reason),
+            "Expected file-write route overlap with a virtual file to reject the active pack set.");
     }
     catch (...)
     {

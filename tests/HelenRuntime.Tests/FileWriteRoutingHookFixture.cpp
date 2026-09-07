@@ -114,6 +114,53 @@ namespace
             "Imported WriteFile failed for routed fixture handle.");
     }
 
+    /**
+     * @brief Restores the process working directory when a relative-path regression changes it.
+     *
+     * The guard captures the native process CWD before the fixture changes it and restores that
+     * exact path even when an assertion throws, preventing one child scenario from contaminating
+     * later native tests.
+     */
+    class CurrentDirectoryGuard
+    {
+    public:
+        /** @brief Captures the current process working directory. */
+        CurrentDirectoryGuard()
+        {
+            std::array<wchar_t, MAX_PATH> buffer{};
+            const DWORD length = GetCurrentDirectoryW(static_cast<DWORD>(buffer.size()), buffer.data());
+            if (length == 0 || length >= buffer.size())
+            {
+                throw std::runtime_error("Failed to capture fixture current directory.");
+            }
+
+            original_directory_.assign(buffer.data(), length);
+        }
+
+        /** @brief Restores the captured process working directory. */
+        ~CurrentDirectoryGuard()
+        {
+            SetCurrentDirectoryW(original_directory_.c_str());
+        }
+
+        CurrentDirectoryGuard(const CurrentDirectoryGuard&) = delete;
+        CurrentDirectoryGuard& operator=(const CurrentDirectoryGuard&) = delete;
+
+        /**
+         * @brief Changes the process working directory for a relative-path fixture operation.
+         * @param directory Directory that should become the process CWD.
+         */
+        void Set(const std::filesystem::path& directory)
+        {
+            ExpectHookFixture(SetCurrentDirectoryW(directory.c_str()) != FALSE,
+                "Failed to change fixture current directory.");
+        }
+
+    private:
+        /** @brief Native directory spelling captured before the guarded CWD change. */
+        std::wstring original_directory_;
+    };
+
     /** @brief Returns a short-name spelling when Windows can materialize one for the fixture directory. */
     std::filesystem::path GetShortFixturePath(const std::filesystem::path& candidate)
     {
@@ -168,7 +215,7 @@ void RunFileWriteRoutingHookFixtureTests()
 
     try
     {
-        helen::FileWriteRoutingService routing(root / "cache", root);
+        helen::FileWriteRoutingService routing(root / "cache", root / "stale-startup-base");
         DWORD error = ERROR_SUCCESS;
         ExpectHookFixture(routing.Initialize({
             { "engine", original_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
@@ -200,6 +247,29 @@ void RunFileWriteRoutingHookFixtureTests()
         ExpectHookFixture(hooks.Install(), "Hook fixture IAT installation failed.");
         ExpectHookFixture(hooks.IsInstalled(), "Hook fixture reported inactive immediately after installation.");
         ExpectHookFixture(*create_file_slot != original_create_file_target, "Hook fixture CreateFileW IAT slot was not changed.");
+        {
+            CurrentDirectoryGuard current_directory_guard;
+            current_directory_guard.Set(root);
+            const auto imported_create_file_w = CallHookedImport<decltype(&CreateFileW)>("CreateFileW");
+            HANDLE relative_routed = imported_create_file_w(L"BmEngine.ini", GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            ExpectHookFixture(relative_routed != INVALID_HANDLE_VALUE,
+                "Relative protected CreateFileW was not routed after the process CWD changed.");
+            WriteHookedByte(relative_routed, 'C');
+            ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(relative_routed) != FALSE,
+                "Relative routed handle close failed after the process CWD changed.");
+            HANDLE relative_read = imported_create_file_w(L"BmEngine.ini", GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            ExpectHookFixture(relative_read != INVALID_HANDLE_VALUE,
+                "Relative protected read could not open the redirected session copy.");
+            char relative_byte = '\0';
+            DWORD relative_bytes_read = 0;
+            ExpectHookFixture(CallHookedImport<decltype(&ReadFile)>("ReadFile")(relative_read, &relative_byte, 1, &relative_bytes_read, nullptr) != FALSE &&
+                relative_bytes_read == 1 && relative_byte == 'C',
+                "Relative protected read did not select the redirected session copy.");
+            ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(relative_read) != FALSE,
+                "Relative routed read close failed after the process CWD changed.");
+        }
         HANDLE unsafe_device = CallHookedImport<decltype(&CreateFileW)>("CreateFileW")(L"\\\\?\\GLOBALROOT\\Device\\HelenUnknown", GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         ExpectHookFixture(unsafe_device == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED,

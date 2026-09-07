@@ -26,6 +26,27 @@ namespace helen
     {
     public:
         /**
+         * @brief Exposes immutable route details needed for startup diagnostics and trusted integrations.
+         */
+        struct RouteDiagnostics
+        {
+            /** @brief Stable declaration identifier. */
+            std::string Id;
+
+            /** @brief Canonical protected original path. */
+            std::filesystem::path OriginalPath;
+
+            /** @brief Session-owned overlay path, or empty when no overlay was materialized. */
+            std::filesystem::path OverlayPath;
+
+            /** @brief Write policy active for the route. */
+            FileWritePolicy WritePolicy = FileWritePolicy::Deny;
+
+            /** @brief Read source policy active for the route. */
+            FileReadPolicy ReadPolicy = FileReadPolicy::Original;
+        };
+
+        /**
          * @brief Describes whether a path is unrelated, protected, or must be rejected before native fallback.
          */
         enum class PathDisposition
@@ -64,6 +85,12 @@ namespace helen
          * @return True only when every route is validated and every redirected copy is initialized.
          */
         bool Initialize(const std::vector<FileWriteRoute>& routes, DWORD& error);
+
+        /**
+         * @brief Returns active route identifiers, policies, originals, and session overlays for diagnostics.
+         * @return Snapshot of route details in stable canonical-path order.
+         */
+        std::vector<RouteDiagnostics> GetRouteDiagnostics() const;
 
         /**
          * @brief Reports whether a path is a protected route or an unsafe spelling that must fail closed.
