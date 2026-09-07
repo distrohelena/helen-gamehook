@@ -10,6 +10,8 @@ namespace helen {
         /** @brief Target consistency could not be established; further Apply must remain locked. */
         IntegrityUncertain = 2,
         /** @brief Requested targets are verified committed, but owned transaction cleanup failed. */
-        CommittedCleanupFailed = 3
+        CommittedCleanupFailed = 3,
+        /** @brief Original targets committed, but the active session overlays could not be synchronized. */
+        CommittedSessionSyncFailed = 4
     };
 }

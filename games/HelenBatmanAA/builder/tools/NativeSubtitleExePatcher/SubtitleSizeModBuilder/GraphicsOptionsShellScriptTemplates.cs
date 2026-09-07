@@ -942,6 +942,7 @@ internal static class GraphicsOptionsShellScriptTemplates
                     this.UiStatus = outcome === 3 ? "Applied - Cleanup Failed" : "";
                  }
                  else if(outcome === 1) { this.UiStatus = "Apply Failed"; }
+                 else if(outcome === 4) { this.LockUncertainApply(); this.UiStatus = "Apply Partially Saved - Session Sync Failed"; }
                  else { this.LockUncertainApply(); }
               }
               catch(error)

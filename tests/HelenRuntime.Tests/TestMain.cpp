@@ -180,6 +180,13 @@ void RunBatmanGraphicsSnapshotTests();
 /** @brief Runs final process-lockout checks; no graphics writes may follow this suite. */
 void RunBatmanGraphicsIntegrityFailureTests();
 
+/** @brief Runs real Batman persistence and target-specific session synchronization coverage. */
+void RunBatmanGraphicsPersistenceTests();
+/** @brief Runs the fresh child scenario that proves original commit plus failed overlay synchronization reports code 4. */
+void RunBatmanGraphicsPartialSyncFailureChild();
+/** @brief Launches the fresh child scenario for process-global partial-sync lockout coverage. */
+void RunBatmanGraphicsPartialSyncFailureChildProcess();
+
 /** @brief Runs native tests with console-only failure reporting and no Windows crash dialogs. */
 int wmain(int argc, wchar_t** argv)
 {
@@ -192,8 +199,16 @@ int wmain(int argc, wchar_t** argv)
             std::cout << "FILE_ROUTING_HOOK_CHILD_PASS\n";
             return 0;
         }
+        if (argc > 1 && std::wstring_view(argv[1]) == L"--batman-partial-sync-child")
+        {
+            RunBatmanGraphicsPartialSyncFailureChild();
+            std::cout << "BATMAN_PARTIAL_SYNC_CHILD_PASS\n";
+            return 0;
+        }
 
         RunBatmanGraphicsSnapshotTests();
+        RunBatmanGraphicsPersistenceTests();
+        RunBatmanGraphicsPartialSyncFailureChildProcess();
         RunActivePackSetBuilderTests();
         RunBatmanDisplayModeServiceTests();
         RunBatmanDisplayModeResponseProviderTests();

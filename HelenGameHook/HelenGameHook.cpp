@@ -775,34 +775,6 @@ namespace
         }
 
         g_batman_display_mode_service = std::make_unique<helen::BatmanDisplayModeService>();
-        g_batman_graphics_config_service = std::make_unique<helen::BatmanGraphicsConfigService>(
-            *batman_engine_ini_path,
-            *g_batman_display_mode_service);
-        helen::Logf(L"[runtime] active-pack init batman ini=%ls", batman_engine_ini_path->c_str());
-        g_command_executor = std::make_unique<helen::CommandExecutor>(
-            *g_command_dispatcher,
-            *g_runtime_values,
-            *g_batman_graphics_config_service);
-        helen::Log(L"[runtime] active-pack init command executor created.");
-        if (!RegisterDeclaredCommands(active_pack_set.Commands))
-        {
-            return false;
-        }
-
-        g_external_bindings = std::make_unique<helen::ExternalBindingService>(*g_command_dispatcher, *g_command_executor);
-        helen::Log(L"[runtime] active-pack init external binding service created.");
-        if (!RegisterDeclaredExternalBindings(active_pack_set.ExternalBindings))
-        {
-            return false;
-        }
-
-        g_virtual_files = std::make_unique<helen::VirtualFileService>(layout.CacheDirectory);
-        helen::Log(L"[runtime] active-pack init virtual file service created.");
-        if (!RegisterDeclaredVirtualFiles(active_pack_set.VirtualFiles))
-        {
-            return false;
-        }
-
         if (!active_pack_set.FileWriteRoutes.empty())
         {
             const bool needs_documents_root = std::any_of(
@@ -829,17 +801,17 @@ namespace
                 return false;
             }
 
-            const std::shared_ptr<helen::FileWriteRoutingService> routing_service =
+            const std::shared_ptr<helen::FileWriteRoutingService> initialized_routing_service =
                 std::make_shared<helen::FileWriteRoutingService>(layout.CacheDirectory, layout.GameRoot);
             DWORD routing_error = ERROR_SUCCESS;
-            if (!routing_service->Initialize(resolved_routes, routing_error))
+            if (!initialized_routing_service->Initialize(resolved_routes, routing_error))
             {
                 helen::Logf(L"[runtime] file-write routing initialization failed error=%lu", routing_error);
                 return false;
             }
 
-            g_file_write_routing_owner = std::make_unique<helen::FileWriteRoutingRuntimeOwner>(routing_service);
-            for (const helen::FileWriteRoutingService::RouteDiagnostics& route : routing_service->GetRouteDiagnostics())
+            g_file_write_routing_owner = std::make_unique<helen::FileWriteRoutingRuntimeOwner>(initialized_routing_service);
+            for (const helen::FileWriteRoutingService::RouteDiagnostics& route : initialized_routing_service->GetRouteDiagnostics())
             {
                 const wchar_t* write_policy = route.WritePolicy == helen::FileWritePolicy::Deny ? L"deny" : L"redirect";
                 const wchar_t* read_policy = route.ReadPolicy == helen::FileReadPolicy::Original ? L"original" : L"redirected";
@@ -848,12 +820,44 @@ namespace
             }
         }
 
+        const std::shared_ptr<helen::FileWriteRoutingService> routing_service = g_file_write_routing_owner == nullptr
+            ? std::shared_ptr<helen::FileWriteRoutingService>()
+            : g_file_write_routing_owner->GetService();
+        g_batman_graphics_config_service = std::make_unique<helen::BatmanGraphicsConfigService>(
+            *batman_engine_ini_path,
+            *g_batman_display_mode_service,
+            routing_service);
+        helen::Logf(L"[runtime] active-pack init batman ini=%ls", batman_engine_ini_path->c_str());
+        g_command_executor = std::make_unique<helen::CommandExecutor>(
+            *g_command_dispatcher,
+            *g_runtime_values,
+            *g_batman_graphics_config_service);
+        helen::Log(L"[runtime] active-pack init command executor created.");
+        if (!RegisterDeclaredCommands(active_pack_set.Commands))
+        {
+            return false;
+        }
+
+        g_external_bindings = std::make_unique<helen::ExternalBindingService>(*g_command_dispatcher, *g_command_executor);
+        helen::Log(L"[runtime] active-pack init external binding service created.");
+        if (!RegisterDeclaredExternalBindings(active_pack_set.ExternalBindings))
+        {
+            return false;
+        }
+
+        g_virtual_files = std::make_unique<helen::VirtualFileService>(layout.CacheDirectory);
+        helen::Log(L"[runtime] active-pack init virtual file service created.");
+        if (!RegisterDeclaredVirtualFiles(active_pack_set.VirtualFiles))
+        {
+            return false;
+        }
+
         if (g_file_write_routing_owner != nullptr)
         {
-            const std::shared_ptr<helen::FileWriteRoutingService> routing_service = g_file_write_routing_owner->GetService();
+            const std::shared_ptr<helen::FileWriteRoutingService> hook_routing_service = g_file_write_routing_owner->GetService();
             g_file_hooks = std::make_unique<helen::FileApiHookSet>(
                 *g_virtual_files,
-                *routing_service,
+                *hook_routing_service,
                 layout.GameRoot.parent_path(),
                 layout.GameRoot,
                 active_pack_set.MissingPaths);
@@ -875,7 +879,10 @@ namespace
         helen::Log(L"[runtime] active-pack init file API hooks installed.");
 
         g_build_hooks = std::make_unique<helen::BuildHookInstaller>();
-        helen::InitializeBatmanGraphicsRuntime(*batman_engine_ini_path);
+        helen::InitializeBatmanGraphicsRuntime(*batman_engine_ini_path,
+            g_file_write_routing_owner == nullptr
+                ? std::shared_ptr<helen::FileWriteRoutingService>()
+                : g_file_write_routing_owner->GetService());
         helen::Log(L"[runtime] active-pack init build hook installer created.");
         if (!g_build_hooks->Install(active_pack_set.Hooks, *g_runtime_values))
         {

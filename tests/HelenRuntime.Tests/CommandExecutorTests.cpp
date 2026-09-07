@@ -1,12 +1,14 @@
 #include <HelenHook/BatmanGraphicsConfigService.h>
 #include "FaultingBatmanGraphicsFileOperations.h"
 #include "CallbackBatmanGraphicsFileOperations.h"
+#include "OverlayLockingBatmanGraphicsFileOperations.h"
 #include "../../HelenGameHook/BatmanGraphicsExternalInterface.h"
 #include "../../HelenGameHook/BatmanGraphicsRuntime.h"
 #include "BatmanStockDispatchCapture.h"
 #include <cstring>
 #include <HelenHook/BatmanGraphicsSessionService.h>
 #include <HelenHook/BatmanDisplayModeService.h>
+#include <HelenHook/FileWriteRoutingService.h>
 #include <HelenHook/CommandDefinition.h>
 #include <HelenHook/CommandDispatcher.h>
 #include <HelenHook/CommandExecutor.h>
@@ -27,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <windows.h>
 
@@ -1683,6 +1686,198 @@ void RunCommandExecutorTests()
     RunBatmanResolutionModeCommandTest();
     RunBatmanResolutionCatalogKindGuardTest();
     RunBatmanResolutionModeApplyIntegrationTest();
+}
+
+/**
+ * @brief Verifies that Batman persistence writes originals through a trusted route transaction and synchronizes only the selected subtitle target.
+ * @remarks This suite uses real temporary files and a real routing service so original-byte persistence, overlay synchronization, and busy-handle refusal are observable.
+ */
+void RunBatmanGraphicsPersistenceTests()
+{
+    {
+        const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath("routing-persistence");
+        const std::filesystem::path user_ini_path = GetSiblingBatmanUserEngineIniPath(engine_ini_path);
+        WriteAllText(engine_ini_path, CreateBatmanGraphicsIniText());
+        WriteAsciiAsUtf16LittleEndianText(user_ini_path, CreateBatmanLauncherOwnedGraphicsIniText(true));
+
+        const std::filesystem::path cache_directory = engine_ini_path.parent_path() / "routing-cache";
+        const std::shared_ptr<helen::FileWriteRoutingService> routing_service =
+            std::make_shared<helen::FileWriteRoutingService>(cache_directory, engine_ini_path.parent_path());
+        DWORD routing_error = ERROR_SUCCESS;
+        Expect(routing_service->Initialize({
+            { "engine", engine_ini_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+            { "user", user_ini_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+        }, routing_error), "Batman persistence routing initialization failed.");
+
+        helen::BatmanDisplayModeService display_mode_service;
+        helen::BatmanGraphicsConfigService config(engine_ini_path, display_mode_service, routing_service);
+        std::optional<helen::BatmanGraphicsDraftState> draft = config.CaptureReadSnapshot().TryCreateDraft();
+        Expect(draft.has_value(), "Batman persistence fixture did not produce a complete draft.");
+        Expect(draft->TrySet(helen::BatmanGraphicsField::Vsync, 0), "Batman persistence fixture draft could not be edited.");
+        const helen::BatmanGraphicsApplyResult result = config.ApplyDraft(*draft);
+        Expect(result.Outcome == helen::BatmanGraphicsApplyOutcome::Committed, "Batman persistence did not commit both originals.");
+
+        for (const helen::FileWriteRoutingService::RouteDiagnostics& route : routing_service->GetRouteDiagnostics())
+        {
+            Expect(!route.OverlayPath.empty(), "Batman persistence route did not materialize an overlay.");
+            Expect(ReadAllBytes(route.OverlayPath) == ReadAllBytes(route.OriginalPath), "Batman persistence left an unsynchronized overlay.");
+        }
+    }
+
+    {
+        const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath("routing-busy");
+        const std::filesystem::path user_ini_path = GetSiblingBatmanUserEngineIniPath(engine_ini_path);
+        WriteAllText(engine_ini_path, CreateBatmanGraphicsIniText());
+        WriteAsciiAsUtf16LittleEndianText(user_ini_path, CreateBatmanLauncherOwnedGraphicsIniText(true));
+        const std::string original_engine_bytes = ReadAllBytes(engine_ini_path);
+        const std::shared_ptr<helen::FileWriteRoutingService> routing_service =
+            std::make_shared<helen::FileWriteRoutingService>(engine_ini_path.parent_path() / "routing-cache", engine_ini_path.parent_path());
+        DWORD routing_error = ERROR_SUCCESS;
+        Expect(routing_service->Initialize({
+            { "engine", engine_ini_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+            { "user", user_ini_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+        }, routing_error), "Busy Batman persistence routing initialization failed.");
+        const HANDLE busy_handle = routing_service->Open(engine_ini_path, GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        Expect(busy_handle != INVALID_HANDLE_VALUE, "Busy Batman persistence routed handle could not be opened.");
+
+        helen::BatmanDisplayModeService display_mode_service;
+        helen::BatmanGraphicsConfigService config(engine_ini_path, display_mode_service, routing_service);
+        std::optional<helen::BatmanGraphicsDraftState> draft = config.CaptureReadSnapshot().TryCreateDraft();
+        Expect(draft.has_value(), "Busy Batman persistence fixture did not produce a complete draft.");
+        const helen::BatmanGraphicsApplyResult result = config.ApplyDraft(*draft);
+        Expect(result.Outcome == helen::BatmanGraphicsApplyOutcome::NotApplied, "Busy routed handle did not reject Batman persistence.");
+        Expect(ReadAllBytes(engine_ini_path) == original_engine_bytes, "Busy routed handle allowed original mutation.");
+        Expect(routing_service->Close(busy_handle) != FALSE, "Busy Batman persistence routed handle could not be closed.");
+    }
+
+    {
+        const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath("routing-subtitle-target");
+        const std::filesystem::path game_ini_path = GetSiblingBatmanGameIniPath(engine_ini_path);
+        WriteAllText(engine_ini_path, CreateBatmanSubtitleIniTextMissingHudSection());
+        WriteAllText(game_ini_path, CreateBatmanSubtitleIniText(9));
+        const std::shared_ptr<helen::FileWriteRoutingService> routing_service =
+            std::make_shared<helen::FileWriteRoutingService>(engine_ini_path.parent_path() / "routing-cache", engine_ini_path.parent_path());
+        DWORD routing_error = ERROR_SUCCESS;
+        Expect(routing_service->Initialize({
+            { "engine", engine_ini_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+            { "game", game_ini_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+        }, routing_error), "Subtitle routing initialization failed.");
+        const HANDLE pending_engine_overlay = routing_service->Open(engine_ini_path, GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        Expect(pending_engine_overlay != INVALID_HANDLE_VALUE, "Subtitle pending engine overlay could not be opened.");
+        const char pending_bytes[] = "pending-engine-edit";
+        DWORD bytes_written = 0;
+        Expect(WriteFile(pending_engine_overlay, pending_bytes, static_cast<DWORD>(sizeof(pending_bytes) - 1), &bytes_written, nullptr) != FALSE,
+            "Subtitle pending engine overlay could not be written.");
+        Expect(routing_service->Close(pending_engine_overlay) != FALSE, "Subtitle pending engine overlay could not be closed.");
+
+        helen::BatmanDisplayModeService display_mode_service;
+        helen::BatmanGraphicsConfigService config(engine_ini_path, display_mode_service, routing_service);
+        helen::CommandDispatcher dispatcher;
+        dispatcher.RegisterConfigInt("ui.subtitleSize", 0);
+        Expect(dispatcher.TrySetInt("ui.subtitleSize", 2), "Subtitle dispatcher could not be seeded.");
+        Expect(config.ApplySubtitleSizeFromDispatcher(dispatcher), "Subtitle save to BmGame.ini failed.");
+
+        const std::vector<helen::FileWriteRoutingService::RouteDiagnostics> routes = routing_service->GetRouteDiagnostics();
+        for (const helen::FileWriteRoutingService::RouteDiagnostics& route : routes)
+        {
+            if (route.Id == "engine")
+            {
+                Expect(ReadAllBytes(route.OverlayPath) == "pending-engine-edit", "Subtitle save erased a pending BmEngine session edit.");
+            }
+            else if (route.Id == "game")
+            {
+                Expect(ReadAllBytes(route.OverlayPath).find("ConsoleFontSize=7") != std::string::npos,
+                    "Subtitle save did not synchronize the actual BmGame target.");
+            }
+        }
+    }
+}
+
+/**
+ * @brief Runs the isolated partial-session-synchronization scenario whose process-global integrity latch must start clean.
+ * @remarks The child uses a real exclusive overlay handle after both originals publish, then verifies outcome 4 and lockout.
+ */
+void RunBatmanGraphicsPartialSyncFailureChild()
+{
+    const std::filesystem::path engine_ini_path = CreateTemporaryBatmanGraphicsIniPath("routing-partial-sync-child");
+    const std::filesystem::path user_ini_path = GetSiblingBatmanUserEngineIniPath(engine_ini_path);
+    WriteAllText(engine_ini_path, CreateBatmanGraphicsIniText());
+    WriteAsciiAsUtf16LittleEndianText(user_ini_path, CreateBatmanLauncherOwnedGraphicsIniText(true));
+    const std::string original_engine_bytes = ReadAllBytes(engine_ini_path);
+    const std::string original_user_bytes = ReadAllBytes(user_ini_path);
+
+    const std::shared_ptr<helen::FileWriteRoutingService> routing_service =
+        std::make_shared<helen::FileWriteRoutingService>(engine_ini_path.parent_path() / "routing-cache", engine_ini_path.parent_path());
+    DWORD routing_error = ERROR_SUCCESS;
+    Expect(routing_service->Initialize({
+        { "engine", engine_ini_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+        { "user", user_ini_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+    }, routing_error), "Partial-sync routing initialization failed.");
+    std::filesystem::path engine_overlay_path;
+    for (const helen::FileWriteRoutingService::RouteDiagnostics& route : routing_service->GetRouteDiagnostics())
+    {
+        if (route.Id == "engine")
+        {
+            engine_overlay_path = route.OverlayPath;
+        }
+    }
+    Expect(!engine_overlay_path.empty(), "Partial-sync engine overlay was not materialized.");
+
+    bool apply_locked = false;
+    {
+        OverlayLockingBatmanGraphicsFileOperations files(engine_overlay_path);
+        helen::BatmanDisplayModeService display_mode_service;
+        helen::BatmanGraphicsConfigService config(engine_ini_path, display_mode_service, files, routing_service);
+        std::optional<helen::BatmanGraphicsDraftState> draft = config.CaptureReadSnapshot().TryCreateDraft();
+        Expect(draft.has_value(), "Partial-sync fixture did not produce a complete draft.");
+        Expect(draft->TrySet(helen::BatmanGraphicsField::Fullscreen, 1), "Partial-sync fixture draft could not be edited.");
+        const helen::BatmanGraphicsApplyResult result = config.ApplyDraft(*draft);
+        Expect(result.Outcome == helen::BatmanGraphicsApplyOutcome::CommittedSessionSyncFailed,
+            "Original publication plus failed session synchronization did not report outcome 4.");
+        Expect(ReadAllBytes(engine_ini_path) != original_engine_bytes && ReadAllBytes(user_ini_path) != original_user_bytes,
+            "Partial-sync fixture did not commit both original targets before synchronization failed.");
+        apply_locked = config.IsApplyLocked();
+        Expect(config.ApplyDraft(*draft).Outcome == helen::BatmanGraphicsApplyOutcome::IntegrityUncertain,
+            "Locked Batman persistence accepted a subsequent Apply attempt.");
+    }
+    Expect(apply_locked, "Outcome 4 did not latch the Batman persistence lock.");
+    Expect(ReadAllBytes(engine_overlay_path) == original_engine_bytes,
+        "Partial-sync fixture unexpectedly updated a locked overlay.");
+}
+
+/**
+ * @brief Launches one fresh native test process for the process-global partial-sync failure latch.
+ * @throws std::runtime_error Thrown when the child cannot be launched or does not report success.
+ */
+void RunBatmanGraphicsPartialSyncFailureChildProcess()
+{
+    std::array<wchar_t, MAX_PATH> executable_buffer{};
+    const DWORD executable_length = GetModuleFileNameW(nullptr, executable_buffer.data(), static_cast<DWORD>(executable_buffer.size()));
+    if (executable_length == 0 || executable_length >= executable_buffer.size())
+    {
+        throw std::runtime_error("Failed to resolve the Batman persistence child executable.");
+    }
+
+    std::wstring command_line = L"\"" + std::wstring(executable_buffer.data(), executable_length) + L"\" --batman-partial-sync-child";
+    std::vector<wchar_t> mutable_command(command_line.begin(), command_line.end());
+    mutable_command.push_back(L'\0');
+    STARTUPINFOW startup_info{};
+    startup_info.cb = sizeof(startup_info);
+    PROCESS_INFORMATION process_info{};
+    if (!CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+        &startup_info, &process_info))
+    {
+        throw std::runtime_error("Failed to launch the Batman persistence partial-sync child.");
+    }
+
+    WaitForSingleObject(process_info.hProcess, INFINITE);
+    DWORD exit_code = 1;
+    GetExitCodeProcess(process_info.hProcess, &exit_code);
+    CloseHandle(process_info.hThread);
+    CloseHandle(process_info.hProcess);
+    Expect(exit_code == 0, "Batman persistence partial-sync child failed.");
 }
 
 /**

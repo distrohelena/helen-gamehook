@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <HelenHook/BatmanGraphicsSnapshot.h>
 #include <HelenHook/BatmanGraphicsApplyResult.h>
 
@@ -9,6 +10,7 @@ namespace helen
     class BatmanDisplayModeService;
     class CommandDispatcher;
     class BatmanGraphicsFileOperations;
+    class FileWriteRoutingService;
 
     /**
      * @brief Reads, writes, and normalizes Batman Arkham Asylum graphics settings.
@@ -31,6 +33,27 @@ namespace helen
         /** @brief Binds explicit publication operations whose lifetime must exceed this service; reads and parsing remain native. */
         BatmanGraphicsConfigService(std::filesystem::path ini_path, BatmanDisplayModeService& display_mode_service,
             BatmanGraphicsFileOperations& file_operations);
+
+        /**
+         * @brief Binds a shared session-routing owner used to serialize trusted original persistence and overlay synchronization.
+         * @param ini_path Absolute or relative path to the Batman user engine INI file.
+         * @param display_mode_service Required service that owns the current Batman display-mode catalog and revalidation.
+         * @param routing_service Optional initialized routing service; absent routing preserves legacy native-only behavior.
+         * @throws std::invalid_argument Thrown when `ini_path` is empty.
+         */
+        BatmanGraphicsConfigService(std::filesystem::path ini_path, BatmanDisplayModeService& display_mode_service,
+            std::shared_ptr<FileWriteRoutingService> routing_service);
+
+        /**
+         * @brief Binds explicit publication operations and the shared optional routing owner.
+         * @param ini_path Absolute or relative path to the Batman user engine INI file.
+         * @param display_mode_service Required service that owns the current Batman display-mode catalog and revalidation.
+         * @param file_operations Required publication boundary whose lifetime must exceed this service.
+         * @param routing_service Optional initialized routing service shared by all Batman persistence contexts.
+         * @throws std::invalid_argument Thrown when `ini_path` is empty.
+         */
+        BatmanGraphicsConfigService(std::filesystem::path ini_path, BatmanDisplayModeService& display_mode_service,
+            BatmanGraphicsFileOperations& file_operations, std::shared_ptr<FileWriteRoutingService> routing_service);
 
         /**
          * @brief Reads the current Batman graphics settings from the authoritative launcher-owned sibling `UserEngine.ini` into registered config keys.
@@ -103,5 +126,7 @@ namespace helen
         BatmanDisplayModeService& display_mode_service_;
         /** @brief Required filesystem boundary used consistently for publication, recovery, and owned-file cleanup. */
         BatmanGraphicsFileOperations& file_operations_;
+        /** @brief Shared optional route owner retained for trusted original persistence and session synchronization. */
+        std::shared_ptr<FileWriteRoutingService> routing_service_;
     };
 }

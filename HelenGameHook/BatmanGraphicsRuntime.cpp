@@ -5,6 +5,7 @@
 #include <atomic>
 #include <memory>
 #include <stdexcept>
+#include <utility>
 
 namespace {
     /** @brief Atomic publication protects acquisition only; an acquired context remains alive through dispatch and reconciliation. */
@@ -13,7 +14,13 @@ namespace {
 
 namespace helen {
     void InitializeBatmanGraphicsRuntime(const std::filesystem::path& engineIniPath) {
-        const std::shared_ptr<BatmanGraphicsRuntimeContext> initialized = std::make_shared<BatmanGraphicsRuntimeContext>(engineIniPath);
+        InitializeBatmanGraphicsRuntime(engineIniPath, nullptr);
+    }
+
+    void InitializeBatmanGraphicsRuntime(const std::filesystem::path& engineIniPath,
+        std::shared_ptr<FileWriteRoutingService> routing_service) {
+        const std::shared_ptr<BatmanGraphicsRuntimeContext> initialized =
+            std::make_shared<BatmanGraphicsRuntimeContext>(engineIniPath, std::move(routing_service));
         std::shared_ptr<BatmanGraphicsRuntimeContext> expected;
         if (!Context.compare_exchange_strong(expected, initialized)) {
             throw std::logic_error("Direct graphics runtime is already bound.");

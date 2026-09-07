@@ -80,7 +80,7 @@ assert.ok(calls.some(c => c[0] === 'Helen_Graphics_SetFieldV1' && c[3] === 2 && 
 assert.equal(controller.Destroy(), true);
 assert.equal(calls.filter(c => c[0] === 'Helen_Graphics_CloseV1').length, 1);
 
-for (const outcome of [1, 2, 3, undefined]) {
+for (const outcome of [1, 2, 3, 4, undefined]) {
     const test = initialize(source, {'Helen_Graphics_CommitV1': outcome});
     test.controller.DecrementSetting(3);
     test.controller.ApplyChanges();
@@ -92,6 +92,10 @@ for (const outcome of [1, 2, 3, undefined]) {
         assert.equal(test.controller.Settings[1].InitialIndex, 0, 'Cleanup-failed commit was reported as unapplied');
         assert.equal(test.controller.CanApply(), false);
         assert.ok(test.controller.UiStatus.length > 0);
+    } else if (outcome === 4) {
+        assert.equal(test.controller.Settings[1].InitialIndex, 1, 'Partial session synchronization failure claimed a saved baseline');
+        assert.equal(test.controller.CanApply(), false, 'Partial session synchronization failure did not lock Apply');
+        assert.equal(test.controller.UiStatus, 'Apply Partially Saved - Session Sync Failed');
     } else {
         assert.equal(test.controller.CanApply(), false, 'Unknown/uncertain persistence must lock Apply');
     }

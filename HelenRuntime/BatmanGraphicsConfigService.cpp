@@ -1,6 +1,8 @@
 #include <HelenHook/BatmanGraphicsConfigService.h>
 #include <HelenHook/BatmanDisplayModeService.h>
 #include <HelenHook/BatmanGraphicsFileOperations.h>
+#include <HelenHook/FileWriteRoutingService.h>
+#include <HelenHook/FileWriteRoutingTransaction.h>
 
 #include <HelenHook/Log.h>
 #include <HelenHook/CommandDispatcher.h>
@@ -1959,7 +1961,9 @@ namespace
     }
     /** @brief Serializes a complete legacy-shaped draft through the shared publisher without using dispatcher storage. */
     helen::BatmanGraphicsApplyResult ApplyGraphicsDraftState(const helen::BatmanGraphicsFileOperations& file_operations,
-        const std::filesystem::path& ini_path, LegacyBatmanGraphicsDraftState state) {
+        const std::filesystem::path& ini_path,
+        const std::shared_ptr<helen::FileWriteRoutingService>& routing_service,
+        LegacyBatmanGraphicsDraftState state) {
         const std::lock_guard<std::mutex> transaction_lock(BatmanGraphicsApplyMutex);
         if (BatmanGraphicsIntegrityUncertain.load()) {
             return {helen::BatmanGraphicsApplyOutcome::IntegrityUncertain, {}};
@@ -1971,16 +1975,37 @@ namespace
         }
 
         const std::filesystem::path user_ini_path = ini_path.parent_path() / "UserEngine.ini";
+        std::unique_ptr<helen::FileWriteRoutingTransaction> trusted_transaction;
+        if (routing_service != nullptr)
+        {
+            DWORD routing_error = ERROR_SUCCESS;
+            trusted_transaction = routing_service->BeginTrustedWrite({ ini_path, user_ini_path }, routing_error);
+            if (trusted_transaction == nullptr)
+            {
+                helen::Logf(L"[graphics] Apply failed before original read: trusted route transaction error=%lu.",
+                    static_cast<unsigned long>(routing_error));
+                return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
+            }
+        }
+
         const std::optional<std::string> original_engine_bytes = TryReadFileBytes(ini_path);
         const std::optional<IniTextDocument> existing_user_document = TryReadIniDocument(user_ini_path);
         if (!original_engine_bytes.has_value())
         {
+            if (trusted_transaction != nullptr)
+            {
+                trusted_transaction->CancelWithoutWrite();
+            }
             helen::Logf(L"[graphics] Apply failed: unable to read generated INI path=%ls.", ini_path.wstring().c_str());
             return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
         }
 
         if (!existing_user_document.has_value())
         {
+            if (trusted_transaction != nullptr)
+            {
+                trusted_transaction->CancelWithoutWrite();
+            }
             helen::Logf(L"[graphics] Apply failed: unable to read launcher INI path=%ls.", user_ini_path.wstring().c_str());
             return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
         }
@@ -1990,12 +2015,20 @@ namespace
         std::wstring failed_setting;
         if (!TryApplyDraftStateToIniLines(state, engine_lines, failed_setting))
         {
+            if (trusted_transaction != nullptr)
+            {
+                trusted_transaction->CancelWithoutWrite();
+            }
             helen::Logf(L"[graphics] Apply failed: generated INI rejected setting=%ls path=%ls.", failed_setting.c_str(), ini_path.wstring().c_str());
             return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
         }
 
         if (!TryApplyDraftStateToIniLines(state, user_document.Lines, failed_setting))
         {
+            if (trusted_transaction != nullptr)
+            {
+                trusted_transaction->CancelWithoutWrite();
+            }
             helen::Logf(L"[graphics] Apply failed: launcher INI rejected setting=%ls path=%ls.", failed_setting.c_str(), user_ini_path.wstring().c_str());
             return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
         }
@@ -2005,6 +2038,10 @@ namespace
         const std::optional<std::string> generated_bytes = TryEncodeIniDocument(generated_document);
         if (!generated_bytes.has_value())
         {
+            if (trusted_transaction != nullptr)
+            {
+                trusted_transaction->CancelWithoutWrite();
+            }
             helen::Logf(L"[graphics] Apply failed: unable to encode generated INI path=%ls.", ini_path.wstring().c_str());
             return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
         }
@@ -2012,6 +2049,10 @@ namespace
         const std::optional<std::string> user_bytes = TryEncodeIniDocument(user_document);
         if (!user_bytes.has_value())
         {
+            if (trusted_transaction != nullptr)
+            {
+                trusted_transaction->CancelWithoutWrite();
+            }
             helen::Logf(L"[graphics] Apply failed: unable to encode launcher INI path=%ls.", user_ini_path.wstring().c_str());
             return {helen::BatmanGraphicsApplyOutcome::NotApplied, {}};
         }
@@ -2021,11 +2062,40 @@ namespace
         try {
             helen::BatmanGraphicsApplyResult result = PublishBatmanGraphicsIniPair(file_operations,
                 ini_path, user_ini_path, *generated_bytes, *user_bytes, *original_engine_bytes, user_document.RawBytes);
+            if (trusted_transaction != nullptr)
+            {
+                DWORD synchronization_error = ERROR_SUCCESS;
+                if (!trusted_transaction->Synchronize(synchronization_error))
+                {
+                    helen::Logf(L"[graphics] Apply original publication outcome=%d, but session synchronization failed error=%lu.",
+                        static_cast<int>(result.Outcome), static_cast<unsigned long>(synchronization_error));
+                    if (result.Outcome == helen::BatmanGraphicsApplyOutcome::Committed ||
+                        result.Outcome == helen::BatmanGraphicsApplyOutcome::CommittedCleanupFailed)
+                    {
+                        BatmanGraphicsIntegrityUncertain.store(true);
+                        return {helen::BatmanGraphicsApplyOutcome::CommittedSessionSyncFailed, std::move(result.RecoveryPaths)};
+                    }
+
+                    BatmanGraphicsIntegrityUncertain.store(true);
+                    return {helen::BatmanGraphicsApplyOutcome::IntegrityUncertain, std::move(result.RecoveryPaths)};
+                }
+            }
+
             BatmanGraphicsIntegrityUncertain.store(result.Outcome == helen::BatmanGraphicsApplyOutcome::IntegrityUncertain);
             helen::Logf(L"[graphics] Apply completed outcome=%d vsync=%d.", static_cast<int>(result.Outcome), state.Vsync);
             return result;
         } catch (...) {
+            if (trusted_transaction != nullptr)
+            {
+                DWORD synchronization_error = ERROR_SUCCESS;
+                if (!trusted_transaction->Synchronize(synchronization_error))
+                {
+                    helen::Logf(L"[graphics] Apply exception left original/session state uncertain; synchronization error=%lu.",
+                        static_cast<unsigned long>(synchronization_error));
+                }
+            }
             helen::Logf(L"[graphics] Apply integrity uncertain: exception during publication; retained transaction evidence.");
+            BatmanGraphicsIntegrityUncertain.store(true);
             return {helen::BatmanGraphicsApplyOutcome::IntegrityUncertain, {}};
         }
     }
@@ -2043,15 +2113,28 @@ namespace helen
     BatmanGraphicsConfigService::BatmanGraphicsConfigService(
         std::filesystem::path ini_path,
         BatmanDisplayModeService& display_mode_service)
-        : BatmanGraphicsConfigService(std::move(ini_path), display_mode_service, BatmanGraphicsFileOperations::Native()) {
+        : BatmanGraphicsConfigService(std::move(ini_path), display_mode_service, BatmanGraphicsFileOperations::Native(), nullptr) {
     }
 
     BatmanGraphicsConfigService::BatmanGraphicsConfigService(
         std::filesystem::path ini_path, BatmanDisplayModeService& display_mode_service,
         BatmanGraphicsFileOperations& file_operations)
+        : BatmanGraphicsConfigService(std::move(ini_path), display_mode_service, file_operations, nullptr) {
+    }
+
+    BatmanGraphicsConfigService::BatmanGraphicsConfigService(
+        std::filesystem::path ini_path, BatmanDisplayModeService& display_mode_service,
+        std::shared_ptr<FileWriteRoutingService> routing_service)
+        : BatmanGraphicsConfigService(std::move(ini_path), display_mode_service, BatmanGraphicsFileOperations::Native(), std::move(routing_service)) {
+    }
+
+    BatmanGraphicsConfigService::BatmanGraphicsConfigService(
+        std::filesystem::path ini_path, BatmanDisplayModeService& display_mode_service,
+        BatmanGraphicsFileOperations& file_operations, std::shared_ptr<FileWriteRoutingService> routing_service)
         : ini_path_(std::move(ini_path)),
           display_mode_service_(display_mode_service),
-          file_operations_(file_operations)
+          file_operations_(file_operations),
+          routing_service_(std::move(routing_service))
     {
         if (ini_path_.empty())
         {
@@ -2113,7 +2196,7 @@ namespace helen
         state.Stereo = draft.Get(BatmanGraphicsField::Stereo);
         const std::optional<BatmanGraphicsPresetDefinition> preset = TryResolvePresetFromDraft(state);
         state.DetailLevel = preset.has_value() ? preset->DetailLevel : 4;
-        return ApplyGraphicsDraftState(file_operations_, ini_path_, state);
+        return ApplyGraphicsDraftState(file_operations_, ini_path_, routing_service_, state);
     }
 
     bool BatmanGraphicsConfigService::IsApplyLocked() const noexcept {
@@ -2126,7 +2209,7 @@ namespace helen
             Logf(L"[graphics] Apply failed: missing dispatcher draft values.");
             return false;
         }
-        return ApplyGraphicsDraftState(file_operations_, ini_path_, state).Outcome == BatmanGraphicsApplyOutcome::Committed;
+        return ApplyGraphicsDraftState(file_operations_, ini_path_, routing_service_, state).Outcome == BatmanGraphicsApplyOutcome::Committed;
     }
 
     /**
@@ -2136,6 +2219,13 @@ namespace helen
      */
     bool BatmanGraphicsConfigService::ApplySubtitleSizeFromDispatcher(const CommandDispatcher& dispatcher) const
     {
+        const std::lock_guard<std::mutex> transaction_lock(BatmanGraphicsApplyMutex);
+        if (BatmanGraphicsIntegrityUncertain.load())
+        {
+            Logf(L"[subtitle] Apply rejected: graphics persistence is locked after an integrity failure.");
+            return false;
+        }
+
         int subtitle_size_state = 0;
         if (!TryReadDispatcherValue(dispatcher, "ui.subtitleSize", subtitle_size_state))
         {
@@ -2159,9 +2249,38 @@ namespace helen
             return false;
         }
 
+        std::unique_ptr<FileWriteRoutingTransaction> trusted_transaction;
+        if (routing_service_ != nullptr)
+        {
+            DWORD routing_error = ERROR_SUCCESS;
+            trusted_transaction = routing_service_->BeginTrustedWrite({ subtitle_ini_path }, routing_error);
+            if (trusted_transaction == nullptr)
+            {
+                Logf(L"[subtitle] Apply rejected before original read: trusted route transaction error=%lu.",
+                    static_cast<unsigned long>(routing_error));
+                return false;
+            }
+        }
+
+        std::filesystem::path verified_subtitle_ini_path;
+        if (!TryResolveSubtitleIniPathForWrite(ini_path_, verified_subtitle_ini_path) ||
+            verified_subtitle_ini_path != subtitle_ini_path)
+        {
+            if (trusted_transaction != nullptr)
+            {
+                trusted_transaction->CancelWithoutWrite();
+            }
+            Logf(L"[subtitle] Apply canceled: subtitle target changed during trusted transaction resolution.");
+            return false;
+        }
+
         const std::optional<std::vector<std::string>> existing_lines = TryReadAllLines(subtitle_ini_path);
         if (!existing_lines.has_value())
         {
+            if (trusted_transaction != nullptr)
+            {
+                trusted_transaction->CancelWithoutWrite();
+            }
             Logf(L"[subtitle] Apply failed: unable to read %ls before writing subtitle size.", subtitle_ini_path.wstring().c_str());
             return false;
         }
@@ -2170,11 +2289,29 @@ namespace helen
         const std::string encoded_value = std::to_string(subtitle_font_size);
         if (!UpsertIniValue(lines, "Engine.HUD", "ConsoleFontSize", encoded_value))
         {
+            if (trusted_transaction != nullptr)
+            {
+                trusted_transaction->CancelWithoutWrite();
+            }
             Logf(L"[subtitle] Apply failed: could not write Engine.HUD.ConsoleFontSize into %ls.", subtitle_ini_path.wstring().c_str());
             return false;
         }
 
-        if (!WriteAllLines(subtitle_ini_path, lines))
+        const bool original_write_succeeded = WriteAllLines(subtitle_ini_path, lines);
+        if (trusted_transaction != nullptr)
+        {
+            DWORD synchronization_error = ERROR_SUCCESS;
+            if (!trusted_transaction->Synchronize(synchronization_error))
+            {
+                BatmanGraphicsIntegrityUncertain.store(true);
+                Logf(L"[subtitle] Apply %s, but session synchronization failed error=%lu; persistence is locked.",
+                    original_write_succeeded ? L"committed original" : L"failed original write",
+                    static_cast<unsigned long>(synchronization_error));
+                return false;
+            }
+        }
+
+        if (!original_write_succeeded)
         {
             Logf(L"[subtitle] Apply failed: unable to write %ls.", subtitle_ini_path.wstring().c_str());
             return false;
