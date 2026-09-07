@@ -16,6 +16,8 @@ Behavioral regression cases were added to `FileWriteRoutingServiceTests.cpp` and
 
 Imported fixture coverage now includes overwrite-capable protected destination rename, protected parent-directory handle rename, malformed buffers, unrelated native rename, valid unrelated `RootDirectory`, and a one-shot CWD-switch relative rename. Existing unrelated native operations remain covered.
 
+The guard deliberately checks the destination itself for a protected parent-directory target, not the destination's parent directory; this preserves native sibling-file renames inside a directory that also contains a protected route. RootDirectory forms with root components or traversal are explicitly rejected.
+
 ## Findings 3–5
 
 The live guide now describes the trusted candidate as config-save-only: explicit original/overlay synchronization and restart are production checks; only `RoutingNoSaveProbe` exercises experimental automatic engine resize writes. The package verifier uses RAII wrappers for BCrypt algorithm/hash handles. New helper declarations have substantive Doxygen comments and the added guarded memory boundary is isolated from production mutation.

@@ -627,6 +627,20 @@ void RunFileWriteRoutingHookFixtureTests()
             !std::filesystem::exists(unrelated_rename_source_path) && ReadHookFixtureFile(unrelated_rename_destination_path) == "NATIVE-RENAME",
             "Unrelated native handle rename did not publish its destination.");
 
+        const std::filesystem::path same_parent_source_path = root / "same-parent-source.tmp";
+        const std::filesystem::path same_parent_destination_path = root / "same-parent-destination.tmp";
+        WriteHookFixtureFile(same_parent_source_path, "SAME-PARENT-RENAME");
+        HANDLE same_parent_source = imported_create_file_w(same_parent_source_path.c_str(), DELETE | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ExpectHookFixture(same_parent_source != INVALID_HANDLE_VALUE, "Same-parent unrelated rename source could not be opened.");
+        const std::vector<BYTE> same_parent_rename = BuildRenameInformation(same_parent_destination_path, nullptr, 0);
+        ExpectHookFixture(CallHookedImport<decltype(&SetFileInformationByHandle)>("SetFileInformationByHandle")(
+            same_parent_source, FileRenameInfo, const_cast<BYTE*>(same_parent_rename.data()), static_cast<DWORD>(same_parent_rename.size())) != FALSE,
+            "Unrelated same-parent native handle rename was rejected.");
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(same_parent_source) != FALSE &&
+            !std::filesystem::exists(same_parent_source_path) && ReadHookFixtureFile(same_parent_destination_path) == "SAME-PARENT-RENAME",
+            "Unrelated same-parent native handle rename did not publish its destination.");
+
         WriteHookFixtureFile(rename_source_path, "MALFORMED");
         HANDLE malformed_source = imported_create_file_w(rename_source_path.c_str(), DELETE | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);

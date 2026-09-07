@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 #include <cstddef>
 #include <cstring>
@@ -645,7 +646,9 @@ namespace
         if (root_directory != nullptr)
         {
             std::wstring root_path;
-            if (relative_or_absolute.is_absolute() || !TryGetHandleFinalPath(root_directory, root_path))
+            if (relative_or_absolute.has_root_path() ||
+                std::find(relative_or_absolute.begin(), relative_or_absolute.end(), std::filesystem::path(L"..")) != relative_or_absolute.end() ||
+                !TryGetHandleFinalPath(root_directory, root_path))
             {
                 return false;
             }
@@ -1878,7 +1881,7 @@ namespace helen
                 const FileWriteRoutingService::PathDisposition destination_disposition =
                     active->file_write_routing_->ClassifyPath(destination_path);
                 if (source_is_protected || destination_disposition != FileWriteRoutingService::PathDisposition::Unrelated ||
-                    active->file_write_routing_->IsProtectedParentPath(destination_path.parent_path()))
+                    active->file_write_routing_->IsProtectedParentPath(destination_path))
                 {
                     SetLastError(ERROR_ACCESS_DENIED);
                     return FALSE;
