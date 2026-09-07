@@ -33,6 +33,12 @@ if (-not $EnableFileWriteRouting -and $CandidateMode -ne 'NoRoute') {
 if ($EnableFileWriteRouting -and $CandidateMode -eq 'NoRoute') {
     throw 'A routing candidate must identify its mode as TrustedSaveRouting or RoutingNoSaveProbe.'
 }
+if ($CandidateMode -eq 'RoutingNoSaveProbe') {
+    if ([string]::IsNullOrWhiteSpace($GeneratedSourcePath)) { throw 'RoutingNoSaveProbe requires -GeneratedSourcePath.' }
+}
+elseif (-not [string]::IsNullOrWhiteSpace($GeneratedSourcePath)) {
+    throw '-GeneratedSourcePath is valid only for RoutingNoSaveProbe.'
+}
 if ([string]::IsNullOrWhiteSpace($SourceCommit)) {
     $SourceCommit = ((& $consoleTool -FilePath git -Arguments @('-C', $repoRoot, 'rev-parse', 'HEAD')) | Select-Object -Last 1).Trim()
 }
@@ -52,6 +58,15 @@ if ((Get-Item -LiteralPath $basePath).Length -ne 2988548 -or
 }
 foreach ($required in @($NativeDllPath, $RuntimeLibraryPath, $BatmanUserIniPath)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Required candidate input missing: $required" }
+}
+$nativeInputPath = [IO.Path]::GetFullPath($NativeDllPath)
+$nativeSourceSha256 = (Get-FileHash -LiteralPath $nativeInputPath -Algorithm SHA256).Hash
+$generatedSourceHash = $null
+$generatedSourceFullPath = $null
+if ($CandidateMode -eq 'RoutingNoSaveProbe') {
+    $generatedSourceFullPath = [IO.Path]::GetFullPath($GeneratedSourcePath)
+    if (-not (Test-Path -LiteralPath $generatedSourceFullPath -PathType Leaf)) { throw "Generated source input missing: $GeneratedSourcePath" }
+    $generatedSourceHash = (Get-FileHash -LiteralPath $generatedSourceFullPath -Algorithm SHA256).Hash
 }
 New-Item -ItemType Directory -Path (Join-Path $buildRoot 'assets\native') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $buildRoot 'assets\deltas') | Out-Null
@@ -113,20 +128,15 @@ Write-CandidateJson (Join-Path $buildRoot 'files.json') ([ordered]@{ virtualFile
     }
 }) })
 $candidateDll = Join-Path $candidateRoot 'HelenGameHook.dll'
-Copy-Item -LiteralPath $NativeDllPath -Destination $candidateDll
+Copy-Item -LiteralPath $nativeInputPath -Destination $candidateDll
 $routeMode = if ($EnableFileWriteRouting) { 'engine-config' } else { 'none' }
-& (Join-Path $PSScriptRoot 'Test-BatmanDirectGraphicsPackage.ps1') -PackParent $packParent -BasePath $basePath -TargetPath $targetPath -NativeDllPath $candidateDll -RuntimeLibraryPath $RuntimeLibraryPath -ExpectedRouteMode $routeMode
-$generatedSourceHash = $null
-if (-not [string]::IsNullOrWhiteSpace($GeneratedSourcePath)) {
-    if (-not (Test-Path -LiteralPath $GeneratedSourcePath -PathType Leaf)) { throw "Generated source input missing: $GeneratedSourcePath" }
-    $generatedSourceHash = (Get-FileHash -LiteralPath $GeneratedSourcePath -Algorithm SHA256).Hash
-}
+& (Join-Path $PSScriptRoot 'Test-BatmanDirectGraphicsPackage.ps1') -PackParent $packParent -BasePath $basePath -TargetPath $targetPath -NativeDllPath $candidateDll -RuntimeLibraryPath $RuntimeLibraryPath -ExpectedRouteMode $routeMode -ExpectedNativeDllSha256 $nativeSourceSha256
 Write-CandidateJson (Join-Path $candidateRoot 'provenance.json') ([ordered]@{
     sourceCommit = $SourceCommit; mode = $CandidateMode; liveTestPending = $true
     routingPolicy = if ($EnableFileWriteRouting) { 'engine-config: documents/Square Enix/Batman Arkham Asylum GOTY/BmGame/Config/BmEngine.ini; redirect writes; redirected reads; session lifetime' } else { 'none' }
-    nativeInput = [IO.Path]::GetFullPath($NativeDllPath); nativeSha256 = (Get-FileHash -LiteralPath $candidateDll).Hash
+    nativeInput = $nativeInputPath; nativeSha256 = $nativeSourceSha256; candidateDllSha256 = (Get-FileHash -LiteralPath $candidateDll -Algorithm SHA256).Hash
     runtimeLibrary = [IO.Path]::GetFullPath($RuntimeLibraryPath); runtimeSha256 = (Get-FileHash -LiteralPath $RuntimeLibraryPath).Hash
-    nativeOutputRoot = [IO.Path]::GetFullPath($NativeOutputRoot); generatedNoSaveSource = if ($GeneratedSourcePath) { [IO.Path]::GetFullPath($GeneratedSourcePath) } else { $null }; generatedNoSaveSourceSha256 = $generatedSourceHash
+    nativeOutputRoot = [IO.Path]::GetFullPath($NativeOutputRoot); generatedNoSaveSource = $generatedSourceFullPath; generatedNoSaveSourceSha256 = $generatedSourceHash
     retailBaseSha256 = (Get-FileHash -LiteralPath $basePath).Hash; gfxSha256 = (Get-FileHash -LiteralPath $gfxPath).Hash
     targetSha256 = (Get-FileHash -LiteralPath $targetPath).Hash; deltaSha256 = (Get-FileHash -LiteralPath $deltaPath).Hash
     templateSha256 = (Get-FileHash -LiteralPath (Join-Path $builderRoot 'tools\NativeSubtitleExePatcher\SubtitleSizeModBuilder\GraphicsOptionsShellScriptTemplates.cs')).Hash
