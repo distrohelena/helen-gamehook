@@ -1,5 +1,6 @@
 #include <exception>
 #include <iostream>
+#include <string_view>
 #include <windows.h>
 
 /**
@@ -158,6 +159,9 @@ void RunFileWriteRoutingServiceTests();
 /** @brief Runs the real imported Win32 IAT routing fixture for session mutations. */
 void RunFileWriteRoutingHookFixtureTests();
 
+/** @brief Launches the isolated child-mode routing fixture and validates its exit status. */
+void RunFileWriteRoutingHookFixtureChildProcess();
+
 /**
  * @brief Runs the window behavior config coverage for generic `window.*` keys and derived hook plans.
  */
@@ -175,11 +179,18 @@ void RunBatmanGraphicsSnapshotTests();
 void RunBatmanGraphicsIntegrityFailureTests();
 
 /** @brief Runs native tests with console-only failure reporting and no Windows crash dialogs. */
-int main()
+int wmain(int argc, wchar_t** argv)
 {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     try
     {
+        if (argc > 1 && std::wstring_view(argv[1]) == L"--file-routing-hook-child")
+        {
+            RunFileWriteRoutingHookFixtureTests();
+            std::cout << "FILE_ROUTING_HOOK_CHILD_PASS\n";
+            return 0;
+        }
+
         RunBatmanGraphicsSnapshotTests();
         RunActivePackSetBuilderTests();
         RunBatmanDisplayModeServiceTests();
@@ -211,7 +222,7 @@ int main()
         RunMemoryStateObserverServiceTests();
         RunVirtualFileServiceTests();
         RunFileWriteRoutingServiceTests();
-        RunFileWriteRoutingHookFixtureTests();
+        RunFileWriteRoutingHookFixtureChildProcess();
         RunDebugTraceServiceTests();
         RunWindowBehaviorConfigTests();
         RunWindowBehaviorHookSetTests();

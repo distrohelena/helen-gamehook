@@ -130,6 +130,17 @@ namespace helen
             LPDWORD lpNumberOfBytesRead,
             LPOVERLAPPED lpOverlapped);
 
+        /** @brief IAT detour that permits native writes only for tracked redirected handles or unrelated handles. */
+        static BOOL WINAPI WriteFileDetour(
+            HANDLE hFile,
+            LPCVOID lpBuffer,
+            DWORD nNumberOfBytesToWrite,
+            LPDWORD lpNumberOfBytesWritten,
+            LPOVERLAPPED lpOverlapped);
+
+        /** @brief IAT detour that permits end-of-file changes only for tracked redirected handles or unrelated handles. */
+        static BOOL WINAPI SetEndOfFileDetour(HANDLE hFile);
+
         /**
          * @brief IAT detour for SetFilePointerEx that moves the read cursor for synthetic virtual handles.
          */
@@ -169,7 +180,16 @@ namespace helen
             DWORD dwMaximumSizeLow,
             LPCSTR lpName);
 
-        /** @brief IAT detour that rejects writable or named mappings for routed handles. */
+        /**
+         * @brief IAT detour that rejects writable or named mappings for routed handles.
+         * @param hFile File handle used as the mapping source.
+         * @param lpFileMappingAttributes Optional native mapping security attributes.
+         * @param flProtect Requested mapping protection.
+         * @param dwMaximumSizeHigh High-order mapping size.
+         * @param dwMaximumSizeLow Low-order mapping size.
+         * @param lpName Optional mapping name, which is unsafe for routed handles.
+         * @return Native read-only mapping handle or a fail-closed null result.
+         */
         static HANDLE WINAPI CreateFileMappingWDetour(
             HANDLE hFile,
             LPSECURITY_ATTRIBUTES lpFileMappingAttributes,
@@ -178,36 +198,45 @@ namespace helen
             DWORD dwMaximumSizeLow,
             LPCWSTR lpName);
 
-        /** @brief IAT detours for ANSI and Unicode exact-file deletion. */
+        /** @brief IAT detour that classifies an ANSI path before deleting it. */
         static BOOL WINAPI DeleteFileADetour(LPCSTR lpFileName);
+        /** @brief IAT detour that classifies a Unicode path before deleting it. */
         static BOOL WINAPI DeleteFileWDetour(LPCWSTR lpFileName);
 
-        /** @brief IAT detours for ANSI and Unicode basic moves. */
+        /** @brief IAT detour that classifies ANSI source and destination before moving them. */
         static BOOL WINAPI MoveFileADetour(LPCSTR lpExistingFileName, LPCSTR lpNewFileName);
+        /** @brief IAT detour that classifies Unicode source and destination before moving them. */
         static BOOL WINAPI MoveFileWDetour(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName);
 
-        /** @brief IAT detours for ANSI and Unicode flag-bearing moves. */
+        /** @brief IAT detour that classifies ANSI source and destination with move flags. */
         static BOOL WINAPI MoveFileExADetour(LPCSTR lpExistingFileName, LPCSTR lpNewFileName, DWORD dwFlags);
+        /** @brief IAT detour that classifies Unicode source and destination with move flags. */
         static BOOL WINAPI MoveFileExWDetour(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName, DWORD dwFlags);
 
-        /** @brief IAT detours for ANSI and Unicode replacement publication. */
+        /** @brief IAT detour that classifies ANSI replacement operands before publication. */
         static BOOL WINAPI ReplaceFileADetour(LPCSTR lpReplacedFileName, LPCSTR lpReplacementFileName,
             LPCSTR lpBackupFileName, DWORD dwReplaceFlags, LPVOID lpExclude, LPVOID lpReserved);
+        /** @brief IAT detour that classifies Unicode replacement operands before publication. */
         static BOOL WINAPI ReplaceFileWDetour(LPCWSTR lpReplacedFileName, LPCWSTR lpReplacementFileName,
             LPCWSTR lpBackupFileName, DWORD dwReplaceFlags, LPVOID lpExclude, LPVOID lpReserved);
 
-        /** @brief IAT detours for ANSI and Unicode copy-to-destination operations. */
+        /** @brief IAT detour that classifies ANSI source and destination before copying. */
         static BOOL WINAPI CopyFileADetour(LPCSTR lpExistingFileName, LPCSTR lpNewFileName, BOOL bFailIfExists);
+        /** @brief IAT detour that classifies Unicode source and destination before copying. */
         static BOOL WINAPI CopyFileWDetour(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName, BOOL bFailIfExists);
 
-        /** @brief IAT detours for ANSI and Unicode attribute mutation. */
+        /** @brief IAT detour that classifies an ANSI path before changing attributes. */
         static BOOL WINAPI SetFileAttributesADetour(LPCSTR lpFileName, DWORD dwFileAttributes);
+        /** @brief IAT detour that classifies a Unicode path before changing attributes. */
         static BOOL WINAPI SetFileAttributesWDetour(LPCWSTR lpFileName, DWORD dwFileAttributes);
 
-        /** @brief IAT detours that reject parent-directory mutation affecting a protected file. */
+        /** @brief IAT detour that rejects ANSI parent-directory mutation affecting a protected file. */
         static BOOL WINAPI CreateDirectoryADetour(LPCSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes);
+        /** @brief IAT detour that rejects Unicode parent-directory mutation affecting a protected file. */
         static BOOL WINAPI CreateDirectoryWDetour(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes);
+        /** @brief IAT detour that rejects ANSI removal of a directory containing a protected file. */
         static BOOL WINAPI RemoveDirectoryADetour(LPCSTR lpPathName);
+        /** @brief IAT detour that rejects Unicode removal of a directory containing a protected file. */
         static BOOL WINAPI RemoveDirectoryWDetour(LPCWSTR lpPathName);
 
         /** @brief IAT detour that rejects duplication of routed handles. */
@@ -253,6 +282,12 @@ namespace helen
         /** @brief IAT hook used to replace ReadFile in the main executable imports. */
         IatHook read_file_hook_;
 
+        /** @brief IAT hook used to guard WriteFile on pre-existing protected originals. */
+        IatHook write_file_hook_;
+
+        /** @brief IAT hook used to guard SetEndOfFile on pre-existing protected originals. */
+        IatHook set_end_of_file_hook_;
+
         /** @brief IAT hook used to replace either SetFilePointerEx or SetFilePointer in the main executable imports. */
         IatHook set_file_pointer_hook_;
 
@@ -268,24 +303,41 @@ namespace helen
         /** @brief IAT hook used to replace CreateFileMappingW in the main executable imports when that import is present. */
         IatHook create_file_mapping_w_hook_;
 
-        /** @brief IAT hooks for mutation APIs; absent imports retain native behavior. */
+        /** @brief IAT hook for ANSI exact-file deletion; absent imports retain native behavior. */
         IatHook delete_file_a_hook_;
+        /** @brief IAT hook for Unicode exact-file deletion; absent imports retain native behavior. */
         IatHook delete_file_w_hook_;
+        /** @brief IAT hook for ANSI basic moves; absent imports retain native behavior. */
         IatHook move_file_a_hook_;
+        /** @brief IAT hook for Unicode basic moves; absent imports retain native behavior. */
         IatHook move_file_w_hook_;
+        /** @brief IAT hook for ANSI flag-bearing moves; absent imports retain native behavior. */
         IatHook move_file_ex_a_hook_;
+        /** @brief IAT hook for Unicode flag-bearing moves; absent imports retain native behavior. */
         IatHook move_file_ex_w_hook_;
+        /** @brief IAT hook for ANSI replacement publication; absent imports retain native behavior. */
         IatHook replace_file_a_hook_;
+        /** @brief IAT hook for Unicode replacement publication; absent imports retain native behavior. */
         IatHook replace_file_w_hook_;
+        /** @brief IAT hook for ANSI source-to-destination copies; absent imports retain native behavior. */
         IatHook copy_file_a_hook_;
+        /** @brief IAT hook for Unicode source-to-destination copies; absent imports retain native behavior. */
         IatHook copy_file_w_hook_;
+        /** @brief IAT hook for ANSI attribute mutation; absent imports retain native behavior. */
         IatHook set_file_attributes_a_hook_;
+        /** @brief IAT hook for Unicode attribute mutation; absent imports retain native behavior. */
         IatHook set_file_attributes_w_hook_;
+        /** @brief IAT hook for ANSI parent-directory creation; absent imports retain native behavior. */
         IatHook create_directory_a_hook_;
+        /** @brief IAT hook for Unicode parent-directory creation; absent imports retain native behavior. */
         IatHook create_directory_w_hook_;
+        /** @brief IAT hook for ANSI parent-directory removal; absent imports retain native behavior. */
         IatHook remove_directory_a_hook_;
+        /** @brief IAT hook for Unicode parent-directory removal; absent imports retain native behavior. */
         IatHook remove_directory_w_hook_;
+        /** @brief IAT hook that rejects duplication of protected handles. */
         IatHook duplicate_handle_hook_;
+        /** @brief IAT hook that rejects handle-based protected mutations. */
         IatHook set_file_information_by_handle_hook_;
 
         /** @brief IAT hook used to replace CloseHandle in the main executable imports. */

@@ -110,6 +110,17 @@ namespace
     }
 
     /**
+     * @brief Reads a native file by path without routing it through a service.
+     * @param path Existing file path whose unchanged bytes should be verified.
+     * @return Exact bytes exposed by the native file handle.
+     */
+    std::string ReadNativePath(const std::filesystem::path& path)
+    {
+        return ReadHandle(CreateFileW(path.c_str(), GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    }
+
+    /**
      * @brief Finds the single session-owned overlay file below a fresh routing session.
      * @param cache_directory Cache root supplied to the routing service.
      * @return Overlay path discovered beneath the service-owned session directory.
@@ -346,6 +357,37 @@ void RunFileWriteRoutingServiceTests()
         helen::FileWriteRoutingService mutation_service(root / "mutation-cache", request_base);
         const helen::FileWriteRoute mutation_route = { "mutation", mutation_original, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected };
         Expect(mutation_service.Initialize({ mutation_route }, error), "Mutation routing initialization failed.");
+
+        const std::filesystem::path guarded_original = request_base / "guarded.ini";
+        const std::filesystem::path guarded_second = request_base / "guarded-second.ini";
+        const std::filesystem::path guarded_source = request_base / "guarded.tmp";
+        const std::filesystem::path guarded_backup = request_base / "guarded.bak";
+        WriteAllBytes(guarded_original, "G");
+        WriteAllBytes(guarded_second, "H");
+        WriteAllBytes(guarded_source, "S");
+        WriteAllBytes(guarded_backup, "B");
+        helen::FileWriteRoutingService guarded_service(root / "guarded-cache", request_base);
+        Expect(guarded_service.Initialize({
+            { "guarded", guarded_original, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+            { "guarded-second", guarded_second, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+        }, error), "Compound mutation routing initialization failed.");
+        Expect(guarded_service.Copy(guarded_original, guarded_source, FALSE) == FALSE && GetLastError() == ERROR_ACCESS_DENIED,
+            "Protected source copy escaped into an unrelated destination.");
+        Expect(guarded_service.Move(guarded_original, guarded_source, MOVEFILE_REPLACE_EXISTING) == FALSE && GetLastError() == ERROR_ACCESS_DENIED,
+            "Protected source move escaped into an unrelated destination.");
+        Expect(guarded_service.Replace(guarded_original, guarded_source, guarded_backup.c_str(), REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr) == FALSE &&
+            GetLastError() == ERROR_NOT_SUPPORTED, "Protected replacement accepted an unsafe backup operand.");
+        Expect(guarded_service.Replace(guarded_original, guarded_second, nullptr, REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr) == FALSE &&
+            GetLastError() == ERROR_NOT_SUPPORTED, "Protected replacement accepted a second protected operand.");
+        Expect(guarded_service.Replace(guarded_source, guarded_original, nullptr, REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr) == FALSE &&
+            GetLastError() == ERROR_NOT_SUPPORTED, "Protected replacement source escaped through the replacement operand.");
+        Expect(guarded_service.Move(guarded_source, guarded_original, MOVEFILE_COPY_ALLOWED) == FALSE && GetLastError() == ERROR_NOT_SUPPORTED,
+            "Cross-volume-capable move was silently accepted without transaction semantics.");
+        Expect(ReadNativePath(guarded_original) == "G", "Rejected compound mutation changed the protected original.");
+        Expect(ReadNativePath(guarded_second) == "H", "Rejected compound mutation changed the second protected original.");
+        Expect(ReadNativePath(guarded_source) == "S", "Rejected compound mutation changed the source operand.");
+        Expect(ReadNativePath(guarded_backup) == "B", "Rejected compound mutation changed the backup operand.");
+
         Expect(mutation_service.Copy(mutation_source, mutation_original, FALSE) != FALSE, "Protected copy destination was not redirected.");
         Expect(ReadThroughRouter(mutation_service, mutation_original) == "N", "Redirected copy did not update the session file.");
         WriteAllBytes(mutation_source, "O");

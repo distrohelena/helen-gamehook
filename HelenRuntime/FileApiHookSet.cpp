@@ -141,6 +141,31 @@ namespace
         return read_file(hFile, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, lpOverlapped);
     }
 
+    /** @brief Calls the real WriteFile export without the current executable IAT. */
+    BOOL WINAPI CallRealWriteFile(HANDLE hFile, LPCVOID lpBuffer, DWORD bytes_to_write,
+        LPDWORD bytes_written, LPOVERLAPPED overlapped)
+    {
+        const auto write_file = ResolveKernel32Export<decltype(&WriteFile)>("WriteFile");
+        if (write_file == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return FALSE;
+        }
+        return write_file(hFile, lpBuffer, bytes_to_write, bytes_written, overlapped);
+    }
+
+    /** @brief Calls the real SetEndOfFile export without the current executable IAT. */
+    BOOL WINAPI CallRealSetEndOfFile(HANDLE hFile)
+    {
+        const auto set_end_of_file = ResolveKernel32Export<decltype(&SetEndOfFile)>("SetEndOfFile");
+        if (set_end_of_file == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            return FALSE;
+        }
+        return set_end_of_file(hFile);
+    }
+
     /**
      * @brief Calls the real SetFilePointerEx export without using the main executable import table.
      */
@@ -441,6 +466,17 @@ namespace
             base_protection == PAGE_EXECUTE_READWRITE || base_protection == PAGE_EXECUTE_WRITECOPY;
     }
 
+    /** @brief Returns true when a process handle denotes this process for local IAT safety checks. */
+    bool IsCurrentProcessHandle(HANDLE process_handle) noexcept
+    {
+        if (process_handle == GetCurrentProcess())
+        {
+            return true;
+        }
+
+        return process_handle != nullptr && GetProcessId(process_handle) == GetCurrentProcessId();
+    }
+
     /**
      * @brief Combines the legacy SetFilePointer low/high offset arguments into one signed 64-bit seek distance.
      * @param low_distance Low-order signed distance argument supplied to SetFilePointer.
@@ -495,13 +531,14 @@ namespace
             return std::nullopt;
         }
 
-        std::wstring wide_path(static_cast<std::size_t>(required_length - 1), L'\0');
+        std::wstring wide_path(static_cast<std::size_t>(required_length), L'\0');
         const int actual_length = MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, path, -1, wide_path.data(), required_length);
         if (actual_length != required_length)
         {
             return std::nullopt;
         }
 
+        wide_path.resize(static_cast<std::size_t>(actual_length - 1));
         return std::filesystem::path(wide_path);
     }
 
@@ -676,6 +713,14 @@ namespace helen
             return false;
         }
 
+        if (file_write_routing_ != nullptr &&
+            (!InstallOptionalHook(write_file_hook_, *main_module, "kernel32.dll", "WriteFile", reinterpret_cast<void*>(&WriteFileDetour), import_present) ||
+                !InstallOptionalHook(set_end_of_file_hook_, *main_module, "kernel32.dll", "SetEndOfFile", reinterpret_cast<void*>(&SetEndOfFileDetour), import_present)))
+        {
+            Remove();
+            return false;
+        }
+
         if (file_write_routing_ != nullptr)
         {
             if (!InstallOptionalHook(create_file_mapping_w_hook_, *main_module, "kernel32.dll", "CreateFileMappingW", reinterpret_cast<void*>(&CreateFileMappingWDetour), import_present) ||
@@ -735,6 +780,8 @@ namespace helen
         delete_file_a_hook_.Remove();
         create_file_mapping_w_hook_.Remove();
         create_file_mapping_a_hook_.Remove();
+        set_end_of_file_hook_.Remove();
+        write_file_hook_.Remove();
         get_file_attributes_a_hook_.Remove();
         get_file_attributes_w_hook_.Remove();
         get_file_size_ex_hook_.Remove();
@@ -849,6 +896,11 @@ namespace helen
         if (lpFileName != nullptr)
         {
             const std::optional<std::filesystem::path> hidden_path = TryConvertAnsiPath(lpFileName);
+            if (active->file_write_routing_ != nullptr && !hidden_path.has_value())
+            {
+                SetLastError(ERROR_NO_UNICODE_TRANSLATION);
+                return INVALID_HANDLE_VALUE;
+            }
             if (active->file_write_routing_ != nullptr && hidden_path.has_value())
             {
                 const FileWriteRoutingService::PathDisposition disposition = active->file_write_routing_->ClassifyPath(*hidden_path);
@@ -946,6 +998,11 @@ namespace helen
         if (lpFileName != nullptr)
         {
             const std::optional<std::filesystem::path> hidden_path = TryConvertAnsiPath(lpFileName);
+            if (active->file_write_routing_ != nullptr && !hidden_path.has_value())
+            {
+                SetLastError(ERROR_NO_UNICODE_TRANSLATION);
+                return INVALID_FILE_ATTRIBUTES;
+            }
             if (active->file_write_routing_ != nullptr && hidden_path.has_value())
             {
                 if (active->file_write_routing_->ClassifyPath(*hidden_path) != FileWriteRoutingService::PathDisposition::Unrelated)
@@ -988,6 +1045,51 @@ namespace helen
             nNumberOfBytesToRead,
             lpNumberOfBytesRead,
             lpOverlapped);
+    }
+
+    BOOL WINAPI FileApiHookSet::WriteFileDetour(
+        HANDLE hFile,
+        LPCVOID lpBuffer,
+        DWORD nNumberOfBytesToWrite,
+        LPDWORD lpNumberOfBytesWritten,
+        LPOVERLAPPED lpOverlapped)
+    {
+        FileApiHookSet* const active = Current();
+        if (active == nullptr)
+        {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return FALSE;
+        }
+
+        if (active->file_write_routing_ != nullptr &&
+            !active->file_write_routing_->IsTrackedHandle(hFile) &&
+            active->file_write_routing_->ClassifyHandle(hFile) != FileWriteRoutingService::PathDisposition::Unrelated)
+        {
+            SetLastError(ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+
+        return CallRealWriteFile(hFile, lpBuffer, nNumberOfBytesToWrite, lpNumberOfBytesWritten, lpOverlapped);
+    }
+
+    BOOL WINAPI FileApiHookSet::SetEndOfFileDetour(HANDLE hFile)
+    {
+        FileApiHookSet* const active = Current();
+        if (active == nullptr)
+        {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return FALSE;
+        }
+
+        if (active->file_write_routing_ != nullptr &&
+            !active->file_write_routing_->IsTrackedHandle(hFile) &&
+            active->file_write_routing_->ClassifyHandle(hFile) != FileWriteRoutingService::PathDisposition::Unrelated)
+        {
+            SetLastError(ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+
+        return CallRealSetEndOfFile(hFile);
     }
 
     BOOL WINAPI FileApiHookSet::SetFilePointerExDetour(
@@ -1185,6 +1287,11 @@ namespace helen
         FileApiHookSet* const active = Current();
         if (active == nullptr) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
         const std::optional<std::filesystem::path> path = TryConvertAnsiPath(lpFileName);
+        if (active->file_write_routing_ != nullptr && lpFileName != nullptr && !path.has_value())
+        {
+            SetLastError(ERROR_NO_UNICODE_TRANSLATION);
+            return FALSE;
+        }
         if (active->file_write_routing_ != nullptr && path.has_value())
         {
             return active->file_write_routing_->Delete(*path);
@@ -1209,6 +1316,12 @@ namespace helen
         if (active == nullptr) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
         const std::optional<std::filesystem::path> existing_path = TryConvertAnsiPath(lpExistingFileName);
         const std::optional<std::filesystem::path> new_path = TryConvertAnsiPath(lpNewFileName);
+        if (active->file_write_routing_ != nullptr &&
+            ((lpExistingFileName != nullptr && !existing_path.has_value()) || (lpNewFileName != nullptr && !new_path.has_value())))
+        {
+            SetLastError(ERROR_NO_UNICODE_TRANSLATION);
+            return FALSE;
+        }
         if (active->file_write_routing_ != nullptr && existing_path.has_value() && new_path.has_value())
         {
             return active->file_write_routing_->Move(*existing_path, *new_path, dwFlags);
@@ -1249,6 +1362,14 @@ namespace helen
         const std::optional<std::filesystem::path> replacement_path = TryConvertAnsiPath(lpReplacementFileName);
         const std::optional<std::filesystem::path> backup_path = lpBackupFileName == nullptr
             ? std::optional<std::filesystem::path>() : TryConvertAnsiPath(lpBackupFileName);
+        if (active->file_write_routing_ != nullptr &&
+            ((lpReplacedFileName != nullptr && !replaced_path.has_value()) ||
+                (lpReplacementFileName != nullptr && !replacement_path.has_value()) ||
+                (lpBackupFileName != nullptr && !backup_path.has_value())))
+        {
+            SetLastError(ERROR_NO_UNICODE_TRANSLATION);
+            return FALSE;
+        }
         if (active->file_write_routing_ != nullptr && replaced_path.has_value() && replacement_path.has_value() &&
             (lpBackupFileName == nullptr || backup_path.has_value()))
         {
@@ -1277,6 +1398,12 @@ namespace helen
         if (active == nullptr) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
         const std::optional<std::filesystem::path> existing_path = TryConvertAnsiPath(lpExistingFileName);
         const std::optional<std::filesystem::path> new_path = TryConvertAnsiPath(lpNewFileName);
+        if (active->file_write_routing_ != nullptr &&
+            ((lpExistingFileName != nullptr && !existing_path.has_value()) || (lpNewFileName != nullptr && !new_path.has_value())))
+        {
+            SetLastError(ERROR_NO_UNICODE_TRANSLATION);
+            return FALSE;
+        }
         if (active->file_write_routing_ != nullptr && existing_path.has_value() && new_path.has_value())
         {
             return active->file_write_routing_->Copy(*existing_path, *new_path, bFailIfExists);
@@ -1300,6 +1427,11 @@ namespace helen
         FileApiHookSet* const active = Current();
         if (active == nullptr) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
         const std::optional<std::filesystem::path> path = TryConvertAnsiPath(lpFileName);
+        if (active->file_write_routing_ != nullptr && lpFileName != nullptr && !path.has_value())
+        {
+            SetLastError(ERROR_NO_UNICODE_TRANSLATION);
+            return FALSE;
+        }
         if (active->file_write_routing_ != nullptr && path.has_value())
         {
             return active->file_write_routing_->SetAttributes(*path, dwFileAttributes);
@@ -1325,6 +1457,11 @@ namespace helen
         FileApiHookSet* const active = Current();
         if (active == nullptr) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
         const std::optional<std::filesystem::path> path = TryConvertAnsiPath(lpPathName);
+        if (active->file_write_routing_ != nullptr && lpPathName != nullptr && !path.has_value())
+        {
+            SetLastError(ERROR_NO_UNICODE_TRANSLATION);
+            return FALSE;
+        }
         if (active->file_write_routing_ != nullptr && path.has_value() && active->file_write_routing_->IsProtectedParentPath(*path))
         {
             SetLastError(ERROR_ACCESS_DENIED);
@@ -1350,6 +1487,11 @@ namespace helen
         FileApiHookSet* const active = Current();
         if (active == nullptr) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
         const std::optional<std::filesystem::path> path = TryConvertAnsiPath(lpPathName);
+        if (active->file_write_routing_ != nullptr && lpPathName != nullptr && !path.has_value())
+        {
+            SetLastError(ERROR_NO_UNICODE_TRANSLATION);
+            return FALSE;
+        }
         if (active->file_write_routing_ != nullptr && path.has_value() && active->file_write_routing_->IsProtectedParentPath(*path))
         {
             SetLastError(ERROR_ACCESS_DENIED);
@@ -1363,7 +1505,7 @@ namespace helen
     {
         FileApiHookSet* const active = Current();
         if (active == nullptr) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
-        if (active->file_write_routing_ != nullptr &&
+        if (active->file_write_routing_ != nullptr && IsCurrentProcessHandle(hSourceProcessHandle) &&
             (active->file_write_routing_->IsTrackedHandle(hSourceHandle) || active->file_write_routing_->ClassifyHandle(hSourceHandle) != FileWriteRoutingService::PathDisposition::Unrelated))
         {
             SetLastError(ERROR_ACCESS_DENIED);

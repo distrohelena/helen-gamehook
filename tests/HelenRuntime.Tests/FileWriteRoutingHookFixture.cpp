@@ -9,9 +9,11 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -36,6 +38,8 @@ namespace
     volatile decltype(&RemoveDirectoryW) RemoveDirectoryWImportAnchor = &RemoveDirectoryW;
     volatile decltype(&DeleteFileW) DeleteFileWImportAnchor = &DeleteFileW;
     volatile decltype(&CloseHandle) CloseHandleImportAnchor = &CloseHandle;
+    volatile decltype(&WriteFile) WriteFileImportAnchor = &WriteFile;
+    volatile decltype(&SetEndOfFile) SetEndOfFileImportAnchor = &SetEndOfFile;
 
     /** @brief Throws a descriptive failure when one real hooked-fixture assertion is false. */
     void ExpectHookFixture(bool condition, const char* message)
@@ -58,6 +62,30 @@ namespace
         ExpectHookFixture(static_cast<bool>(stream), "Failed to write hooked routing fixture file.");
     }
 
+    /** @brief Creates one unique directory owned by this fixture without deleting any fixed shared temp path. */
+    std::filesystem::path CreateUniqueHookFixtureRoot()
+    {
+        std::array<wchar_t, MAX_PATH> temp_path{};
+        const DWORD temp_length = GetTempPathW(static_cast<DWORD>(temp_path.size()), temp_path.data());
+        if (temp_length == 0 || temp_length >= temp_path.size())
+        {
+            throw std::runtime_error("Failed to resolve temporary directory for hooked routing fixture.");
+        }
+
+        std::array<wchar_t, MAX_PATH> file_name{};
+        if (GetTempFileNameW(temp_path.data(), L"hrf", 0, file_name.data()) == 0)
+        {
+            throw std::runtime_error("Failed to allocate unique hooked routing fixture path.");
+        }
+
+        const std::filesystem::path root(file_name.data());
+        if (!DeleteFileW(root.c_str()) || !CreateDirectoryW(root.c_str(), nullptr))
+        {
+            throw std::runtime_error("Failed to create unique hooked routing fixture directory.");
+        }
+        return root;
+    }
+
     /** @brief Reads one fixture file through the CRT after hooks are removed. */
     std::string ReadHookFixtureFile(const std::filesystem::path& path)
     {
@@ -72,6 +100,14 @@ namespace
         DWORD bytes_written = 0;
         ExpectHookFixture(WriteFile(handle, &value, 1, &bytes_written, nullptr) != FALSE && bytes_written == 1,
             "Imported WriteFile failed for routed fixture handle.");
+    }
+
+    /** @brief Returns a short-name spelling when Windows can materialize one for the fixture directory. */
+    std::filesystem::path GetShortFixturePath(const std::filesystem::path& candidate)
+    {
+        std::array<wchar_t, MAX_PATH> buffer{};
+        const DWORD length = GetShortPathNameW(candidate.c_str(), buffer.data(), static_cast<DWORD>(buffer.size()));
+        return length > 0 && length < buffer.size() ? std::filesystem::path(buffer.data()) : candidate;
     }
 
     /**
@@ -103,9 +139,7 @@ namespace
  */
 void RunFileWriteRoutingHookFixtureTests()
 {
-    const std::filesystem::path root = std::filesystem::temp_directory_path() / "HelenRuntimeTests" / "FileWriteRoutingHook";
-    std::filesystem::remove_all(root);
-    std::filesystem::create_directories(root);
+    const std::filesystem::path root = CreateUniqueHookFixtureRoot();
     const std::filesystem::path original_path = root / "BmEngine.ini";
     const std::filesystem::path deny_path = root / "Deny.ini";
     const std::filesystem::path source_path = root / "BmEngine.tmp";
@@ -126,9 +160,20 @@ void RunFileWriteRoutingHookFixtureTests()
         helen::VirtualFileService virtual_files(root / "virtual-cache");
         ExpectHookFixture(routing.ClassifyPath(original_path) == helen::FileWriteRoutingService::PathDisposition::Protected,
             "Hook fixture route was not classified as protected before installation.");
+        ExpectHookFixture(routing.ClassifyPath(std::filesystem::path(L"\\\\?\\GLOBALROOT\\Device\\HelenUnknown")) ==
+            helen::FileWriteRoutingService::PathDisposition::Rejected, "Unsafe disk path was treated as unrelated.");
+        ExpectHookFixture(routing.ClassifyPath(std::filesystem::path(L"\\\\.\\pipe\\HelenUnrelated")) ==
+            helen::FileWriteRoutingService::PathDisposition::Unrelated, "Unrelated named pipe was not preserved as native.");
+        ExpectHookFixture(routing.ClassifyPath(std::filesystem::path(L"\\\\.\\NUL")) ==
+            helen::FileWriteRoutingService::PathDisposition::Unrelated, "Unrelated NUL device was not preserved as native.");
         HANDLE preexisting_read = CreateFileW(original_path.c_str(), GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         ExpectHookFixture(preexisting_read != INVALID_HANDLE_VALUE, "Pre-existing original-read fixture handle could not be opened.");
+        HANDLE preexisting_write = CreateFileW(original_path.c_str(), GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ExpectHookFixture(preexisting_write != INVALID_HANDLE_VALUE, "Pre-existing writable fixture handle could not be opened.");
+        const std::filesystem::path short_parent = GetShortFixturePath(root);
+        ExpectHookFixture(routing.IsProtectedParentPath(short_parent), "Short protected parent alias was not recognized.");
         helen::FileApiHookSet hooks(virtual_files, routing, root, root, {});
         const std::optional<helen::ModuleView> main_module = helen::QueryMainModule();
         ExpectHookFixture(main_module.has_value(), "Hook fixture could not query its main module.");
@@ -138,6 +183,17 @@ void RunFileWriteRoutingHookFixtureTests()
         ExpectHookFixture(hooks.Install(), "Hook fixture IAT installation failed.");
         ExpectHookFixture(hooks.IsInstalled(), "Hook fixture reported inactive immediately after installation.");
         ExpectHookFixture(*create_file_slot != original_create_file_target, "Hook fixture CreateFileW IAT slot was not changed.");
+        HANDLE unsafe_device = CallHookedImport<decltype(&CreateFileW)>("CreateFileW")(L"\\\\?\\GLOBALROOT\\Device\\HelenUnknown", GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ExpectHookFixture(unsafe_device == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED,
+            "Imported unsafe disk device path escaped to native CreateFileW.");
+        char preexisting_byte = 'X';
+        DWORD preexisting_bytes_written = 0;
+        ExpectHookFixture(CallHookedImport<decltype(&WriteFile)>("WriteFile")(preexisting_write, &preexisting_byte, 1, &preexisting_bytes_written, nullptr) == FALSE &&
+            GetLastError() == ERROR_ACCESS_DENIED, "Imported WriteFile mutated a pre-existing protected writable handle.");
+        ExpectHookFixture(CallHookedImport<decltype(&SetEndOfFile)>("SetEndOfFile")(preexisting_write) == FALSE &&
+            GetLastError() == ERROR_ACCESS_DENIED, "Imported SetEndOfFile mutated a pre-existing protected writable handle.");
+        ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(preexisting_write) != FALSE, "Pre-existing writable fixture close failed.");
 
         const auto imported_create_file_w = CallHookedImport<decltype(&CreateFileW)>("CreateFileW");
         HANDLE routed = imported_create_file_w(original_path.c_str(), GENERIC_WRITE,
@@ -175,6 +231,25 @@ void RunFileWriteRoutingHookFixtureTests()
         HANDLE duplicate = nullptr;
         ExpectHookFixture(CallHookedImport<decltype(&DuplicateHandle)>("DuplicateHandle")(GetCurrentProcess(), routed_read, GetCurrentProcess(), &duplicate, 0, FALSE, 0) == FALSE &&
             GetLastError() == ERROR_ACCESS_DENIED, "Imported DuplicateHandle escaped a routed handle.");
+        std::vector<wchar_t> foreign_command{ L'c', L'm', L'd', L'.', L'e', L'x', L'e', L' ', L'/', L'c', L' ', L'e', L'x', L'i', L't', L' ', L'0', L'\0' };
+        STARTUPINFOW foreign_startup{};
+        foreign_startup.cb = sizeof(foreign_startup);
+        PROCESS_INFORMATION foreign_process{};
+        ExpectHookFixture(CreateProcessW(nullptr, foreign_command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+            &foreign_startup, &foreign_process) != FALSE, "Foreign duplicate source process could not be created.");
+        HANDLE foreign_duplicate = nullptr;
+        const BOOL foreign_duplicate_result = CallHookedImport<decltype(&DuplicateHandle)>("DuplicateHandle")(
+            foreign_process.hProcess, routed_read, GetCurrentProcess(), &foreign_duplicate, 0, FALSE, 0);
+        ExpectHookFixture(foreign_duplicate_result != FALSE || GetLastError() != ERROR_ACCESS_DENIED,
+            "Foreign-process handle was rejected by a local numeric collision.");
+        if (foreign_duplicate_result != FALSE)
+        {
+            ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(foreign_duplicate) != FALSE,
+                "Foreign duplicate result could not be closed.");
+        }
+        WaitForSingleObject(foreign_process.hProcess, INFINITE);
+        CloseHandle(foreign_process.hThread);
+        CloseHandle(foreign_process.hProcess);
         HANDLE writable_mapping = CallHookedImport<decltype(&CreateFileMappingW)>("CreateFileMappingW")(routed_read, nullptr, PAGE_READWRITE, 0, 0, nullptr);
         ExpectHookFixture(writable_mapping == nullptr && GetLastError() == ERROR_ACCESS_DENIED,
             "Imported writable mapping escaped a routed handle.");
@@ -208,9 +283,15 @@ void RunFileWriteRoutingHookFixtureTests()
         ExpectHookFixture(unrelated != INVALID_HANDLE_VALUE && !routing.IsTrackedHandle(unrelated), "Unrelated imported CreateFileW was routed.");
         WriteHookedByte(unrelated, 'U');
         ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(unrelated) != FALSE, "Unrelated imported CloseHandle failed.");
+        const std::filesystem::path native_move_source = root / "native-move.tmp";
+        const std::filesystem::path native_move_destination = root / "native-move.ini";
+        WriteHookFixtureFile(native_move_source, "MOVE");
+        ExpectHookFixture(CallHookedImport<decltype(&MoveFileExW)>("MoveFileExW")(native_move_source.c_str(), native_move_destination.c_str(), MOVEFILE_COPY_ALLOWED) != FALSE,
+            "Unrelated MoveFileExW lost native COPY_ALLOWED behavior.");
         hooks.Remove();
         ExpectHookFixture(ReadHookFixtureFile(original_path) == "ORIGINAL", "Redirected imported mutations changed the original file.");
         ExpectHookFixture(ReadHookFixtureFile(unrelated_path) == "UATIVE", "Unrelated imported write did not retain native behavior.");
+        ExpectHookFixture(ReadHookFixtureFile(native_move_destination) == "MOVE", "Unrelated native MoveFileExW did not publish its destination.");
     }
     catch (...)
     {
@@ -219,4 +300,74 @@ void RunFileWriteRoutingHookFixtureTests()
     }
 
     std::filesystem::remove_all(root);
+}
+
+/**
+ * @brief Launches one isolated child copy of the test executable for real IAT fixture execution.
+ * @return Only when the child exits successfully; otherwise throws with the child exit code.
+ */
+void RunFileWriteRoutingHookFixtureChildProcess()
+{
+    std::array<wchar_t, MAX_PATH> executable_buffer{};
+    const DWORD executable_length = GetModuleFileNameW(nullptr, executable_buffer.data(), static_cast<DWORD>(executable_buffer.size()));
+    if (executable_length == 0 || executable_length >= executable_buffer.size())
+    {
+        throw std::runtime_error("Failed to resolve routing test executable for child fixture.");
+    }
+
+    std::wstring command_line = L"\"" + std::wstring(executable_buffer.data(), executable_length) + L"\" --file-routing-hook-child";
+    std::vector<wchar_t> mutable_command(command_line.begin(), command_line.end());
+    mutable_command.push_back(L'\0');
+    SECURITY_ATTRIBUTES pipe_attributes{};
+    pipe_attributes.nLength = sizeof(pipe_attributes);
+    pipe_attributes.bInheritHandle = TRUE;
+    HANDLE child_output_read = nullptr;
+    HANDLE child_output_write = nullptr;
+    if (!CreatePipe(&child_output_read, &child_output_write, &pipe_attributes, 0))
+    {
+        throw std::runtime_error("Failed to create isolated routing fixture output pipe.");
+    }
+    if (!SetHandleInformation(child_output_read, HANDLE_FLAG_INHERIT, 0))
+    {
+        CloseHandle(child_output_read);
+        CloseHandle(child_output_write);
+        throw std::runtime_error("Failed to configure isolated routing fixture output pipe.");
+    }
+    STARTUPINFOW startup_info{};
+    startup_info.cb = sizeof(startup_info);
+    startup_info.dwFlags = STARTF_USESTDHANDLES;
+    startup_info.hStdOutput = child_output_write;
+    startup_info.hStdError = child_output_write;
+    PROCESS_INFORMATION process_info{};
+    if (!CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr,
+        &startup_info, &process_info))
+    {
+        CloseHandle(child_output_read);
+        CloseHandle(child_output_write);
+        throw std::runtime_error("Failed to launch isolated routing hook fixture child.");
+    }
+
+    CloseHandle(child_output_write);
+    WaitForSingleObject(process_info.hProcess, INFINITE);
+    DWORD exit_code = 1;
+    GetExitCodeProcess(process_info.hProcess, &exit_code);
+    CloseHandle(process_info.hThread);
+    CloseHandle(process_info.hProcess);
+    std::string child_output;
+    std::array<char, 256> output_buffer{};
+    for (;;)
+    {
+        DWORD bytes_read = 0;
+        if (!ReadFile(child_output_read, output_buffer.data(), static_cast<DWORD>(output_buffer.size()), &bytes_read, nullptr) || bytes_read == 0)
+        {
+            break;
+        }
+        child_output.append(output_buffer.data(), bytes_read);
+    }
+    CloseHandle(child_output_read);
+    if (exit_code != 0 || child_output.find("FILE_ROUTING_HOOK_CHILD_PASS") == std::string::npos)
+    {
+        throw std::runtime_error("Isolated routing hook fixture child failed or omitted its pass marker.");
+    }
+    std::cout << child_output << "FILE_ROUTING_HOOK_CHILD_EXIT=" << exit_code << "\n";
 }

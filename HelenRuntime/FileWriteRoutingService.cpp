@@ -209,6 +209,34 @@ namespace
         return !key.empty() && key != L".";
     }
 
+    /** @brief Recognizes device namespaces whose unrelated native behavior must remain outside file routing. */
+    bool IsKnownNativeNonFilesystemPath(const std::filesystem::path& path)
+    {
+        const std::wstring text = path.wstring();
+        if (text.size() >= 9 && _wcsnicmp(text.c_str(), L"\\\\.\\pipe\\", 9) == 0)
+        {
+            return true;
+        }
+
+        if (_wcsicmp(text.c_str(), L"\\\\.\\NUL") == 0 || _wcsicmp(text.c_str(), L"\\\\.\\CON") == 0 ||
+            _wcsicmp(text.c_str(), L"\\\\.\\AUX") == 0 || _wcsicmp(text.c_str(), L"\\\\.\\PRN") == 0 ||
+            _wcsicmp(text.c_str(), L"\\\\.\\CONIN$") == 0 || _wcsicmp(text.c_str(), L"\\\\.\\CONOUT$") == 0)
+        {
+            return true;
+        }
+
+        return (text.size() >= 7 && (_wcsnicmp(text.c_str(), L"\\\\.\\COM", 7) == 0 ||
+            _wcsnicmp(text.c_str(), L"\\\\.\\LPT", 7) == 0) && text.size() == 8 && iswdigit(text[7]) != 0);
+    }
+
+    /** @brief Recognizes device paths that must fail closed unless they are explicitly known named-pipe requests. */
+    bool IsUnsafeDevicePath(const std::filesystem::path& path)
+    {
+        const std::wstring text = path.wstring();
+        return (text.size() >= 4 && _wcsnicmp(text.c_str(), L"\\\\.\\", 4) == 0 && !IsKnownNativeNonFilesystemPath(path)) ||
+            (text.size() >= 13 && _wcsnicmp(text.c_str(), L"\\\\?\\GLOBALROOT", 13) == 0);
+    }
+
     /**
      * @brief Resolves a possibly relative request against the service request base.
      * @param path Caller-supplied path.
@@ -308,6 +336,22 @@ namespace
 
             buffer.resize(static_cast<std::size_t>(length) + 1);
         }
+    }
+
+    /** @brief Opens one directory with backup semantics and resolves its canonical final path. */
+    bool GetCanonicalDirectoryPath(const std::wstring& full_path, std::wstring& canonical_path)
+    {
+        const HANDLE handle = CallNativeCreateFileW(full_path.c_str(), FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+        {
+            return false;
+        }
+
+        const bool result = GetFinalPath(handle, canonical_path);
+        CallNativeCloseHandle(handle);
+        return result;
     }
 
     /**
@@ -630,18 +674,23 @@ namespace helen
     {
         route_key.clear();
         error = ERROR_SUCCESS;
+        if (IsUnsafeDevicePath(path))
+        {
+            error = ERROR_ACCESS_DENIED;
+            return PathDisposition::Rejected;
+        }
         std::wstring full_path;
         if (!ResolveFullPath(path, request_base_directory_, full_path))
         {
             error = ERROR_INVALID_NAME;
-            return PathDisposition::Unrelated;
+            return IsKnownNativeNonFilesystemPath(path) ? PathDisposition::Unrelated : PathDisposition::Rejected;
         }
 
         std::wstring lexical_key;
         if (!NormalizePathKey(full_path, lexical_key))
         {
             error = ERROR_INVALID_NAME;
-            return PathDisposition::Unrelated;
+            return IsKnownNativeNonFilesystemPath(path) ? PathDisposition::Unrelated : PathDisposition::Rejected;
         }
 
         const auto alias = path_aliases_.find(lexical_key);
@@ -713,7 +762,7 @@ namespace helen
         std::wstring final_path;
         if (!GetFinalPath(handle, final_path))
         {
-            return PathDisposition::Unrelated;
+            return GetFileType(handle) == FILE_TYPE_DISK ? PathDisposition::Rejected : PathDisposition::Unrelated;
         }
 
         std::wstring route_key;
@@ -877,12 +926,6 @@ namespace helen
         DWORD flags)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if ((flags & (MOVEFILE_DELAY_UNTIL_REBOOT | MOVEFILE_COPY_ALLOWED)) != 0)
-        {
-            SetLastError(ERROR_NOT_SUPPORTED);
-            return FALSE;
-        }
-
         std::wstring source_route;
         std::wstring destination_route;
         DWORD source_error = ERROR_SUCCESS;
@@ -894,6 +937,13 @@ namespace helen
             SetLastError(source_disposition == PathDisposition::Rejected
                 ? (source_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : source_error)
                 : (destination_error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : destination_error));
+            return FALSE;
+        }
+
+        if ((flags & (MOVEFILE_DELAY_UNTIL_REBOOT | MOVEFILE_COPY_ALLOWED)) != 0 &&
+            (source_disposition == PathDisposition::Protected || destination_disposition == PathDisposition::Protected))
+        {
+            SetLastError(ERROR_NOT_SUPPORTED);
             return FALSE;
         }
 
@@ -1139,7 +1189,18 @@ namespace helen
         std::wstring key;
         if (!NormalizePathKey(full_path, key))
         {
-            return false;
+            return !IsKnownNativeNonFilesystemPath(path);
+        }
+
+        std::wstring canonical_path;
+        std::wstring canonical_key;
+        if (GetCanonicalDirectoryPath(full_path, canonical_path) && NormalizePathKey(canonical_path, canonical_key))
+        {
+            key = canonical_key;
+        }
+        else if (CallNativeGetFileAttributesW(full_path.c_str()) != INVALID_FILE_ATTRIBUTES)
+        {
+            return true;
         }
 
         if (!key.empty() && key.back() != L'/')
