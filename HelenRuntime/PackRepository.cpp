@@ -544,7 +544,8 @@ namespace
     /**
      * @brief Converts UTF-8 manifest bytes into a Windows filesystem path without ACP decoding.
      * @param value UTF-8 path bytes read from JSON.
-     * @return Filesystem path carrying the original Unicode spelling.
+     * @param path Receives the filesystem path carrying the validated Unicode spelling.
+     * @return True when the byte sequence is valid UTF-8 and conversion succeeds; otherwise false.
      */
     bool TryPathFromUtf8(std::string_view value, std::filesystem::path& path)
     {

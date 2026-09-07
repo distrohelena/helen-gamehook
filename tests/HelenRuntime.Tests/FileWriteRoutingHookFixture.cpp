@@ -30,6 +30,8 @@ namespace
     volatile decltype(&CreateFileW) CreateFileWImportAnchor = &CreateFileW;
     /** @brief Keeps CreateFileA materialized for the ANSI deny-route fixture call. */
     volatile decltype(&CreateFileA) CreateFileAImportAnchor = &CreateFileA;
+    /** @brief Keeps GetFileAttributesW materialized for captured-path attribute routing coverage. */
+    volatile decltype(&GetFileAttributesW) GetFileAttributesWImportAnchor = &GetFileAttributesW;
     /** @brief Keeps CopyFileW materialized for protected-destination alias mutation coverage. */
     volatile decltype(&CopyFileW) CopyFileWImportAnchor = &CopyFileW;
     /** @brief Keeps MoveFileExA materialized for ANSI delayed and routed publication coverage. */
@@ -161,6 +163,157 @@ namespace
         std::wstring original_directory_;
     };
 
+    /** @brief Exact function-pointer type used to call the unpatched native path-normalization export. */
+    using GetFullPathNameWFunction = decltype(&GetFullPathNameW);
+    /** @brief Original GetFullPathNameW export captured by the one-shot import-boundary guard. */
+    GetFullPathNameWFunction CapturedPathOriginalGetFullPathNameW = nullptr;
+    /** @brief Relative request spelling that triggers the deterministic post-normalization CWD change. */
+    std::wstring CapturedPathSwitchName;
+    /** @brief Destination CWD selected after the native normalization result has been returned. */
+    std::filesystem::path CapturedPathSwitchDirectory;
+    /** @brief One-shot state preventing later normalization calls from changing the fixture's CWD again. */
+    bool CapturedPathSwitchTriggered = false;
+
+    /**
+     * @brief Changes CWD after one real GetFullPathNameW call to expose adapters that dispatch the original relative operand.
+     * @param file_name Relative or absolute path being normalized.
+     * @param buffer_size Number of UTF-16 elements available in the caller buffer.
+     * @param buffer Receives the real absolute path spelling.
+     * @param file_part Receives the native file-part pointer when requested.
+     * @return The native GetFullPathNameW result from the unpatched kernel32 export.
+     */
+    DWORD WINAPI CapturedPathGetFullPathNameWDetour(LPCWSTR file_name, DWORD buffer_size, LPWSTR buffer, LPWSTR* file_part)
+    {
+        const DWORD result = CapturedPathOriginalGetFullPathNameW(file_name, buffer_size, buffer, file_part);
+        if (!CapturedPathSwitchTriggered && file_name != nullptr && CapturedPathSwitchName == file_name)
+        {
+            ExpectHookFixture(SetCurrentDirectoryW(CapturedPathSwitchDirectory.c_str()) != FALSE,
+                "Captured-path CWD switch failed after native path normalization.");
+            CapturedPathSwitchTriggered = true;
+        }
+        return result;
+    }
+
+    /**
+     * @brief Installs a one-shot real import-boundary CWD switch for a named relative request.
+     *
+     * The guard uses the test executable's production import slot, so the service and adapter
+     * cross the same native normalization boundary as the game fixture without a production test seam.
+     */
+    class CapturedPathSwitchGuard
+    {
+    public:
+        /**
+         * @brief Installs the one-shot GetFullPathNameW boundary switch.
+         * @param module Main test executable whose imported normalization slot is patched.
+         * @param request_name Exact path operand that triggers the CWD switch.
+         * @param switch_directory Directory that becomes CWD after normalization returns.
+         */
+        CapturedPathSwitchGuard(const helen::ModuleView& module, std::wstring request_name,
+            std::filesystem::path switch_directory)
+            : request_name_(std::move(request_name)), switch_directory_(std::move(switch_directory))
+        {
+            CapturedPathOriginalGetFullPathNameW = nullptr;
+            CapturedPathSwitchName = request_name_;
+            CapturedPathSwitchDirectory = switch_directory_;
+            CapturedPathSwitchTriggered = false;
+            ExpectHookFixture(hook_.Install(module, "kernel32.dll", "GetFullPathNameW",
+                reinterpret_cast<void*>(&CapturedPathGetFullPathNameWDetour)),
+                "Captured-path GetFullPathNameW import hook installation failed.");
+            CapturedPathOriginalGetFullPathNameW = hook_.Original<GetFullPathNameWFunction>();
+            ExpectHookFixture(CapturedPathOriginalGetFullPathNameW != nullptr,
+                "Captured-path GetFullPathNameW original was not captured.");
+        }
+
+        /** @brief Removes the production import-boundary hook and clears shared one-shot state. */
+        ~CapturedPathSwitchGuard()
+        {
+            hook_.Remove();
+            CapturedPathOriginalGetFullPathNameW = nullptr;
+            CapturedPathSwitchName.clear();
+            CapturedPathSwitchDirectory.clear();
+            CapturedPathSwitchTriggered = false;
+        }
+
+        CapturedPathSwitchGuard(const CapturedPathSwitchGuard&) = delete;
+        CapturedPathSwitchGuard& operator=(const CapturedPathSwitchGuard&) = delete;
+
+        /** @brief Reports whether the native normalization boundary performed the requested one-shot CWD switch. */
+        bool Triggered() const noexcept
+        {
+            return CapturedPathSwitchTriggered;
+        }
+
+    private:
+        /** @brief Import patch whose lifetime brackets exactly one normalization-boundary regression. */
+        helen::IatHook hook_;
+        /** @brief Relative operand that should trigger the boundary switch. */
+        std::wstring request_name_;
+        /** @brief Destination CWD selected after the native normalization result is captured. */
+        std::filesystem::path switch_directory_;
+    };
+
+    /**
+     * @brief Temporarily selects the OEM file-API code page so CreateFileA routing exercises its active-byte contract.
+     *
+     * The guard changes the process-wide Win32 file API mode only when the fixture began in ANSI mode,
+     * then restores that exact mode before another test can observe it.
+     */
+    class FileApiCodePageGuard
+    {
+    public:
+        /** @brief Selects OEM decoding when the process currently uses ANSI file APIs. */
+        FileApiCodePageGuard()
+            : restore_ansi_(AreFileApisANSI() != FALSE)
+        {
+            if (restore_ansi_)
+            {
+                SetFileApisToOEM();
+            }
+        }
+
+        /** @brief Restores ANSI file APIs when this guard changed the process mode. */
+        ~FileApiCodePageGuard()
+        {
+            if (restore_ansi_)
+            {
+                SetFileApisToANSI();
+            }
+        }
+
+        FileApiCodePageGuard(const FileApiCodePageGuard&) = delete;
+        FileApiCodePageGuard& operator=(const FileApiCodePageGuard&) = delete;
+
+    private:
+        /** @brief True when destruction must restore the pre-fixture ANSI file API mode. */
+        bool restore_ansi_;
+    };
+
+    /**
+     * @brief Encodes one Unicode filename with the file API's currently selected narrow code page.
+     * @param path Unicode path whose narrow request spelling should be produced.
+     * @return Exact active-code-page byte spelling accepted by CreateFileA.
+     */
+    std::string EncodeActiveFileApiPath(const std::filesystem::path& path)
+    {
+        const std::wstring wide_path = path.wstring();
+        const UINT code_page = AreFileApisANSI() != FALSE ? CP_ACP : CP_OEMCP;
+        const int required_length = WideCharToMultiByte(code_page, 0, wide_path.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        if (required_length <= 0)
+        {
+            throw std::runtime_error("Failed to encode active file API fixture path.");
+        }
+
+        std::string encoded(static_cast<std::size_t>(required_length), '\0');
+        const int actual_length = WideCharToMultiByte(code_page, 0, wide_path.c_str(), -1, encoded.data(), required_length, nullptr, nullptr);
+        if (actual_length != required_length)
+        {
+            throw std::runtime_error("Failed to materialize active file API fixture path.");
+        }
+        encoded.resize(static_cast<std::size_t>(actual_length - 1));
+        return encoded;
+    }
+
     /** @brief Returns a short-name spelling when Windows can materialize one for the fixture directory. */
     std::filesystem::path GetShortFixturePath(const std::filesystem::path& candidate)
     {
@@ -206,12 +359,29 @@ void RunFileWriteRoutingHookFixtureTests()
     const std::filesystem::path alias_source_path = root / "AliasSource.tmp";
     const std::filesystem::path alias_backup_path = root / "AliasBackup.bak";
     const std::filesystem::path alias_escape_path = root / "AliasEscape.ini";
+    const std::filesystem::path captured_path = root / "Captured.ini";
+    const std::filesystem::path captured_attributes_path = root / "CapturedAttributes.ini";
+    const std::filesystem::path ansi_path = root / std::filesystem::path(L"Ansi-\u00E9.ini");
+    const std::filesystem::path switch_directory = root / "cwd-switch";
+    const std::filesystem::path switched_captured_path = switch_directory / "Captured.ini";
+    const std::filesystem::path switched_attributes_path = switch_directory / "CapturedAttributes.ini";
     WriteHookFixtureFile(original_path, "ORIGINAL");
     WriteHookFixtureFile(deny_path, "DENY");
     WriteHookFixtureFile(source_path, "COPY");
     WriteHookFixtureFile(unrelated_path, "NATIVE");
     WriteHookFixtureFile(alias_source_path, "ALIAS-SOURCE");
     WriteHookFixtureFile(alias_backup_path, "ALIAS-BACKUP");
+    ExpectHookFixture(CreateDirectoryW(switch_directory.c_str(), nullptr) != FALSE,
+        "Failed to create captured-path CWD switch directory.");
+    WriteHookFixtureFile(captured_path, "CAPTURED-ORIGINAL");
+    WriteHookFixtureFile(captured_attributes_path, "ATTRIBUTES-ORIGINAL");
+    WriteHookFixtureFile(ansi_path, "ANSI-ORIGINAL");
+    WriteHookFixtureFile(switched_captured_path, "CAPTURED-SWITCH");
+    WriteHookFixtureFile(switched_attributes_path, "ATTRIBUTES-SWITCH");
+    ExpectHookFixture(SetFileAttributesW(captured_attributes_path.c_str(), FILE_ATTRIBUTE_HIDDEN) != FALSE,
+        "Failed to set distinct captured-path original attributes.");
+    ExpectHookFixture(SetFileAttributesW(switched_attributes_path.c_str(), FILE_ATTRIBUTE_NORMAL) != FALSE,
+        "Failed to set distinct captured-path switched attributes.");
 
     try
     {
@@ -220,6 +390,9 @@ void RunFileWriteRoutingHookFixtureTests()
         ExpectHookFixture(routing.Initialize({
             { "engine", original_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
             { "deny", deny_path, helen::FileWritePolicy::Deny, helen::FileReadPolicy::Original },
+            { "captured", captured_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
+            { "capturedAttributes", captured_attributes_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Original },
+            { "ansi", ansi_path, helen::FileWritePolicy::Redirect, helen::FileReadPolicy::Redirected },
         }, error), "Hook fixture routing initialization failed.");
         helen::VirtualFileService virtual_files(root / "virtual-cache");
         ExpectHookFixture(routing.ClassifyPath(original_path) == helen::FileWriteRoutingService::PathDisposition::Protected,
@@ -247,6 +420,72 @@ void RunFileWriteRoutingHookFixtureTests()
         ExpectHookFixture(hooks.Install(), "Hook fixture IAT installation failed.");
         ExpectHookFixture(hooks.IsInstalled(), "Hook fixture reported inactive immediately after installation.");
         ExpectHookFixture(*create_file_slot != original_create_file_target, "Hook fixture CreateFileW IAT slot was not changed.");
+        {
+            CurrentDirectoryGuard current_directory_guard;
+            current_directory_guard.Set(root);
+            CapturedPathSwitchGuard captured_path_switch(*main_module, L"Captured.ini", switch_directory);
+            const auto imported_create_file_w = CallHookedImport<decltype(&CreateFileW)>("CreateFileW");
+            HANDLE captured_handle = imported_create_file_w(L"Captured.ini", GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            ExpectHookFixture(captured_handle != INVALID_HANDLE_VALUE && captured_path_switch.Triggered(),
+                "Captured-path CreateFileW did not cross the one-shot CWD boundary.");
+            WriteHookedByte(captured_handle, 'Z');
+            ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(captured_handle) != FALSE,
+                "Captured-path routed handle close failed.");
+            ExpectHookFixture(ReadHookFixtureFile(captured_path) == "CAPTURED-ORIGINAL",
+                "Captured-path CreateFileW mutated the original after the CWD changed.");
+            ExpectHookFixture(ReadHookFixtureFile(switched_captured_path) == "CAPTURED-SWITCH",
+                "Captured-path CreateFileW touched the post-normalization CWD target.");
+            bool captured_overlay_verified = false;
+            for (const helen::FileWriteRoutingService::RouteDiagnostics& route : routing.GetRouteDiagnostics())
+            {
+                if (route.Id == "captured")
+                {
+                    ExpectHookFixture(!route.OverlayPath.empty() && ReadHookFixtureFile(route.OverlayPath).find('Z') != std::string::npos,
+                        "Captured-path CreateFileW did not update the captured overlay.");
+                    captured_overlay_verified = true;
+                }
+            }
+            ExpectHookFixture(captured_overlay_verified, "Captured-path route diagnostics omitted the active overlay.");
+        }
+        {
+            CurrentDirectoryGuard current_directory_guard;
+            current_directory_guard.Set(root);
+            CapturedPathSwitchGuard captured_path_switch(*main_module, L"CapturedAttributes.ini", switch_directory);
+            const auto imported_get_file_attributes_w = CallHookedImport<decltype(&GetFileAttributesW)>("GetFileAttributesW");
+            const DWORD attributes = imported_get_file_attributes_w(L"CapturedAttributes.ini");
+            ExpectHookFixture(attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_HIDDEN) != 0 && captured_path_switch.Triggered(),
+                "Captured-path GetFileAttributesW did not retain the normalized original after the CWD changed.");
+            ExpectHookFixture((GetFileAttributesW(switched_attributes_path.c_str()) & FILE_ATTRIBUTE_HIDDEN) == 0,
+                "Captured-path attribute regression changed the switched target attributes.");
+        }
+        {
+            CurrentDirectoryGuard current_directory_guard;
+            current_directory_guard.Set(root);
+            FileApiCodePageGuard file_api_code_page_guard;
+            const std::string ansi_relative_name = EncodeActiveFileApiPath(std::filesystem::path(L"Ansi-\u00E9.ini"));
+            const auto imported_create_file_a = CallHookedImport<decltype(&CreateFileA)>("CreateFileA");
+            HANDLE ansi_handle = imported_create_file_a(ansi_relative_name.c_str(), GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            ExpectHookFixture(ansi_handle != INVALID_HANDLE_VALUE,
+                "CreateFileA did not preserve the active OEM code-page request for a protected Unicode path.");
+            WriteHookedByte(ansi_handle, 'Q');
+            ExpectHookFixture(CallHookedImport<decltype(&CloseHandle)>("CloseHandle")(ansi_handle) != FALSE,
+                "Active-code-page CreateFileA routed handle close failed.");
+            ExpectHookFixture(ReadHookFixtureFile(ansi_path) == "ANSI-ORIGINAL",
+                "Active-code-page CreateFileA mutated the protected original.");
+            bool ansi_overlay_verified = false;
+            for (const helen::FileWriteRoutingService::RouteDiagnostics& route : routing.GetRouteDiagnostics())
+            {
+                if (route.Id == "ansi")
+                {
+                    ExpectHookFixture(!route.OverlayPath.empty() && ReadHookFixtureFile(route.OverlayPath).find('Q') != std::string::npos,
+                        "Active-code-page CreateFileA did not update the ANSI route overlay.");
+                    ansi_overlay_verified = true;
+                }
+            }
+            ExpectHookFixture(ansi_overlay_verified, "Active-code-page route diagnostics omitted the ANSI overlay.");
+        }
         {
             CurrentDirectoryGuard current_directory_guard;
             current_directory_guard.Set(root);

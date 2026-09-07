@@ -525,14 +525,15 @@ namespace
             return std::nullopt;
         }
 
-        const int required_length = MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, path, -1, nullptr, 0);
+        const UINT code_page = AreFileApisANSI() != FALSE ? CP_ACP : CP_OEMCP;
+        const int required_length = MultiByteToWideChar(code_page, MB_ERR_INVALID_CHARS, path, -1, nullptr, 0);
         if (required_length <= 0)
         {
             return std::nullopt;
         }
 
         std::wstring wide_path(static_cast<std::size_t>(required_length), L'\0');
-        const int actual_length = MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, path, -1, wide_path.data(), required_length);
+        const int actual_length = MultiByteToWideChar(code_page, MB_ERR_INVALID_CHARS, path, -1, wide_path.data(), required_length);
         if (actual_length != required_length)
         {
             return std::nullopt;
@@ -540,6 +541,45 @@ namespace
 
         wide_path.resize(static_cast<std::size_t>(actual_length - 1));
         return std::filesystem::path(wide_path);
+    }
+
+    /**
+     * @brief Converts a normalized UTF-16 path back to the active Win32 file-API code page.
+     * @param path Absolute path captured before native dispatch.
+     * @return Byte spelling equivalent to the wide path when the active code page can represent it.
+     *
+     * The conversion rejects default-character substitution. Callers may then retain the original
+     * ANSI operand, preserving native CreateFileA behavior for names that cannot be represented.
+     */
+    std::optional<std::string> TryConvertWidePathToAnsi(const std::filesystem::path& path)
+    {
+        const std::wstring wide_path = path.wstring();
+        if (wide_path.empty())
+        {
+            return std::nullopt;
+        }
+
+        const UINT code_page = AreFileApisANSI() != FALSE ? CP_ACP : CP_OEMCP;
+        BOOL used_default_character = FALSE;
+        const DWORD flags = code_page == CP_UTF8 ? WC_ERR_INVALID_CHARS : WC_NO_BEST_FIT_CHARS;
+        const int required_length = WideCharToMultiByte(code_page, flags, wide_path.c_str(), -1, nullptr, 0, nullptr,
+            code_page == CP_UTF8 ? nullptr : &used_default_character);
+        if (required_length <= 0)
+        {
+            return std::nullopt;
+        }
+
+        std::string narrow_path(static_cast<std::size_t>(required_length), '\0');
+        used_default_character = FALSE;
+        const int actual_length = WideCharToMultiByte(code_page, flags, wide_path.c_str(), -1, narrow_path.data(), required_length,
+            nullptr, code_page == CP_UTF8 ? nullptr : &used_default_character);
+        if (actual_length != required_length || used_default_character != FALSE)
+        {
+            return std::nullopt;
+        }
+
+        narrow_path.resize(static_cast<std::size_t>(actual_length - 1));
+        return narrow_path;
     }
 
     /**
@@ -908,6 +948,7 @@ namespace helen
 
         std::filesystem::path normalized_path;
         bool has_normalized_path = false;
+        std::optional<std::string> normalized_ansi_path;
         if (lpFileName != nullptr)
         {
             const std::optional<std::filesystem::path> hidden_path = TryConvertAnsiPath(lpFileName);
@@ -920,6 +961,10 @@ namespace helen
             {
                 normalized_path = *hidden_path;
                 has_normalized_path = active->file_write_routing_->TryNormalizeRequestPath(*hidden_path, normalized_path);
+                if (has_normalized_path)
+                {
+                    normalized_ansi_path = TryConvertWidePathToAnsi(normalized_path);
+                }
                 const FileWriteRoutingService::PathDisposition disposition = active->file_write_routing_->ClassifyPath(normalized_path);
                 if (disposition != FileWriteRoutingService::PathDisposition::Unrelated)
                 {
@@ -943,10 +988,10 @@ namespace helen
 
         if (!CanVirtualizeOpen(dwDesiredAccess, dwCreationDisposition, dwFlagsAndAttributes))
         {
-            if (active->file_write_routing_ != nullptr && has_normalized_path)
+            if (normalized_ansi_path.has_value())
             {
-                return CallRealCreateFileW(
-                    normalized_path.c_str(),
+                return CallRealCreateFileA(
+                    normalized_ansi_path->c_str(),
                     dwDesiredAccess,
                     dwShareMode,
                     lpSecurityAttributes,
@@ -978,10 +1023,10 @@ namespace helen
             }
         }
 
-        if (active->file_write_routing_ != nullptr && has_normalized_path)
+        if (normalized_ansi_path.has_value())
         {
-            return CallRealCreateFileW(
-                normalized_path.c_str(),
+            return CallRealCreateFileA(
+                normalized_ansi_path->c_str(),
                 dwDesiredAccess,
                 dwShareMode,
                 lpSecurityAttributes,
@@ -1015,16 +1060,21 @@ namespace helen
             return INVALID_FILE_ATTRIBUTES;
         }
 
+        std::filesystem::path normalized_path;
+        bool has_normalized_path = false;
         if (active->file_write_routing_ != nullptr && lpFileName != nullptr)
         {
             const std::filesystem::path requested_path(lpFileName);
-            if (active->file_write_routing_->ClassifyPath(requested_path) != FileWriteRoutingService::PathDisposition::Unrelated)
+            normalized_path = requested_path;
+            has_normalized_path = active->file_write_routing_->TryNormalizeRequestPath(requested_path, normalized_path);
+            if (active->file_write_routing_->ClassifyPath(normalized_path) != FileWriteRoutingService::PathDisposition::Unrelated)
             {
-                return active->file_write_routing_->GetAttributes(requested_path);
+                return active->file_write_routing_->GetAttributes(normalized_path);
             }
         }
 
-        return CallRealGetFileAttributesW(lpFileName);
+        return CallRealGetFileAttributesW(
+            active->file_write_routing_ != nullptr && has_normalized_path ? normalized_path.c_str() : lpFileName);
     }
 
     DWORD WINAPI FileApiHookSet::GetFileAttributesADetour(LPCSTR lpFileName)
@@ -1036,6 +1086,9 @@ namespace helen
             return INVALID_FILE_ATTRIBUTES;
         }
 
+        std::filesystem::path normalized_path;
+        bool has_normalized_path = false;
+        std::optional<std::string> normalized_ansi_path;
         if (lpFileName != nullptr)
         {
             const std::optional<std::filesystem::path> hidden_path = TryConvertAnsiPath(lpFileName);
@@ -1046,9 +1099,15 @@ namespace helen
             }
             if (active->file_write_routing_ != nullptr && hidden_path.has_value())
             {
-                if (active->file_write_routing_->ClassifyPath(*hidden_path) != FileWriteRoutingService::PathDisposition::Unrelated)
+                normalized_path = *hidden_path;
+                has_normalized_path = active->file_write_routing_->TryNormalizeRequestPath(*hidden_path, normalized_path);
+                if (has_normalized_path)
                 {
-                    return active->file_write_routing_->GetAttributes(*hidden_path);
+                    normalized_ansi_path = TryConvertWidePathToAnsi(normalized_path);
+                }
+                if (active->file_write_routing_->ClassifyPath(normalized_path) != FileWriteRoutingService::PathDisposition::Unrelated)
+                {
+                    return active->file_write_routing_->GetAttributes(normalized_path);
                 }
             }
             if (hidden_path.has_value() && active->hidden_path_matcher_.ShouldHidePath(*hidden_path))
@@ -1058,7 +1117,8 @@ namespace helen
             }
         }
 
-        return CallRealGetFileAttributesA(lpFileName);
+        return CallRealGetFileAttributesA(
+            normalized_ansi_path.has_value() ? normalized_ansi_path->c_str() : lpFileName);
     }
 
     BOOL WINAPI FileApiHookSet::ReadFileDetour(

@@ -163,12 +163,20 @@ void RunActivePackSetBuilderTests()
 
         loaded_pack_set.Packs[1].Build.FileWriteRoutes[0].Id = "routeB";
         loaded_pack_set.Packs[1].Build.FileWriteRoutes[0].Root = "game";
-        loaded_pack_set.Packs[1].Build.VirtualFiles[0].GamePath = std::filesystem::path("Config") / "A.bin";
+        loaded_pack_set.Packs[1].Build.VirtualFiles[0].GamePath = std::filesystem::path("Config") / "." / "A.bin";
         loaded_pack_set.Packs[1].Build.FileWriteRoutes[0].Path = std::filesystem::path("BmGame") / "Config" / "A.bin";
         helen::ActivePackSet virtual_conflict_set;
         failure_reason.clear();
         Expect(!builder.TryBuild(loaded_pack_set, virtual_conflict_set, failure_reason),
-            "Expected file-write route overlap with a virtual file to reject the active pack set.");
+            "Expected dot-alias file-write route overlap with a virtual file to reject the active pack set.");
+
+        loaded_pack_set.Packs[1].Build.VirtualFiles[0].GamePath = std::filesystem::path("Game") / "B.bin";
+        loaded_pack_set.Packs[1].Build.FileWriteRoutes[0].Path = std::filesystem::path("BmGame") / "Config" / "." / "B.ini";
+        loaded_pack_set.Packs[1].Build.MissingPaths.push_back("BmGame/Config/B.ini");
+        helen::ActivePackSet missing_alias_conflict_set;
+        failure_reason.clear();
+        Expect(!builder.TryBuild(loaded_pack_set, missing_alias_conflict_set, failure_reason),
+            "Expected dot-alias file-write route overlap with a missing path to reject the active pack set.");
     }
     catch (...)
     {
