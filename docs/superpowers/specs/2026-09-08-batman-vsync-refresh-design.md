@@ -3,6 +3,9 @@
 ## Approval and scope
 
 The user approved this architecture in chat after the static investigation.
+On 2026-09-08 the user approved revising the settings mutation to a narrowly typed
+Helen-owned VSync setter after the full-settings candidate failed its preservation
+gate. This revision replaces that candidate; it does not waive the remaining gates.
 This document is the design-review checkpoint, not implementation authorization.
 Work remains on main, based on 9dc4358. The installed fullscreen candidate and
 unrelated `batma/` directory stay untouched. No independent review or substantial
@@ -30,9 +33,28 @@ evidence of a live change.
 3. **Temporary size/mode changes or spoofing device loss.** Rejected: those alter
    unrelated live state and use the wrong engine contract to trigger a refresh.
 
-The candidate decision is near preferred VA 0x00EA65A6. The settings-apply candidate
-is 0x00C40090. These are research leads until their complete contracts pass the
-implementation gates below; copying these addresses is not sufficient validation.
+The candidate decision is near preferred VA 0x00EA65A6. The verified renderer
+read at 0x00EA65F9 consumes the four-byte UseVsync field at preferred VA
+0x026C0D58 (settings owner+0x220). Zero maps to presentation interval 0x80000000;
+nonzero maps to 1. Addresses refer only to the pinned retail executable in the
+report and must be resolved against its loaded module, not persisted across runs.
+
+Settings-mutation alternatives investigated:
+
+1. **Selected: typed single-field setter in the Batman adapter.** Write only the
+   actual UseVsync scalar under verified engine synchronization, then use the
+   scoped refresh. This is Helen code, not a discovered stock setter function.
+2. **Full-settings apply at 0x00C40090.** Rejected: its inner routine reloads
+   configuration and can invert DirectionalLightmaps when live/config values
+   differ, even with save=false. Do not copy a full draft or call this routine.
+3. **Stock SCALE SET UseVsync command.** Not selected: although its field table
+   provides a targeted assignment, the command reaches settings serialization
+   at 0x00C42C76 when owner+0x2D4 is zero. It is not a no-save setter. Do not
+   manipulate that owner flag or jump into the command's interior to bypass it.
+
+Static evidence supports the scalar's meaning and conditional synchronous
+same-size refresh reachability, not the safety of the new combined operation.
+The setter's synchronization and lifetime contract still requires verification.
 
 ## Components and ownership
 
@@ -68,6 +90,32 @@ The hook and its service must outlive all possible callbacks. Initialization
 failure leaves the VSync experiment unavailable, with an explicit reason; it must
 not make unrelated menu values unavailable or weaken existing fingerprint checks.
 
+### Typed VSync setter and synchronization ownership
+
+The Batman adapter exposes a VSync-specific operation accepting an explicit
+enabled/disabled value, not arbitrary addresses, offsets or a writable settings
+block. Internally it validates the pinned image, scalar location, required thread
+and operation ownership, then stores exactly one four-byte 0 or 1 value. Reject
+unexpected existing representations rather than silently normalizing them.
+No configuration reload, serializer, full-settings copy, callback or engine call
+belongs in the setter. It must not write the unverified refresh flag 0x026B221C
+or the renderer's device-error flag. This is a real setting update, not a fabricated
+invalidation signal; the scoped hook supplies the explicit rebuild request.
+
+The setter must execute after acquiring a verified engine rendering-suspension
+scope, with that same scope held through the synchronous viewport refresh. A
+Helen mutex or atomic scalar store alone does not synchronize engine readers.
+Candidate scope entry/destruction are 0x00732210(1) and 0x00724410, observed in
+the existing viewport and renderer routines. Their ABI, storage, nested lifetime,
+callbacks and restart behavior must be established before binding them. Entering
+the viewport call's own scope only after writing the scalar is insufficient.
+
+Keep this scope outside the reusable request service. Its entry runs with the
+request disarmed; after entry, revalidate the live state before the setting write.
+Its exit also runs disarmed. Do not invoke engine code while holding request
+locks. If the adapter cannot establish this lifetime safely, reject the binding
+and revise the design; do not fall back to an unsynchronized write.
+
 ## Apply sequence
 
 1. Determine edited fields from the editor's captured baseline and staged draft,
@@ -78,31 +126,38 @@ not make unrelated menu values unavailable or weaken existing fingerprint checks
    thread, idle rendering state and the shared one-attempt allowance. Read live
    size/mode, settings and swap-chain presentation parameters. Release temporary
    swap-chain/surface references before anything that can Reset.
-3. Build a validated current-settings snapshot and alter only VSync. The engine
-   settings layout must be proven safe to copy; a raw size observed in disassembly
-   is not enough to assume ownership-free fields. Preserve all unrelated values.
-4. Consume the shared allowance immediately before the first possible engine
-   mutation. Use the validated settings-apply entry with saving disabled and arm
-   the refresh only across the verified synchronous viewport-refresh invocation.
-   The exact ordering must be proven to prevent an intervening unrelated refresh
-   from consuming the request. If that cannot be established, do not deploy.
-5. Enter the engine's higher-level synchronization path without fabricating a
-   size/mode transition. Do not call an interior renderer address as a function.
-   Require the hook to observe and consume the matching request.
-6. After engine return, disarm, revalidate ownership and reacquire the current
+3. Consume the shared allowance immediately before entering the adapter-owned
+   engine synchronization scope: entering it can itself invoke engine callbacks.
+   Enter with the request disarmed, then revalidate identity, VSync and unchanged
+   dimensions/mode. Record validated unrelated setting values for comparison,
+   not for copying back into the engine. Do not assume live values match the INI.
+4. With rendering suspended, use the typed setter to change only UseVsync.
+   Arm the request immediately afterward, without an intervening engine call,
+   and retain both scope and request across the synchronous viewport invocation.
+   The callback/reentrancy analysis must prove an unrelated refresh cannot consume
+   this request; renderer/device/thread matching alone is not proof of that.
+5. Call the verified higher-level viewport entry with identical size/mode.
+   Do not fabricate a transition or call an interior renderer address as a function.
+   Require the hook to observe and consume the matching request. Disarm before
+   releasing the adapter-owned synchronization scope, including failure paths.
+6. After scope exit, revalidate ownership and reacquire the current
    swap chain. Require the expected interval, unchanged resolution/fullscreen and
-   consistent engine VSync state. Log the before/request/after values and whether
+   consistent engine VSync state and unchanged unrelated settings. Log the
+   before/request/after values and whether
    Reset and request consumption occurred. Do not use FPS or elapsed time as proof.
 
-An already-effective VSync request needs no forced Reset; record the observed
+An already-effective request requires both the live VSync scalar and actual
+presentation interval to match the requested state; it needs no write or forced
+Reset. A scalar/device disagreement is not this no-op case. Record the observed
 state without claiming persistence. Unexpected interval values are unsupported or
 uncertain, not silently coerced. This verifies the API's presentation configuration,
 not that a driver override or desktop compositor visibly obeys it.
 
 ## Failure and persistence contract
 
-Preflight rejection does not consume an engine attempt or mutate settings. Once
-engine mutation is attempted, do not retry automatically. Distinguish refusal,
+Preflight rejection before synchronization-scope entry does not consume an engine
+attempt or mutate settings. Once scope entry is attempted, do not retry
+automatically, even if revalidation rejects before the scalar write. Distinguish refusal,
 verified live application, known failure and uncertain live state in diagnostics;
 none is equivalent to a saved transaction. Keep the probe's intentional NotApplied
 frontend result for completed no-save attempts. Retain an explicit process lockout
@@ -118,9 +173,11 @@ timers, sleeps or retries, but cannot bound that loop or recover control if the
 engine never returns. It must not advertise timeout safety. Changing that engine
 failure behavior requires a separately approved design.
 
-Helen's INI writer stays bypassed. Validate the candidate engine save-control
-argument and trace transitive writers; its name or a gated call is not proof that
-all writes are disabled. Preserve the existing session-only routing policy and
+Helen's INI writer stays bypassed. The setter itself performs no I/O and uses no
+engine save-control argument. This does not make the entire viewport refresh
+write-free: the traced normal viewport helper subsequently calls 0x00C42DA0.
+Trace and report its writes under the existing routing contract. Preserve the
+existing session-only routing policy and
 original INIs. Engine-owned writes and session overlays must be reported separately
 from Helen publication. Do not weaken routing or silently redirect additional files.
 
@@ -129,8 +186,14 @@ from Helen publication. Do not weaken routing or silently redirect additional fi
 - Prove the same-size/mode higher-level call reaches the decision on the validated
   execution thread with the expected renderer; if it dispatches asynchronously,
   the scoped synchronous design must be revised before implementation proceeds.
-- Verify settings-call ABI, snapshot layout/ownership and save side effects,
-  including that unrelated live settings are not changed by reload/normalization.
+- Verify the exact four-byte scalar binding, loaded-module resolution, valid
+  representations and setter write footprint. No owning settings snapshot is used.
+- Verify synchronization-scope ABI/storage, nested entry/exit and rendering-thread
+  lifetime. Establish that suspension covers the scalar write through refresh,
+  and exclude reentrant request consumption during viewport callbacks.
+- Trace remaining viewport/scope side effects and verify unrelated live settings
+  remain unchanged, including when the INI and live state differ. Do not equate
+  a one-field setter with proof that the complete engine operation changes one field.
 - Verify exact patch boundaries, all inbound/outbound control flow and instruction
   relocation. An inactive hook must be indistinguishable from the original code.
 - Establish how actual Reset success/failure and request consumption are observed
@@ -144,8 +207,19 @@ Use TDD for request ownership, single consumption, no-op/refusal behavior, stale
 identity/thread rejection, reentrancy and cleanup on every returning failure.
 Execute the machine-code bridge in an isolated x86 fixture to test both branches,
 registers, flags and stack behavior; source-text matching alone is insufficient.
-Use controllable engine-boundary doubles to test call order, no-save arguments,
-unrelated-field preservation, missing consumption and post-call mismatches.
+Use controllable engine-boundary doubles to test the order: consume allowance,
+enter synchronization, revalidate, write one scalar, arm, refresh, disarm, exit
+synchronization, read back. Cover failed entry, post-entry refusal, nested/reentrant
+calls, missing consumption, scope cleanup and post-call mismatches. Assert the
+setter writes exactly four bytes using guarded storage and distinct adjacent-field
+sentinels, accepts only supported values and never calls reload/save routines.
+Include live/config disagreement for DirectionalLightmaps and other supported
+unrelated settings. These fixtures do not certify the real engine's side effects.
+
+The previous binding-gates plan records a legitimate rejection of the old
+full-settings approach. Do not mark that gate passed or execute its obsolete
+settings-copy tasks against this revision. A revised plan must replace those tasks
+with scalar and synchronization-scope verification before production work.
 
 Real windowed D3D fixtures verify presentation-interval observation and retain
 existing reset, failure, exact subtitle-pixel and parent-texture-lifetime checks.
