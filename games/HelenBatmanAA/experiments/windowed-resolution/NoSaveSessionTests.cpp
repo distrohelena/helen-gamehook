@@ -8,6 +8,11 @@
 #include <stdexcept>
 
 namespace {
+    /** Supplies an exact fullscreen pair so session-to-probe coverage does not depend on desktop discovery. */
+    std::optional<helen::BatmanDisplayEnvironment> DisplayEnvironment() {
+        return helen::BatmanDisplayEnvironment(L"NoSaveSessionFixture", {{1280, 720}, {1920, 1080}},
+            helen::BatmanDisplayMode(1920, 1080), helen::BatmanDisplayMode(1920, 1080));
+    }
     /** @brief Report test failures through the console rather than assertion dialogs. */
     void Expect(bool condition, const char* message) {
         if (!condition) { throw std::runtime_error(message); }
@@ -38,7 +43,7 @@ int wmain(int argc, wchar_t** argv) {
             stream << initial;
         }
         helen::SetLogPath(root / L"probe.log");
-        helen::BatmanDisplayModeService display;
+        helen::BatmanDisplayModeService display(&DisplayEnvironment);
         helen::BatmanGraphicsConfigService config(engine, display);
         helen::BatmanGraphicsSessionService sessions(config, display);
         const auto session = sessions.Open();
@@ -53,6 +58,21 @@ int wmain(int argc, wchar_t** argv) {
         Expect(Bytes(user) == initial && Bytes(engine) == initial, "No-save Commit changed INI bytes");
         Expect(Bytes(root/L"probe.log").find("resolution-no-save") != std::string::npos, "Probe implementation was not linked");
         Expect(!sessions.Commit(*session, *transaction).has_value(), "Consumed transaction executed twice");
+        const std::size_t previousLogSize = Bytes(root/L"probe.log").size();
+        const auto fullscreenTransaction = sessions.BeginApply(*session);
+        Expect(fullscreenTransaction.has_value(), "Fullscreen transaction could not begin");
+        Expect(sessions.SetField(*session, *fullscreenTransaction, helen::BatmanGraphicsField::Fullscreen, 1),
+            "Fullscreen mode could not be staged");
+        Expect(sessions.SetResolution(*session, *fullscreenTransaction, helen::BatmanDisplayModeCatalogKind::Fullscreen, 0),
+            "Same-size fullscreen catalog pair could not be staged");
+        const auto fullscreenResult = sessions.Commit(*session, *fullscreenTransaction);
+        Expect(fullscreenResult.has_value() && fullscreenResult->Outcome == helen::BatmanGraphicsApplyOutcome::NotApplied,
+            "Foreign-executable fullscreen request claimed saved success");
+        Expect(Bytes(root/L"probe.log").substr(previousLogSize).find("Probe rejects foreign executable") != std::string::npos,
+            "Same-size fullscreen transaction did not reach the guarded probe");
+        Expect(Bytes(user) == initial && Bytes(engine) == initial, "Fullscreen no-save Commit changed INI bytes");
+        Expect(!sessions.Commit(*session, *fullscreenTransaction).has_value(), "Fullscreen transaction executed twice");
+        std::cout << "NO_SAVE_FULLSCREEN_SESSION_PASS\n";
         std::cout << "NO_SAVE_SESSION_PASS: real Commit bypasses writer; foreign executable rejected; both INIs unchanged\n";
         return 0;
     } catch (const std::exception& error) {

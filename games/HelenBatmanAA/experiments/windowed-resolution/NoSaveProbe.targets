@@ -8,6 +8,7 @@
     <ClCompile Remove="BatmanGraphicsSessionService.cpp" />
     <ClCompile Include="$(NoSaveOutput)\BatmanGraphicsSessionService.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)NoSaveResolutionProbe.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)NoSaveFullscreenModes.cpp" />
   </ItemGroup>
   <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'HelenRuntime'">
     <ClCompile>

@@ -1,5 +1,31 @@
 # Windowed resolution: throwaway no-Helen-save probe
 
+## September 8 fullscreen extension (not installed or live-validated)
+
+The opt-in probe now accepts windowed and exclusive-fullscreen requests using the
+same pinned engine entry. Equal dimensions are allowed when the mode changes;
+an identical size and mode is rejected. No Win32 mode switch or direct D3D Reset
+was added.
+
+Before entering/resizing fullscreen, it queries the live device's adapter and
+checks compatibility of its current adapter display format and backbuffer format.
+It requires an exact driver-reported resolution pair. Failed discovery and
+unsupported pairs reject the request before consuming the engine attempt.
+Windowed custom sizes do not require a fullscreen catalog match. No substitute
+resolution, adapter or format is selected. Refresh rate remains engine-owned.
+
+The fingerprint/thread/viewport/renderer guards, one attempt per process, bypassed
+Helen writer and intentional NotApplied result remain. Engine-owned writes remain
+subject to the separate file-routing policy. This is not production persistence
+or repeated live-apply support.
+
+Run `Test-NoSaveDisplayRequest.ps1 -RuntimeLibraryPath <candidate>/native/HelenRuntime.lib`
+for mode-only transitions, exact-pair rejection and read-only adapter discovery on
+a hidden windowed D3D device. It never enters fullscreen. Existing no-save/session,
+replacement and package checks remain applicable. Batman fullscreen behavior still
+requires eventual live acceptance; no manual test or installation is part of this
+checkpoint. The sections below retain the original experiment history.
+
 This experiment is not the production live Apply implementation. Helena approved calling the engine from the existing menu while omitting our writer, then comparing INIs to determine whether Batman saves the change itself. Engine persistence is deliberately left enabled.
 
 Normal projects do not import `NoSaveProbe.targets`. `Prepare-NoSaveProbe.ps1` reads the current session source and generates a copy with exactly one expression replaced: `Config.ApplyDraft(attempted.Draft)` becomes `NoSaveResolutionProbe::Apply(attempted.Draft)`. Staging, catalog validation, transaction consumption, direct reads, and normal source files remain unchanged. The explicitly imported targets compile that generated copy in place of the original.

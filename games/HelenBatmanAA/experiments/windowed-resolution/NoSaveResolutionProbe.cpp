@@ -1,4 +1,6 @@
 #include "NoSaveResolutionProbe.h"
+#include "NoSaveDisplayRequest.h"
+#include "NoSaveFullscreenModes.h"
 #include <HelenHook/ExecutableFingerprint.h>
 #include <HelenHook/Log.h>
 #include <windows.h>
@@ -94,9 +96,6 @@ namespace helen {
         Log(L"[resolution-no-save] EXPERIMENT: Helen INI writer bypassed; engine persistence untouched.");
         try {
             static const std::uintptr_t module = VerifiedModule();
-            if (draft.Get(BatmanGraphicsField::Fullscreen) != 0) {
-                throw std::runtime_error("Probe supports only requested windowed mode");
-            }
             if (Read<unsigned>(module+0x22760E8) == 0 || Read<DWORD>(module+0x22760E4) != GetCurrentThreadId()) {
                 throw std::runtime_error("Probe requires initialized game thread");
             }
@@ -114,8 +113,8 @@ namespace helen {
             DWORD processId = 0;
             const DWORD windowThread = GetWindowThreadProcessId(window, &processId);
             if (!IsWindow(window) || processId != GetCurrentProcessId() || windowThread != GetCurrentThreadId() ||
-                Read<std::uintptr_t>(owner+0x64) != 0 || Read<unsigned>(owner+0x80) != 0 || (Read<unsigned>(owner+0x58)&1) != 0) {
-                throw std::runtime_error("Probe requires idle top-level windowed viewport on its owning thread");
+                Read<std::uintptr_t>(owner+0x64) != 0 || Read<unsigned>(owner+0x80) != 0) {
+                throw std::runtime_error("Probe requires idle top-level viewport on its owning thread");
             }
             const std::uintptr_t renderer = Read<std::uintptr_t>(module+0x22B0D94);
             if (Read<std::uintptr_t>(renderer) != module+0x1D28210 || Read<std::uintptr_t>(renderer+0x24) != 0) {
@@ -123,20 +122,28 @@ namespace helen {
             }
             const int width = draft.Get(BatmanGraphicsField::PersistedWidth);
             const int height = draft.Get(BatmanGraphicsField::PersistedHeight);
-            if (width <= 0 || height <= 0 || (Read<unsigned>(owner+0x4C) == static_cast<unsigned>(width) &&
-                Read<unsigned>(owner+0x50) == static_cast<unsigned>(height))) {
-                throw std::runtime_error("Probe requires a different positive resolution");
+            const int fullscreen = draft.Get(BatmanGraphicsField::Fullscreen);
+            std::vector<BatmanDisplayMode> supportedModes;
+            if (fullscreen == 1) {
+                IDirect3DDevice9* device = Read<IDirect3DDevice9*>(renderer + 0x10);
+                if (device == nullptr) {
+                    throw std::runtime_error("Probe fullscreen device unavailable");
+                }
+                supportedModes = NoSaveFullscreenModes::Enumerate(*device);
             }
+            const NoSaveDisplayRequest request(width, height, fullscreen,
+                Read<unsigned>(owner+0x4C), Read<unsigned>(owner+0x50), (Read<unsigned>(owner+0x58)&1) != 0, supportedModes);
             if (Attempted.test_and_set()) {
                 throw std::runtime_error("Probe already attempted; restart before another experiment");
             }
             Observe(module, owner, window, L"BEFORE");
-            Logf(L"[resolution-no-save] CALL engine width=%d height=%d fullscreen=0; no Helen save follows.", width, height);
+            Logf(L"[resolution-no-save] CALL engine width=%u height=%u fullscreen=%d; no Helen save follows.",
+                request.GetWidth(), request.GetHeight(), request.GetFullscreen());
             SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
             /** @brief Verified x86 thiscall with width, height, fullscreen, x, y; existing-window path retains position. */
             using Resize = void(__thiscall*)(void*, unsigned, unsigned, int, int, int);
             const Resize resize = reinterpret_cast<Resize>(module+0xAB91D0);
-            resize(reinterpret_cast<void*>(owner), static_cast<unsigned>(width), static_cast<unsigned>(height), 0, -1, -1);
+            resize(reinterpret_cast<void*>(owner), request.GetWidth(), request.GetHeight(), request.GetFullscreen(), -1, -1);
             if (Read<int>(module+0x22CCAB4) != 1 || Read<std::uintptr_t>(Read<std::uintptr_t>(module+0x22CCAB0)) != owner ||
                 Read<HWND>(owner+0x60) != window || !IsWindow(window)) {
                 throw std::runtime_error("Probe viewport lifetime changed during resize");
