@@ -13,6 +13,8 @@
 
 namespace helen
 {
+    /** Owned upload snapshot processed after native UnlockRect. */
+    struct D3d9TextureUpload;
     /**
      * @brief Installs the first Direct3D 9 interception layer used by texture replacements.
      *
@@ -130,8 +132,9 @@ namespace helen
             IDirect3DBaseTexture9* texture);
 
         /**
-         * @brief Per-instance `IDirect3DDevice9::Reset` detour that clears invalidated texture tracking state.
-         * @return Result of the original `Reset` call.
+         * @brief Releases owned replacements before reset and restores surviving matches only after success.
+         * Failed resets retain match information for the next engine-driven reset attempt.
+         * @return Original reset failure, replacement restoration failure, or the successful reset result.
          */
         static HRESULT WINAPI ResetDetour(
             IDirect3DDevice9* self,
@@ -240,18 +243,19 @@ namespace helen
         bool InstallDeviceInstanceHooks(IDirect3DDevice9* device);
 
         /**
-         * @brief Installs a wrapped `IDirect3DSurface9` proxy for texture-owned level-0 surfaces.
+         * @brief Tracks texture-owned surfaces at every mip level for correct parent destruction.
          *
-         * Only texture-owned level-0 surfaces are wrapped in this build. Back buffers, render
-         * targets, and other device-owned surfaces continue to pass through untouched so the
-         * 2D texture path can be observed without widening the interception surface area.
+         * All texture mip surfaces participate in lifetime tracking; only level zero supplies
+         * replacement pixels. Back buffers and standalone device-owned surfaces are not registered.
          *
          * @param surface Live `IDirect3DSurface9` interface returned by the device or swap chain.
          * @param owner_texture Owning texture when the surface came from a texture level.
          * @param owner_swap_chain Owning swap chain when the surface came from a back buffer.
+         * @param texture_level Mip level supplied by GetSurfaceLevel; zero for legacy level-zero callers.
          * @return True when a texture-owned surface proxy is installed; otherwise false.
          */
-        bool InstallSurfaceInstanceHooks(IDirect3DSurface9* surface, IDirect3DTexture9* owner_texture, IDirect3DSwapChain9* owner_swap_chain);
+        bool InstallSurfaceInstanceHooks(IDirect3DSurface9* surface, IDirect3DTexture9* owner_texture,
+            IDirect3DSwapChain9* owner_swap_chain, UINT texture_level = 0);
 
         /**
          * @brief Observes a live `IDirect3DSwapChain9` return without installing swap-chain wrapping.
@@ -265,19 +269,9 @@ namespace helen
          */
         bool InstallSwapChainInstanceHooks(IDirect3DSwapChain9* swap_chain, IDirect3DDevice9* owner_device);
 
-        /**
-         * @brief Loads and caches one higher-resolution replacement texture for a matched tracked texture.
-         * @param record Tracked texture record that should receive the created replacement texture.
-         * @param description Matched source texture description used to preserve usage and pool settings.
-         * @param replacement_definition Pack-scoped replacement rule that names the replacement asset.
-         * @param failure_result Receives the HRESULT-style failure reason when loading or creation fails.
-         * @return True when the replacement texture is cached successfully or already exists.
-         */
-        bool TryCacheReplacementTexture(
-            IDirect3DTexture9* tracked_texture,
-            const D3DSURFACE_DESC& description,
-            const PackScopedTextureReplacementDefinition& replacement_definition,
-            HRESULT& failure_result) const;
+
+        /** Processes owned upload bytes after native unlock, preserving source/device lifetimes through the caller. */
+        HRESULT CompleteTextureUpload(IDirect3DTexture9& texture, const D3d9TextureUpload& upload) const;
 
         /**
          * @brief Returns whether one tracked texture fingerprint matches any declared `D3D9` replacement rule.

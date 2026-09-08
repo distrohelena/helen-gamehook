@@ -86,6 +86,9 @@
     <ClCompile Include="CommandDispatcher.cpp" />
     <ClCompile Include="CommandExecutor.cpp" />
     <ClCompile Include="D3d9TextureReplacementHookSet.cpp" />
+    <ClCompile Include="D3d9ResetDiagnostics.cpp" />
+    <ClCompile Include="ComOriginalDispatch.cpp" />
+    <ClCompile Include="D3d9TextureBindingTransaction.cpp" />
     <ClCompile Include="DebugHookCallbacks.cpp" />
     <ClCompile Include="DebugTraceService.cpp" />
     <ClCompile Include="DeltaVirtualFileSource.cpp" />
@@ -153,6 +156,11 @@
     <ClInclude Include="..\include\HelenHook\CommandStepDefinition.h" />
     <ClInclude Include="..\include\HelenHook\ConfigEntryDefinition.h" />
     <ClInclude Include="..\include\HelenHook\D3d9TextureReplacementHookSet.h" />
+    <ClInclude Include="..\include\HelenHook\D3d9ResetDiagnostics.h" />
+    <ClInclude Include="..\include\HelenHook\ComOriginalDispatch.h" />
+    <ClInclude Include="..\include\HelenHook\D3d9ReplacementTicket.h" />
+    <ClInclude Include="..\include\HelenHook\D3d9TextureUpload.h" />
+    <ClInclude Include="..\include\HelenHook\D3d9TextureBindingTransaction.h" />
     <ClInclude Include="..\include\HelenHook\DebugHookCallbacks.h" />
     <ClInclude Include="..\include\HelenHook\DebugTraceService.h" />
     <ClInclude Include="..\include\HelenHook\DeltaVirtualFileSource.h" />

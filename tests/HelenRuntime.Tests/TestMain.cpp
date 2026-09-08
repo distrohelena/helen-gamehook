@@ -138,6 +138,11 @@ void RunHgdeltaFileTests();
  */
 void RunTextureDumpSerializerTests();
 
+/** Runs failure detail and duplicate suppression coverage for device resets. */
+void RunD3d9ResetDiagnosticsTests();
+/** Verifies original dispatch independently from object tracking. */
+void RunComOriginalDispatchTests();
+
 /**
  * @brief Runs the replacement asset loader test coverage for larger DDS texture swaps.
  */
@@ -247,6 +252,8 @@ int wmain(int argc, wchar_t** argv)
         RunHiddenPathMatcherTests();
         RunExecutableFingerprintTests();
         RunHgdeltaFileTests();
+        RunD3d9ResetDiagnosticsTests();
+        RunComOriginalDispatchTests();
         RunTextureDumpSerializerTests();
         RunTextureReplacementAssetLoaderTests();
         RunDeltaVirtualFileSourceTests();
