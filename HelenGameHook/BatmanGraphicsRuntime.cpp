@@ -6,6 +6,9 @@
 #include <memory>
 #include <stdexcept>
 #include <utility>
+#if defined(HELEN_ENABLE_BLOOM_RELOAD)
+#include "BloomReloadProbe.h"
+#endif
 
 namespace {
     /** @brief Atomic publication protects acquisition only; an acquired context remains alive through dispatch and reconciliation. */
@@ -19,6 +22,9 @@ namespace helen {
 
     void InitializeBatmanGraphicsRuntime(const std::filesystem::path& engineIniPath,
         std::shared_ptr<FileWriteRoutingService> routing_service) {
+#if defined(HELEN_ENABLE_BLOOM_RELOAD)
+        BloomReloadProbe::Bind(engineIniPath, routing_service);
+#endif
         const std::shared_ptr<BatmanGraphicsRuntimeContext> initialized =
             std::make_shared<BatmanGraphicsRuntimeContext>(engineIniPath, std::move(routing_service));
         std::shared_ptr<BatmanGraphicsRuntimeContext> expected;

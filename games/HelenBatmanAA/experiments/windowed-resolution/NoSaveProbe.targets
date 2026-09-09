@@ -34,4 +34,16 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)..\..\..\..\HelenGameHook\StartupHookRuntime.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)..\vsync-refresh\InstallSameSizeRefresh.cpp" />
   </ItemGroup>
+  <ItemDefinitionGroup Condition="'$(EnableBloomReload)' == 'true'">
+    <ClCompile>
+      <PreprocessorDefinitions>HELEN_ENABLE_BLOOM_RELOAD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\bloom-reload;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup Condition="'$(EnableBloomReload)' == 'true' and '$(MSBuildProjectName)' == 'HelenRuntime'">
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\bloom-reload\BloomDraft.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\bloom-reload\BloomIniBinding.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\bloom-reload\BloomOverlayEdit.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\bloom-reload\BloomReloadProbe.cpp" />
+  </ItemGroup>
 </Project>

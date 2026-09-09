@@ -2,6 +2,10 @@
 #include "NoSaveDisplayRequest.h"
 #include "NoSaveFullscreenModes.h"
 #include "NoSaveVsyncRequest.h"
+#if defined(HELEN_ENABLE_BLOOM_RELOAD)
+#include "BloomReloadProbe.h"
+#include "BloomDraft.h"
+#endif
 #if defined(HELEN_ENABLE_SAME_SIZE_REFRESH)
 #include "SameSizeRefresh.h"
 #endif
@@ -147,6 +151,16 @@ namespace helen {
             if (Read<std::uintptr_t>(renderer) != module+0x1D28210 || Read<std::uintptr_t>(renderer+0x24) != 0) {
                 throw std::runtime_error("Probe renderer unavailable or actively drawing a viewport");
             }
+#if defined(HELEN_ENABLE_BLOOM_RELOAD)
+            if (baseline.Get(BatmanGraphicsField::Bloom) != draft.Get(BatmanGraphicsField::Bloom) ||
+                baseline.Get(BatmanGraphicsField::DynamicShadows) != draft.Get(BatmanGraphicsField::DynamicShadows)) {
+                const BatmanGraphicsField field = baseline.Get(BatmanGraphicsField::DynamicShadows) != draft.Get(BatmanGraphicsField::DynamicShadows)
+                    ? BatmanGraphicsField::DynamicShadows : BatmanGraphicsField::Bloom;
+                (void)BloomDraft::Select(baseline, draft, field);
+                if (Attempted.test_and_set()) { throw std::runtime_error("Probe already attempted; restart before another experiment"); }
+                return BloomReloadProbe::Apply(baseline, draft);
+            }
+#endif
             const bool refreshOnly = vsync.has_value() &&
                 baseline.Get(BatmanGraphicsField::Fullscreen) == draft.Get(BatmanGraphicsField::Fullscreen) &&
                 baseline.Get(BatmanGraphicsField::PersistedWidth) == draft.Get(BatmanGraphicsField::PersistedWidth) &&
