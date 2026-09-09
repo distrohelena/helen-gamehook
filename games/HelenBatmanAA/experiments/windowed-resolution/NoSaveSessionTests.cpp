@@ -57,7 +57,24 @@ int wmain(int argc, wchar_t** argv) {
         Expect(result.has_value() && result->Outcome == helen::BatmanGraphicsApplyOutcome::NotApplied, "Probe must never claim saved success");
         Expect(Bytes(user) == initial && Bytes(engine) == initial, "No-save Commit changed INI bytes");
         Expect(Bytes(root/L"probe.log").find("resolution-no-save") != std::string::npos, "Probe implementation was not linked");
+        Expect(Bytes(root/L"probe.log").find("Probe rejects foreign executable") != std::string::npos,
+            "VSync-only transaction did not reach executable validation");
         Expect(!sessions.Commit(*session, *transaction).has_value(), "Consumed transaction executed twice");
+        const auto combinedTransaction = sessions.BeginApply(*session);
+        Expect(combinedTransaction.has_value(), "Combined transaction could not begin");
+        Expect(sessions.SetField(*session, *combinedTransaction, helen::BatmanGraphicsField::Vsync, 1), "Combined VSync staging failed");
+        Expect(sessions.SetField(*session, *combinedTransaction, helen::BatmanGraphicsField::Fullscreen, 1), "Combined fullscreen staging failed");
+        Expect(sessions.SetResolution(*session, *combinedTransaction, helen::BatmanDisplayModeCatalogKind::Fullscreen, 0),
+            "Combined display staging failed");
+        const auto combinedResult = sessions.Commit(*session, *combinedTransaction);
+        Expect(combinedResult.has_value() && combinedResult->Outcome == helen::BatmanGraphicsApplyOutcome::NotApplied,
+            "Combined transaction claimed saved success on foreign executable");
+        Expect(Bytes(root/L"probe.log").find("VSync edit selected=1; policy not yet published") != std::string::npos,
+            "Real Commit did not pass baseline and staged VSync to the probe");
+        Expect(Bytes(root/L"probe.log").find("VSYNC policy-selected=") == std::string::npos,
+            "Foreign executable published VSync policy");
+        Expect(Bytes(user) == initial && Bytes(engine) == initial, "Combined Commit changed INI bytes");
+        Expect(!sessions.Commit(*session, *combinedTransaction).has_value(), "Combined transaction executed twice");
         const std::size_t previousLogSize = Bytes(root/L"probe.log").size();
         const auto fullscreenTransaction = sessions.BeginApply(*session);
         Expect(fullscreenTransaction.has_value(), "Fullscreen transaction could not begin");

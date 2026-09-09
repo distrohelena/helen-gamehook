@@ -94,9 +94,73 @@ namespace {
         RequireSuccess(device.SetTexture(0, nullptr), "Unbind replacement");
     }
 
+    /** @brief Checks actual device state and releases the observation reference before any later reset. */
+    void ExpectPresentation(IDirect3DDevice9& device, UINT interval, UINT width, UINT height) {
+        Microsoft::WRL::ComPtr<IDirect3DSwapChain9> chain;
+        RequireSuccess(device.GetSwapChain(0, chain.GetAddressOf()), "Observe current swap chain");
+        D3DPRESENT_PARAMETERS observed{};
+        RequireSuccess(chain->GetPresentParameters(&observed), "Observe actual presentation parameters");
+        Expect(observed.PresentationInterval == interval, "Actual swap-chain interval did not honor override");
+        Expect(observed.Windowed && observed.BackBufferWidth == width && observed.BackBufferHeight == height,
+            "Interval override changed requested dimensions or mode");
+        Expect(observed.SwapEffect == D3DSWAPEFFECT_COPY && observed.BackBufferFormat == D3DFMT_A8R8G8B8,
+            "Interval override changed swap effect or format");
+    }
+
+    /** @brief Proves interval interception needs no texture rules, assets, hashing or dumping. */
+    void RunPresentationOnly(const std::filesystem::path& root) {
+        std::filesystem::create_directories(root);
+        helen::SetLogPath(root / "hook.log");
+        helen::D3d9TextureReplacementHookSet hooks(true, false, false, root, {});
+        hooks.PresentationPolicy().SetVsyncOverride(helen::D3d9VsyncOverride::ForceOff);
+        Expect(hooks.Install(), "Pack-free D3D9 hook installation failed");
+        const std::unique_ptr<std::remove_pointer_t<HWND>, decltype(&DestroyWindow)> window(
+            CreateWindowExW(0, L"STATIC", L"Helen hidden presentation test", WS_OVERLAPPEDWINDOW,
+                0, 0, 640, 480, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr), &DestroyWindow);
+        Expect(window != nullptr, "Could not create pack-free hidden window");
+        Microsoft::WRL::ComPtr<IDirect3D9> direct3d;
+        direct3d.Attach(Direct3DCreate9(D3D_SDK_VERSION));
+        Expect(direct3d != nullptr, "D3D9 unavailable; pack-free test not run");
+        D3DPRESENT_PARAMETERS parameters{};
+        parameters.Windowed = TRUE; parameters.hDeviceWindow = window.get();
+        parameters.BackBufferWidth = 640; parameters.BackBufferHeight = 480;
+        parameters.BackBufferFormat = D3DFMT_A8R8G8B8; parameters.BackBufferCount = 1;
+        parameters.SwapEffect = D3DSWAPEFFECT_COPY;
+        parameters.PresentationInterval = D3DPRESENT_INTERVAL_ONE;
+        Microsoft::WRL::ComPtr<IDirect3DDevice9> device;
+        RequireSuccess(direct3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window.get(),
+            D3DCREATE_SOFTWARE_VERTEXPROCESSING, &parameters, device.GetAddressOf()), "Create pack-free device");
+        ExpectPresentation(*device.Get(), D3DPRESENT_INTERVAL_IMMEDIATE, 640, 480);
+        Expect(helen::D3d9TextureReplacementHookSet::TrySetVsyncOverride(*device.Get(), helen::D3d9VsyncOverride::ForceOn),
+            "Registered device could not publish menu VSync override");
+        bool invalid_rejected = false;
+        try { (void)helen::D3d9TextureReplacementHookSet::TrySetVsyncOverride(*device.Get(), static_cast<helen::D3d9VsyncOverride>(999)); }
+        catch (const std::invalid_argument&) { invalid_rejected = true; }
+        Expect(invalid_rejected && hooks.PresentationPolicy().GetVsyncOverride() == helen::D3d9VsyncOverride::ForceOn,
+            "Invalid device-bound selection changed policy");
+        ExpectPresentation(*device.Get(), D3DPRESENT_INTERVAL_IMMEDIATE, 640, 480);
+        parameters.BackBufferWidth = 800; parameters.BackBufferHeight = 600;
+        parameters.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+        RequireSuccess(device->Reset(&parameters), "Reset pack-free device");
+        ExpectPresentation(*device.Get(), D3DPRESENT_INTERVAL_ONE, 800, 600);
+        Expect(helen::D3d9TextureReplacementHookSet::TrySetVsyncOverride(*device.Get(), helen::D3d9VsyncOverride::ForceOff),
+            "Could not select VSync off for identical-size reset");
+        ExpectPresentation(*device.Get(), D3DPRESENT_INTERVAL_ONE, 800, 600);
+        parameters.PresentationInterval = D3DPRESENT_INTERVAL_ONE;
+        RequireSuccess(device->Reset(&parameters), "Reset identical dimensions with VSync off");
+        ExpectPresentation(*device.Get(), D3DPRESENT_INTERVAL_IMMEDIATE, 800, 600);
+        hooks.Remove();
+        Expect(!helen::D3d9TextureReplacementHookSet::TrySetVsyncOverride(*device.Get(), helen::D3d9VsyncOverride::ForceOn),
+            "Retired hook owner accepted menu selection");
+        Expect(hooks.PresentationPolicy().GetVsyncOverride() == helen::D3d9VsyncOverride::ForceOff,
+            "Rejected device-bound selection changed policy");
+        std::cout << "D3D9_PRESENTATION_WITHOUT_TEXTURES_PASS\n";
+    }
+
     /** Runs real hook/reset integration in a dedicated process, preserving a managed source across resets. */
     void Run(const std::filesystem::path& root,
-        void (*additional_checks)(IDirect3DDevice9&, const std::filesystem::path&) = nullptr, bool early_surface_hooks = false) {
+        void (*additional_checks)(IDirect3DDevice9&, const std::filesystem::path&) = nullptr,
+        bool early_surface_hooks = false, bool presentation_override = false) {
         std::filesystem::create_directories(root);
         helen::SetLogPath(root / "hook.log");
         const std::filesystem::path subtitle = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() /
@@ -123,15 +187,29 @@ namespace {
         Microsoft::WRL::ComPtr<IDirect3D9> direct3d;
         direct3d.Attach(Direct3DCreate9(D3D_SDK_VERSION));
         Expect(direct3d != nullptr, "Direct3D9 unavailable; hardware test cannot run.");
+        if (presentation_override) {
+            D3DCAPS9 capabilities{};
+            RequireSuccess(direct3d->GetDeviceCaps(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, &capabilities), "Query interval support");
+            Expect((capabilities.PresentationIntervals & D3DPRESENT_INTERVAL_ONE) != 0 &&
+                (capabilities.PresentationIntervals & D3DPRESENT_INTERVAL_IMMEDIATE) != 0,
+                "UNSUPPORTED: driver lacks required presentation intervals; transition not tested");
+            hooks.PresentationPolicy().SetVsyncOverride(helen::D3d9VsyncOverride::ForceOff);
+        }
         D3DPRESENT_PARAMETERS parameters{};
         parameters.Windowed = TRUE; parameters.hDeviceWindow = window.get();
         parameters.BackBufferWidth = 640; parameters.BackBufferHeight = 480;
         parameters.BackBufferFormat = D3DFMT_A8R8G8B8; parameters.BackBufferCount = 1;
         parameters.SwapEffect = D3DSWAPEFFECT_COPY;
         parameters.Flags = D3DPRESENTFLAG_LOCKABLE_BACKBUFFER;
+        if (presentation_override) { parameters.PresentationInterval = D3DPRESENT_INTERVAL_ONE; }
         Microsoft::WRL::ComPtr<IDirect3DDevice9> device;
         RequireSuccess(direct3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window.get(),
             D3DCREATE_SOFTWARE_VERTEXPROCESSING, &parameters, device.GetAddressOf()), "Create hidden device");
+        if (presentation_override) {
+            ExpectPresentation(*device.Get(), D3DPRESENT_INTERVAL_IMMEDIATE, 640, 480);
+            hooks.PresentationPolicy().SetVsyncOverride(helen::D3d9VsyncOverride::ForceOn);
+            ExpectPresentation(*device.Get(), D3DPRESENT_INTERVAL_IMMEDIATE, 640, 480);
+        }
         if (early_surface_hooks) { ExposeRenderTargetSurface(*device.Get()); }
         Microsoft::WRL::ComPtr<IDirect3DTexture9> source;
         RequireSuccess(device->CreateTexture(4, 4, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED,
@@ -159,7 +237,12 @@ namespace {
         ExposeRenderTargetSurface(*device.Get());
 
         parameters.BackBufferWidth = 800; parameters.BackBufferHeight = 600;
+        if (presentation_override) { parameters.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE; }
         RequireSuccess(device->Reset(&parameters), "Reset must release the hook-owned default-pool replacement");
+        if (presentation_override) {
+            ExpectPresentation(*device.Get(), D3DPRESENT_INTERVAL_ONE, 800, 600);
+            hooks.PresentationPolicy().SetVsyncOverride(helen::D3d9VsyncOverride::ForceOff);
+        }
         ExpectReplacement(*device.Get(), *source.Get());
         ExpectReplacement(*device.Get(), *secondSource.Get());
 
@@ -167,13 +250,25 @@ namespace {
         Microsoft::WRL::ComPtr<IDirect3DSurface9> retainedBackbuffer;
         RequireSuccess(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, retainedBackbuffer.GetAddressOf()), "Hold backbuffer");
         parameters.BackBufferWidth = 960; parameters.BackBufferHeight = 540;
+        if (presentation_override) { parameters.PresentationInterval = D3DPRESENT_INTERVAL_ONE; }
         Expect(device->Reset(&parameters) == D3DERR_INVALIDCALL, "Application-owned backbuffer must still block reset with the original error.");
         retainedBackbuffer.Reset();
         parameters.BackBufferWidth = 960; parameters.BackBufferHeight = 540;
         RequireSuccess(device->Reset(&parameters), "Retry after releasing application resource");
+        if (presentation_override) { ExpectPresentation(*device.Get(), D3DPRESENT_INTERVAL_IMMEDIATE, 960, 540); }
         ExpectReplacement(*device.Get(), *source.Get());
         parameters.BackBufferWidth = 640; parameters.BackBufferHeight = 480;
+        if (presentation_override) { parameters.PresentationInterval = D3DPRESENT_INTERVAL_ONE; }
         RequireSuccess(device->Reset(&parameters), "Repeated reset after recovery");
+        if (presentation_override) {
+            ExpectPresentation(*device.Get(), D3DPRESENT_INTERVAL_IMMEDIATE, 640, 480);
+            hooks.PresentationPolicy().SetVsyncOverride(helen::D3d9VsyncOverride::GameControlled);
+            parameters.BackBufferWidth = 640; parameters.BackBufferHeight = 480;
+            parameters.PresentationInterval = D3DPRESENT_INTERVAL_ONE;
+            RequireSuccess(device->Reset(&parameters), "Reset after returning presentation control to application");
+            ExpectPresentation(*device.Get(), D3DPRESENT_INTERVAL_ONE, 640, 480);
+            std::cout << "D3D9_PRESENTATION_OVERRIDE_PASS\n";
+        }
         ExpectReplacement(*device.Get(), *source.Get());
         ExerciseGameplayTextureLifetimes(*device.Get());
         if (additional_checks != nullptr) { additional_checks(*device.Get(), root); }
@@ -185,7 +280,12 @@ int wmain(int argc, wchar_t** argv) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     try {
         Expect(argc == 2 || argc == 3, "Expected a fresh fixture directory and optional initial-surface mode.");
-        Run(argv[1], nullptr, argc == 3);
+        if (argc == 3 && std::wstring_view(argv[2]) == L"presentation-only") {
+            RunPresentationOnly(argv[1]);
+            return 0;
+        }
+        const bool presentation_override = argc == 3 && std::wstring_view(argv[2]) == L"presentation-override";
+        Run(argv[1], nullptr, argc == 3 && !presentation_override, presentation_override);
         std::cout << "D3D9_REPLACEMENT_RESET_PASS\n";
         return 0;
     } catch (const std::exception& error) {

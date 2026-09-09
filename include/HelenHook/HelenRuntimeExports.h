@@ -13,6 +13,11 @@
  */
 extern "C" __declspec(dllimport) BOOL __stdcall HelenInitialize();
 
+#if defined(HELEN_ENABLE_STARTUP_HOOKS)
+/** @brief Opt-in proxy attach handshake; late calls cannot open an installation window. */
+extern "C" __declspec(dllimport) BOOL __stdcall HelenInitializeAtStartup(HMODULE proxy);
+#endif
+
 /**
  * @brief Requests Helen runtime shutdown for the current process.
  *

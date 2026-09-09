@@ -1,4 +1,5 @@
 #include <HelenHook/Memory.h>
+#include <HelenHook/MemoryPatch.h>
 
 #include <algorithm>
 #include <array>
@@ -124,36 +125,16 @@ namespace helen
         return VirtualProtect(address, size, new_protect, &old_protect) == TRUE;
     }
 
-    bool WriteMemory(void* address, const void* data, std::size_t size)
-    {
-        DWORD old_protect{};
-        if (!ProtectMemory(address, size, PAGE_EXECUTE_READWRITE, old_protect))
-        {
-            return false;
-        }
-
-        std::memcpy(address, data, size);
-        FlushInstructionCache(GetCurrentProcess(), address, size);
-
-        DWORD ignored{};
-        ProtectMemory(address, size, old_protect, ignored);
-        return true;
+    bool WriteMemory(void* address, const void* data, std::size_t size) {
+        MemoryPatch patch;
+        if (patch.Apply(address, data, size).Completed) { return patch.Commit(); }
+        if (!patch.Restore().Completed) { AbortUnsafePatch(); }
+        return false;
     }
 
-    bool FillMemoryBytes(void* address, std::uint8_t value, std::size_t size)
-    {
-        DWORD old_protect{};
-        if (!ProtectMemory(address, size, PAGE_EXECUTE_READWRITE, old_protect))
-        {
-            return false;
-        }
-
-        std::memset(address, value, size);
-        FlushInstructionCache(GetCurrentProcess(), address, size);
-
-        DWORD ignored{};
-        ProtectMemory(address, size, old_protect, ignored);
-        return true;
+    bool FillMemoryBytes(void* address, std::uint8_t value, std::size_t size) {
+        const std::vector<std::uint8_t> bytes(size, value);
+        return WriteMemory(address, bytes.data(), bytes.size());
     }
 
     void* AllocateExecutable(std::size_t size)

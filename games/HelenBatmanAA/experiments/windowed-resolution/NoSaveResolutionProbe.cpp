@@ -1,6 +1,11 @@
 #include "NoSaveResolutionProbe.h"
 #include "NoSaveDisplayRequest.h"
 #include "NoSaveFullscreenModes.h"
+#include "NoSaveVsyncRequest.h"
+#if defined(HELEN_ENABLE_SAME_SIZE_REFRESH)
+#include "SameSizeRefresh.h"
+#endif
+#include <HelenHook/D3d9TextureReplacementHookSet.h>
 #include <HelenHook/ExecutableFingerprint.h>
 #include <HelenHook/Log.h>
 #include <windows.h>
@@ -9,6 +14,7 @@
 #include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <wrl/client.h>
 
 namespace {
     /** @brief A consumed experimental invocation cannot be retried in an uncertain device state. */
@@ -63,6 +69,23 @@ namespace {
         surface->Release();
     }
 
+    /** @brief Reads the actual interval without retaining a swap-chain reference across the subsequent engine call. */
+    D3DPRESENT_PARAMETERS ObserveInterval(std::uintptr_t renderer, const wchar_t* phase) {
+        IDirect3DDevice9* const device = Read<IDirect3DDevice9*>(renderer + 0x10);
+        if (device == nullptr) { throw std::runtime_error("VSync observation device unavailable"); }
+        Microsoft::WRL::ComPtr<IDirect3DSwapChain9> chain;
+        if (FAILED(device->GetSwapChain(0, chain.GetAddressOf())) || !chain) {
+            throw std::runtime_error("VSync swap-chain observation unavailable");
+        }
+        D3DPRESENT_PARAMETERS observed{};
+        if (FAILED(chain->GetPresentParameters(&observed))) {
+            throw std::runtime_error("VSync presentation readback failed");
+        }
+        helen::Logf(L"[resolution-no-save] VSYNC %ls actual-interval=%u size=%ux%u windowed=%d",
+            phase, observed.PresentationInterval, observed.BackBufferWidth, observed.BackBufferHeight, observed.Windowed);
+        return observed;
+    }
+
     /** @brief Log client, engine viewport, and actual D3D backbuffer sizes without resizing or saving. */
     void Observe(std::uintptr_t module, std::uintptr_t owner, HWND window, const wchar_t* phase) {
         RECT client;
@@ -92,9 +115,13 @@ namespace {
 }
 
 namespace helen {
-    BatmanGraphicsApplyResult NoSaveResolutionProbe::Apply(const BatmanGraphicsDraftState& draft) {
+    BatmanGraphicsApplyResult NoSaveResolutionProbe::Apply(const BatmanGraphicsDraftState& baseline, const BatmanGraphicsDraftState& draft) {
         Log(L"[resolution-no-save] EXPERIMENT: Helen INI writer bypassed; engine persistence untouched.");
         try {
+            const std::optional<D3d9VsyncOverride> vsync = NoSaveVsyncRequest::Select(baseline, draft);
+            if (vsync.has_value()) {
+                Logf(L"[resolution-no-save] VSync edit selected=%d; policy not yet published.", draft.Get(BatmanGraphicsField::Vsync));
+            }
             static const std::uintptr_t module = VerifiedModule();
             if (Read<unsigned>(module+0x22760E8) == 0 || Read<DWORD>(module+0x22760E4) != GetCurrentThreadId()) {
                 throw std::runtime_error("Probe requires initialized game thread");
@@ -120,35 +147,82 @@ namespace helen {
             if (Read<std::uintptr_t>(renderer) != module+0x1D28210 || Read<std::uintptr_t>(renderer+0x24) != 0) {
                 throw std::runtime_error("Probe renderer unavailable or actively drawing a viewport");
             }
-            const int width = draft.Get(BatmanGraphicsField::PersistedWidth);
-            const int height = draft.Get(BatmanGraphicsField::PersistedHeight);
-            const int fullscreen = draft.Get(BatmanGraphicsField::Fullscreen);
+            const bool refreshOnly = vsync.has_value() &&
+                baseline.Get(BatmanGraphicsField::Fullscreen) == draft.Get(BatmanGraphicsField::Fullscreen) &&
+                baseline.Get(BatmanGraphicsField::PersistedWidth) == draft.Get(BatmanGraphicsField::PersistedWidth) &&
+                baseline.Get(BatmanGraphicsField::PersistedHeight) == draft.Get(BatmanGraphicsField::PersistedHeight);
+            if (refreshOnly) {
+#if defined(HELEN_ENABLE_SAME_SIZE_REFRESH)
+                SameSizeRefresh::RequireInstalled();
+#else
+                throw std::runtime_error("Same-size refresh is not enabled in this candidate");
+#endif
+            }
+            // Unedited persisted values may be stale after a prior unsaved resize or launcher change.
+            // A VSync-only refresh must use the live viewport, not those persisted dimensions.
+            const int width = refreshOnly ? Read<int>(owner+0x4C) : draft.Get(BatmanGraphicsField::PersistedWidth);
+            const int height = refreshOnly ? Read<int>(owner+0x50) : draft.Get(BatmanGraphicsField::PersistedHeight);
+            const int fullscreen = refreshOnly ? static_cast<int>(Read<unsigned>(owner+0x58)&1) : draft.Get(BatmanGraphicsField::Fullscreen);
+            if (width <= 0 || height <= 0) { throw std::runtime_error("Probe requires positive live display dimensions"); }
             std::vector<BatmanDisplayMode> supportedModes;
-            if (fullscreen == 1) {
+            if (fullscreen == 1 && !refreshOnly) {
                 IDirect3DDevice9* device = Read<IDirect3DDevice9*>(renderer + 0x10);
                 if (device == nullptr) {
                     throw std::runtime_error("Probe fullscreen device unavailable");
                 }
                 supportedModes = NoSaveFullscreenModes::Enumerate(*device);
             }
-            const NoSaveDisplayRequest request(width, height, fullscreen,
-                Read<unsigned>(owner+0x4C), Read<unsigned>(owner+0x50), (Read<unsigned>(owner+0x58)&1) != 0, supportedModes);
+            if (!refreshOnly) {
+                const NoSaveDisplayRequest request(width, height, fullscreen,
+                    Read<unsigned>(owner+0x4C), Read<unsigned>(owner+0x50), (Read<unsigned>(owner+0x58)&1) != 0, supportedModes);
+            }
             if (Attempted.test_and_set()) {
                 throw std::runtime_error("Probe already attempted; restart before another experiment");
             }
             Observe(module, owner, window, L"BEFORE");
+            std::optional<D3DPRESENT_PARAMETERS> beforePresentation;
+            if (vsync.has_value()) {
+                beforePresentation = ObserveInterval(renderer, L"BEFORE");
+                IDirect3DDevice9* const device = Read<IDirect3DDevice9*>(renderer + 0x10);
+                if (device == nullptr || !D3d9TextureReplacementHookSet::TrySetVsyncOverride(*device, *vsync)) {
+                    throw std::runtime_error("VSync policy requires a registered idle D3D9 device");
+                }
+                Logf(L"[resolution-no-save] VSYNC policy-selected=%d before resize; remains selected if resize fails; not saved.",
+                    draft.Get(BatmanGraphicsField::Vsync));
+            }
             Logf(L"[resolution-no-save] CALL engine width=%u height=%u fullscreen=%d; no Helen save follows.",
-                request.GetWidth(), request.GetHeight(), request.GetFullscreen());
+                static_cast<unsigned>(width), static_cast<unsigned>(height), fullscreen);
             SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
             /** @brief Verified x86 thiscall with width, height, fullscreen, x, y; existing-window path retains position. */
             using Resize = void(__thiscall*)(void*, unsigned, unsigned, int, int, int);
             const Resize resize = reinterpret_cast<Resize>(module+0xAB91D0);
-            resize(reinterpret_cast<void*>(owner), request.GetWidth(), request.GetHeight(), request.GetFullscreen(), -1, -1);
+            if (refreshOnly) {
+#if defined(HELEN_ENABLE_SAME_SIZE_REFRESH)
+                SameSizeRefresh::Invoke(owner, renderer, static_cast<unsigned>(width), static_cast<unsigned>(height), fullscreen);
+#endif
+            } else {
+                resize(reinterpret_cast<void*>(owner), static_cast<unsigned>(width), static_cast<unsigned>(height), fullscreen, -1, -1);
+            }
             if (Read<int>(module+0x22CCAB4) != 1 || Read<std::uintptr_t>(Read<std::uintptr_t>(module+0x22CCAB0)) != owner ||
                 Read<HWND>(owner+0x60) != window || !IsWindow(window)) {
                 throw std::runtime_error("Probe viewport lifetime changed during resize");
             }
             Observe(module, owner, window, L"AFTER");
+            if (vsync.has_value()) {
+                const UINT expected_interval = *vsync == D3d9VsyncOverride::ForceOn
+                    ? D3DPRESENT_INTERVAL_ONE : D3DPRESENT_INTERVAL_IMMEDIATE;
+                const D3DPRESENT_PARAMETERS afterPresentation = ObserveInterval(Read<std::uintptr_t>(module+0x22B0D94), L"AFTER");
+                if (refreshOnly && (afterPresentation.BackBufferWidth != beforePresentation->BackBufferWidth ||
+                    afterPresentation.BackBufferHeight != beforePresentation->BackBufferHeight ||
+                    afterPresentation.Windowed != beforePresentation->Windowed || Read<int>(owner+0x4C) != width ||
+                    Read<int>(owner+0x50) != height || static_cast<int>(Read<unsigned>(owner+0x58)&1) != fullscreen)) {
+                    throw std::runtime_error("Same-size refresh changed actual display dimensions or mode");
+                }
+                if (afterPresentation.PresentationInterval != expected_interval) {
+                    throw std::runtime_error("VSync policy selected but actual interval does not match; no saved success");
+                }
+                Log(L"[resolution-no-save] VSYNC actual interval matches selection; no saved baseline published.");
+            }
             Log(L"[resolution-no-save] RETURNED; compare INI snapshots now and after exit. UI Apply Failed is intentional; no saved success is asserted.");
         } catch (const std::exception& error) {
             Logf(L"[resolution-no-save] STOP: %hs; Helen writer remains bypassed.", error.what());

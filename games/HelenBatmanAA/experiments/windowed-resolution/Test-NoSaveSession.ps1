@@ -6,6 +6,8 @@ $sdk = 'C:\Program Files (x86)\Windows Kits\10'
 $version = '10.0.26100.0'
 $output = Join-Path ([IO.Path]::GetTempPath()) ('NoSaveSession-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $output | Out-Null
+Write-Output "FIXTURE_ROOT: $output"
+Write-Output ('RUNTIME_LIBRARY_SHA256: ' + (Get-FileHash -LiteralPath $RuntimeLibraryPath -Algorithm SHA256).Hash)
 $tool = Join-Path $repo 'games\HelenBatmanAA\scripts\Invoke-BatmanConsoleTool.ps1'
 $arguments = @('/nologo','/std:c++20','/EHsc','/MD','/W4','/WX','/DUNICODE','/D_UNICODE','/DNOMINMAX',
     "/I$repo\include", "/I$compiler\include", "/I$sdk\Include\$version\ucrt", "/I$sdk\Include\$version\shared", "/I$sdk\Include\$version\um",

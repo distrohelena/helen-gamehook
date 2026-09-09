@@ -87,6 +87,7 @@
     <ClCompile Include="CommandExecutor.cpp" />
     <ClCompile Include="D3d9TextureReplacementHookSet.cpp" />
     <ClCompile Include="D3d9ResetDiagnostics.cpp" />
+    <ClCompile Include="D3d9PresentationPolicy.cpp" />
     <ClCompile Include="ComOriginalDispatch.cpp" />
     <ClCompile Include="D3d9TextureBindingTransaction.cpp" />
     <ClCompile Include="DebugHookCallbacks.cpp" />
@@ -110,6 +111,7 @@
     <ClCompile Include="JsonValue.cpp" />
     <ClCompile Include="Log.cpp" />
     <ClCompile Include="Memory.cpp" />
+    <ClCompile Include="MemoryPatch.cpp" />
     <ClCompile Include="MemoryStateObserverService.cpp" />
     <ClCompile Include="PackAssetResolver.cpp" />
     <ClCompile Include="PackRepository.cpp" />
@@ -157,6 +159,8 @@
     <ClInclude Include="..\include\HelenHook\ConfigEntryDefinition.h" />
     <ClInclude Include="..\include\HelenHook\D3d9TextureReplacementHookSet.h" />
     <ClInclude Include="..\include\HelenHook\D3d9ResetDiagnostics.h" />
+    <ClInclude Include="..\include\HelenHook\D3d9PresentationPolicy.h" />
+    <ClInclude Include="..\include\HelenHook\D3d9VsyncOverride.h" />
     <ClInclude Include="..\include\HelenHook\ComOriginalDispatch.h" />
     <ClInclude Include="..\include\HelenHook\D3d9ReplacementTicket.h" />
     <ClInclude Include="..\include\HelenHook\D3d9TextureUpload.h" />
@@ -192,6 +196,11 @@
     <ClInclude Include="..\include\HelenHook\LoadedBuildPack.h" />
     <ClInclude Include="..\include\HelenHook\Log.h" />
     <ClInclude Include="..\include\HelenHook\Memory.h" />
+    <ClInclude Include="..\include\HelenHook\MemoryPatch.h" />
+    <ClInclude Include="..\include\HelenHook\MemoryPatchResult.h" />
+    <ClInclude Include="..\include\HelenHook\MemoryProtectionRegion.h" />
+    <ClInclude Include="..\include\HelenHook\InlineHook.h" />
+    <ClInclude Include="..\include\HelenHook\IatHook.h" />
     <ClInclude Include="..\include\HelenHook\MemoryStateObserverCheckDefinition.h" />
     <ClInclude Include="..\include\HelenHook\MemoryStateObserverDebugView.h" />
     <ClInclude Include="..\include\HelenHook\MemoryStateObserverDefinition.h" />
@@ -227,5 +236,12 @@
     <ClInclude Include="..\include\HelenHook\WindowBehaviorHookSet.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ItemGroup>
+    <ClCompile Include="ProcessModulePin.cpp" />
+    <ClCompile Include="StartupHookLifetime.cpp" />
+    <ClInclude Include="..\include\HelenHook\ProcessModulePin.h" />
+    <ClInclude Include="..\include\HelenHook\StartupHookLifetime.h" />
+    <ClInclude Include="..\include\HelenHook\ProxyStartupScope.h" />
+  </ItemGroup>
   <ImportGroup Label="ExtensionTargets" />
 </Project>

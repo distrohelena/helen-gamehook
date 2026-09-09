@@ -375,6 +375,8 @@ namespace
         std::unordered_map<DWORD, IDirect3DBaseTexture9*> BoundTextures;
         /** @brief Per-device reset failure suppression, protected by g_d3d9_hook_mutex. */
         helen::D3d9ResetDiagnostics ResetDiagnostics;
+        /** @brief Parameter-array length established before publishing the device context; immutable thereafter. */
+        UINT PresentationParameterCount{};
         /** Blocks publication during a native reset, including reentrant resource callbacks. */
         bool ResetInProgress{};
         /** Monotonic application binding/reset revision used to reject reentrant stale stage observations. */
@@ -2382,7 +2384,10 @@ namespace helen
             return false;
         }
 
-        active_instance_ = this;
+        {
+            std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+            active_instance_ = this;
+        }
         Log(L"[d3d9] install completed Direct3DCreate9 import hook.");
         Logf(
             L"[d3d9] installed Direct3DCreate9 import hook for %zu texture replacements (enabled=%ls hashLogging=%ls imageDumping=%ls).",
@@ -2395,9 +2400,9 @@ namespace helen
 
     void D3d9TextureReplacementHookSet::Remove()
     {
-        if (active_instance_ == this)
         {
-            active_instance_ = nullptr;
+            std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+            if (active_instance_ == this) { active_instance_ = nullptr; }
         }
 
         direct3d_create9_hook_.Remove();
@@ -2406,6 +2411,14 @@ namespace helen
     bool D3d9TextureReplacementHookSet::IsInstalled() const noexcept
     {
         return direct3d_create9_hook_.IsInstalled();
+    }
+
+    bool D3d9TextureReplacementHookSet::TrySetVsyncOverride(IDirect3DDevice9& device, D3d9VsyncOverride mode) {
+        std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+        const Direct3d9DeviceHookContext* const context = FindDeviceHookContext(&device);
+        if (active_instance_ == nullptr || context == nullptr || context->ResetInProgress) { return false; }
+        active_instance_->PresentationOverrides.SetVsyncOverride(mode);
+        return true;
     }
 
     D3d9TextureReplacementHookSet* D3d9TextureReplacementHookSet::Current() noexcept
@@ -2477,6 +2490,21 @@ namespace helen
             return D3DERR_INVALIDCALL;
         }
 
+        if (presentation_parameters != nullptr &&
+            active->PresentationOverrides.GetVsyncOverride() != D3d9VsyncOverride::GameControlled) {
+            UINT parameter_count = 1;
+            if ((behavior_flags & D3DCREATE_ADAPTERGROUP_DEVICE) != 0) {
+                D3DCAPS9 capabilities{};
+                const HRESULT queried = direct3d_context->Real->GetDeviceCaps(adapter, device_type, &capabilities);
+                if (FAILED(queried)) { return queried; }
+                parameter_count = capabilities.NumberOfAdaptersInGroup;
+                if (parameter_count == 0) { return D3DERR_INVALIDCALL; }
+            }
+            const UINT application_interval = presentation_parameters->PresentationInterval;
+            active->PresentationOverrides.Apply({presentation_parameters, parameter_count});
+            Logf(L"[d3d9] create presentation policy application=%u effective=%u blocks=%u",
+                application_interval, presentation_parameters->PresentationInterval, parameter_count);
+        }
         const HRESULT result = original(
             direct3d_context->Real,
             adapter,
@@ -3295,10 +3323,12 @@ namespace helen
         const auto original = reinterpret_cast<Direct3d9ResetFunction>(
             GetOriginalVtableSlot(self, Direct3d9ResetVtableIndex));
         std::vector<std::shared_ptr<IDirect3DTexture9>> released;
+        UINT presentation_parameter_count = 0;
         {
             std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
             Direct3d9DeviceHookContext* const context = FindDeviceHookContext(self);
             if (context == nullptr || context->ResetInProgress) { return D3DERR_INVALIDCALL; }
+            presentation_parameter_count = context->PresentationParameterCount;
             context->ResetInProgress = true;
             ++context->BindingRevision;
             for (IDirect3DTexture9* const key : context->TrackedTextures) {
@@ -3315,6 +3345,12 @@ namespace helen
         const std::size_t released_count = released.size();
         released.clear(); // Last COM releases run with no registry lock.
         Logf(L"[d3d9] reset released replacements device=0x%p count=%zu", self, released_count);
+        if (presentation_parameters != nullptr && active != nullptr) {
+            const UINT application_interval = presentation_parameters->PresentationInterval;
+            active->PresentationOverrides.Apply({presentation_parameters, presentation_parameter_count});
+            Logf(L"[d3d9] reset presentation policy application=%u effective=%u blocks=%u",
+                application_interval, presentation_parameters->PresentationInterval, presentation_parameter_count);
+        }
         const std::optional<D3DPRESENT_PARAMETERS> requested = presentation_parameters == nullptr
             ? std::nullopt : std::optional<D3DPRESENT_PARAMETERS>(*presentation_parameters);
         const HRESULT result = original(self, presentation_parameters);
@@ -3787,6 +3823,27 @@ namespace helen
         }
 
         Logf(L"[d3d9] install device instance begin ptr=0x%p", device);
+        {
+            std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
+            if (g_direct3d9_device_hook_by_real.contains(device)) { return true; }
+        }
+        // Query once while the newly observed device is operational, never during lost-device recovery.
+        D3DDEVICE_CREATION_PARAMETERS creation{};
+        const HRESULT creation_result = device->GetCreationParameters(&creation);
+        if (FAILED(creation_result)) {
+            Logf(L"[d3d9] device presentation layout query failed hr=0x%08X", static_cast<unsigned>(creation_result));
+            return false;
+        }
+        UINT presentation_parameter_count = 1;
+        if ((creation.BehaviorFlags & D3DCREATE_ADAPTERGROUP_DEVICE) != 0) {
+            D3DCAPS9 capabilities{};
+            const HRESULT caps_result = device->GetDeviceCaps(&capabilities);
+            if (FAILED(caps_result) || capabilities.NumberOfAdaptersInGroup == 0) {
+                Logf(L"[d3d9] adapter-group presentation layout unavailable hr=0x%08X", static_cast<unsigned>(caps_result));
+                return false;
+            }
+            presentation_parameter_count = capabilities.NumberOfAdaptersInGroup;
+        }
         std::lock_guard<std::mutex> lock(g_d3d9_hook_mutex);
         if (g_direct3d9_device_hook_by_real.find(device) != g_direct3d9_device_hook_by_real.end())
         {
@@ -3810,6 +3867,7 @@ namespace helen
             return false;
         }
 
+        context->PresentationParameterCount = presentation_parameter_count;
         Logf(L"[d3d9] install device proxy complete proxy=0x%p real=0x%p", reinterpret_cast<IDirect3DDevice9*>(context), device);
         return true;
     }

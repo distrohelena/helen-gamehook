@@ -6,6 +6,19 @@
 #include <mutex>
 #include <optional>
 
+#if defined(HELEN_ENABLE_STARTUP_HOOKS)
+#include <HelenHook/ProxyStartupScope.h>
+namespace {
+    /** @brief Nonzero only during the real static process-attach initialization call. */
+    std::atomic<DWORD> StartupThread{0};
+}
+/** @brief Returns the currently active startup thread, never a persistent permission to install hooks. */
+extern "C" __declspec(dllexport) DWORD __stdcall HelenQueryStartupThread() noexcept {
+    return StartupThread.load();
+}
+#pragma comment(linker, "/EXPORT:HelenQueryStartupThread=_HelenQueryStartupThread@0")
+#endif
+
 namespace
 {
     /**
@@ -174,7 +187,16 @@ extern "C" BOOL APIENTRY DllMain(HMODULE module_handle, DWORD reason, LPVOID res
     if (reason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(module_handle);
+#if defined(HELEN_ENABLE_STARTUP_HOOKS)
+        const helen::ProxyStartupScope startup(StartupThread, reserved);
+        if (reserved != nullptr) {
+            static_cast<void>(HelenInitializeAtStartup(module_handle));
+        } else {
+            static_cast<void>(HelenInitialize());
+        }
+#else
         static_cast<void>(HelenInitialize());
+#endif
     }
     else if (reason == DLL_PROCESS_DETACH)
     {

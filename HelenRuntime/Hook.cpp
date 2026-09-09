@@ -161,98 +161,79 @@ namespace helen
      * @param patch_size Number of original bytes that the installer may overwrite.
      * @return True when the hook installs successfully; otherwise false.
      */
-    bool InlineHook::Install(void* target, void* detour, std::size_t patch_size)
-    {
-        if (target == nullptr || detour == nullptr || IsInstalled())
-        {
+    bool InlineHook::Install(void* target, void* detour, std::size_t patch_size) {
+        if (IsInstalled()) { return false; }
+        if (TryInstall(target, detour, patch_size)) { return true; }
+        if (!TryRemove()) { AbortUnsafePatch(); }
+        return false;
+    }
+
+    bool InlineHook::TryInstall(void* target, void* detour, std::size_t patch_size) {
+        if (target == nullptr || detour == nullptr || IsInstalled()) {
             return false;
         }
 
-        if (patch_size < NearJumpSize || patch_size > sizeof(original_bytes_))
-        {
+        if (patch_size < NearJumpSize || patch_size > MaximumPatchSize) {
             return false;
         }
 
         void* const trampoline = AllocateExecutable(patch_size + NearJumpSize);
-        if (trampoline == nullptr)
-        {
+        if (trampoline == nullptr) {
             return false;
         }
 
-        std::memcpy(original_bytes_, target, patch_size);
-
-        std::vector<std::uint8_t> trampoline_bytes(patch_size + NearJumpSize, 0x90);
+        Trampoline = trampoline;
+        std::array<std::uint8_t, MaximumPatchSize + NearJumpSize> trampoline_bytes{};
+        trampoline_bytes.fill(0x90);
         std::memcpy(trampoline_bytes.data(), target, patch_size);
 
         std::array<std::uint8_t, NearJumpSize> trampoline_jump_bytes{};
         if (!TryBuildNearJump(
                 reinterpret_cast<std::uintptr_t>(trampoline) + patch_size,
                 reinterpret_cast<std::uintptr_t>(target) + patch_size,
-                trampoline_jump_bytes))
-        {
-            VirtualFree(trampoline, 0, MEM_RELEASE);
+                trampoline_jump_bytes)) {
             return false;
         }
 
         std::memcpy(trampoline_bytes.data() + patch_size, trampoline_jump_bytes.data(), trampoline_jump_bytes.size());
-        if (!WriteMemory(trampoline, trampoline_bytes.data(), trampoline_bytes.size()))
-        {
-            VirtualFree(trampoline, 0, MEM_RELEASE);
+        if (!WriteMemory(trampoline, trampoline_bytes.data(), patch_size + NearJumpSize)) {
             return false;
         }
 
-        std::vector<std::uint8_t> patch_bytes(patch_size, 0x90);
+        std::array<std::uint8_t, MaximumPatchSize> patch_bytes{};
+        patch_bytes.fill(0x90);
         std::array<std::uint8_t, NearJumpSize> patch_jump_bytes{};
         if (!TryBuildNearJump(
                 reinterpret_cast<std::uintptr_t>(target),
                 reinterpret_cast<std::uintptr_t>(detour),
-                patch_jump_bytes))
-        {
-            VirtualFree(trampoline, 0, MEM_RELEASE);
+                patch_jump_bytes)) {
             return false;
         }
 
         std::memcpy(patch_bytes.data(), patch_jump_bytes.data(), patch_jump_bytes.size());
-        if (!WriteMemory(target, patch_bytes.data(), patch_bytes.size()))
-        {
-            VirtualFree(trampoline, 0, MEM_RELEASE);
-            return false;
-        }
-
-        target_ = target;
-        detour_ = detour;
-        trampoline_ = trampoline;
-        patch_size_ = patch_size;
-        return true;
+        return Patch.Apply(target, patch_bytes.data(), patch_size).Completed;
     }
 
     /**
      * @brief Restores the original target bytes and frees the trampoline allocation when a hook is installed.
      */
-    void InlineHook::Remove()
-    {
-        if (!IsInstalled())
-        {
-            return;
-        }
+    void InlineHook::Remove() {
+        if (!TryRemove()) { AbortUnsafePatch(); }
+    }
 
-        WriteMemory(target_, original_bytes_, patch_size_);
-        VirtualFree(trampoline_, 0, MEM_RELEASE);
-
-        target_ = nullptr;
-        detour_ = nullptr;
-        trampoline_ = nullptr;
-        patch_size_ = 0;
-        std::fill(std::begin(original_bytes_), std::end(original_bytes_), 0);
+    bool InlineHook::TryRemove() noexcept {
+        if (!Patch.Restore().Completed) { return false; }
+        if (Trampoline != nullptr && !VirtualFree(Trampoline, 0, MEM_RELEASE)) { return false; }
+        Trampoline = nullptr;
+        return true;
     }
 
     /**
      * @brief Returns whether this instance currently owns an installed inline hook.
-     * @return True when a trampoline and patched target are active; otherwise false.
+     * @return True while target recovery or trampoline release is still owned, including failures.
      */
-    bool InlineHook::IsInstalled() const noexcept
-    {
-        return target_ != nullptr && trampoline_ != nullptr && patch_size_ != 0;
+    bool InlineHook::IsInstalled() const noexcept {
+        return Patch.HasOwnership() || Trampoline != nullptr;
     }
 
     /**
@@ -271,51 +252,47 @@ namespace helen
      * @param replacement Replacement function pointer written into the IAT slot.
      * @return True when the IAT slot resolves and the replacement is written successfully; otherwise false.
      */
-    bool IatHook::Install(const ModuleView& module, std::string_view imported_dll, std::string_view imported_name, void* replacement)
-    {
-        if (replacement == nullptr || IsInstalled())
-        {
+    bool IatHook::Install(const ModuleView& module, std::string_view imported_dll, std::string_view imported_name, void* replacement) {
+        if (IsInstalled()) { return false; }
+        if (TryInstall(module, imported_dll, imported_name, replacement)) { return true; }
+        if (!TryRemove()) { AbortUnsafePatch(); }
+        return false;
+    }
+
+    bool IatHook::TryInstall(const ModuleView& module, std::string_view imported_dll, std::string_view imported_name, void* replacement) {
+        if (replacement == nullptr || IsInstalled()) {
             return false;
         }
 
         void** const slot = FindImportAddress(module, imported_dll, imported_name);
-        if (slot == nullptr)
-        {
+        if (slot == nullptr) {
             return false;
         }
 
-        original_ = *slot;
-        if (!WriteMemory(slot, &replacement, sizeof(replacement)))
-        {
-            original_ = nullptr;
-            return false;
-        }
-
-        slot_ = slot;
-        return true;
+        OriginalValue = *slot;
+        const MemoryPatchResult result = Patch.Apply(slot, &replacement, sizeof(replacement));
+        if (!Patch.HasOwnership()) { OriginalValue = nullptr; }
+        return result.Completed;
     }
 
     /**
      * @brief Restores the original imported function pointer when one is currently patched.
      */
-    void IatHook::Remove()
-    {
-        if (!IsInstalled())
-        {
-            return;
-        }
+    void IatHook::Remove() {
+        if (!TryRemove()) { AbortUnsafePatch(); }
+    }
 
-        WriteMemory(slot_, &original_, sizeof(original_));
-        slot_ = nullptr;
-        original_ = nullptr;
+    bool IatHook::TryRemove() noexcept {
+        if (!Patch.Restore().Completed) { return false; }
+        OriginalValue = nullptr;
+        return true;
     }
 
     /**
      * @brief Returns whether this instance currently owns an installed IAT patch.
-     * @return True when the original slot pointer is stored and the replacement is active; otherwise false.
+     * @return True while original slot bytes/protections still require cleanup, including partial failures.
      */
-    bool IatHook::IsInstalled() const noexcept
-    {
-        return slot_ != nullptr;
+    bool IatHook::IsInstalled() const noexcept {
+        return Patch.HasOwnership();
     }
 }

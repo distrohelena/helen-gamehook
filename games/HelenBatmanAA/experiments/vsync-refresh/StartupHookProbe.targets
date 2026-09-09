@@ -1,0 +1,19 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Explicit opt-in lifecycle only. This target does not install a VSync bridge. -->
+  <PropertyGroup>
+    <EnableStartupHooks Condition="'$(EnableStartupHooks)' == ''">true</EnableStartupHooks>
+    <OutDir>$(StartupHookOutput)\native\</OutDir>
+    <IntDir>$(StartupHookOutput)\obj\$(MSBuildProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(EnableStartupHooks)' == 'true'">
+    <ClCompile>
+      <PreprocessorDefinitions>HELEN_ENABLE_STARTUP_HOOKS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'HelenGameHook' and '$(EnableStartupHooks)' == 'true'">
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\..\..\..\HelenGameHook\StartupHookRuntime.cpp" />
+  </ItemGroup>
+  <Target Name="RequireStartupHookOutput" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(StartupHookOutput)' == ''" Text="StartupHookOutput must name an explicit isolated output root." />
+  </Target>
+</Project>

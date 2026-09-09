@@ -58,6 +58,29 @@ The setter's synchronization and lifetime contract still requires verification.
 
 ## Components and ownership
 
+### Approved startup-lifetime revision
+
+The user approved extending the shared proxy/runtime lifecycle with startup-only
+installation and process-lifetime pinning. This remains opt-in through
+`HELEN_ENABLE_STARTUP_HOOKS`; ordinary proxy builds retain their existing entry
+path and do not export the new handshake. No installation or game launch is
+authorized by this revision.
+
+The real proxy's static process-attach scope publishes its current thread only
+until that scope exits. The runtime queries this live context, rejects dynamic
+loads/late calls/reentry, pins the proxy, helper and initializer modules, then
+opens a thread-specific installation window around its no-throw initializer.
+Failure closes or never opens the window; an admitted failed attempt cannot retry.
+Pins are deliberately irreversible until process exit, including partial pin
+failure. This is a cooperating-DLL lifetime contract, not protection against
+malicious in-process code spoofing a proxy export.
+
+Tests must exercise the actual proxy source in static and dynamic loader hosts,
+balanced module release with pinning, failed initialization, reentry and late
+refusal. A fresh full-runtime host and a normal-build control additionally check
+real integration. These tests establish the lifecycle seam, not safety of a
+future Batman instruction patch or its engine call chain.
+
 ### Reusable request lifecycle
 
 A small CPU-only service owns one explicitly armed refresh request. It contains

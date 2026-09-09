@@ -8,6 +8,7 @@
     <ClCompile Remove="BatmanGraphicsSessionService.cpp" />
     <ClCompile Include="$(NoSaveOutput)\BatmanGraphicsSessionService.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)NoSaveResolutionProbe.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)NoSaveVsyncRequest.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)NoSaveFullscreenModes.cpp" />
   </ItemGroup>
   <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'HelenRuntime'">
@@ -15,4 +16,22 @@
       <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(EnableSameSizeRefresh)' == 'true'">
+    <ClCompile>
+      <PreprocessorDefinitions>HELEN_ENABLE_STARTUP_HOOKS;HELEN_ENABLE_SAME_SIZE_REFRESH;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\vsync-refresh;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup Condition="'$(EnableSameSizeRefresh)' == 'true' and '$(MSBuildProjectName)' == 'HelenRuntime'">
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\vsync-refresh\SameSizeRefresh.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\vsync-refresh\AnchoredResize.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\vsync-refresh\RefreshActivation.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\vsync-refresh\RefreshRequest.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\vsync-refresh\ActivationMatcher.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\vsync-refresh\DecisionBridge.cpp" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(EnableSameSizeRefresh)' == 'true' and '$(MSBuildProjectName)' == 'HelenGameHook'">
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\..\..\..\HelenGameHook\StartupHookRuntime.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\vsync-refresh\InstallSameSizeRefresh.cpp" />
+  </ItemGroup>
 </Project>

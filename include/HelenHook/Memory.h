@@ -88,7 +88,9 @@ namespace helen
      * @param address The destination memory address.
      * @param data The bytes to copy.
      * @param size The number of bytes to write.
-     * @return True when the write succeeds; otherwise false.
+     * @return True only after bytes, cache flush and original protections are complete.
+     * False guarantees rollback; unrecoverable partial writes terminate. Callers must
+     * exclude concurrent writes/execution/unmapping and supply readable source bytes.
      */
     bool WriteMemory(void* address, const void* data, std::size_t size);
 
@@ -97,7 +99,8 @@ namespace helen
      * @param address The start of the writable memory range.
      * @param value The byte value to write into the range.
      * @param size The number of bytes to write.
-     * @return True when the range was filled successfully; otherwise false.
+     * @return True on a fully committed fill; false after confirmed rollback.
+     * Unrecoverable rollback terminates, with the same exclusion contract as WriteMemory.
      */
     bool FillMemoryBytes(void* address, std::uint8_t value, std::size_t size);
 

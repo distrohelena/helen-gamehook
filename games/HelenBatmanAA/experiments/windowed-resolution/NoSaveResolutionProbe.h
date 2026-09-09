@@ -11,6 +11,6 @@ namespace helen {
          * Returns NotApplied deliberately: the ordinary frontend must not claim a saved baseline.
          * Engine-owned persistence remains enabled so external INI snapshots can measure it.
          */
-        static BatmanGraphicsApplyResult Apply(const BatmanGraphicsDraftState& draft);
+        static BatmanGraphicsApplyResult Apply(const BatmanGraphicsDraftState& baseline, const BatmanGraphicsDraftState& draft);
     };
 }

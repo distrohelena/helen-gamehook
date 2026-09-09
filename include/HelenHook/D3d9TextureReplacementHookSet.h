@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <HelenHook/Hook.h>
+#include <HelenHook/D3d9PresentationPolicy.h>
 #include <HelenHook/PackScopedTextureReplacementDefinition.h>
 #include <HelenHook/TextureReplacementDefinition.h>
 
@@ -25,6 +26,10 @@ namespace helen
      */
     class D3d9TextureReplacementHookSet
     {
+    private:
+        /** @brief Session policy for intercepted creation/reset calls; default preserves application control. */
+        D3d9PresentationPolicy PresentationOverrides;
+
     public:
         /**
          * @brief Binds the hook set to the declared pack-scoped replacement rules.
@@ -46,6 +51,20 @@ namespace helen
         D3d9TextureReplacementHookSet& operator=(const D3d9TextureReplacementHookSet&) = delete;
         D3d9TextureReplacementHookSet(D3d9TextureReplacementHookSet&&) = delete;
         D3d9TextureReplacementHookSet& operator=(D3d9TextureReplacementHookSet&&) = delete;
+
+        /**
+         * @brief Returns the session policy for all devices intercepted by this hook set.
+         * Requires the hook set to outlive callers; changing policy neither installs hooks nor resets devices.
+         * Enable hooking explicitly even when no texture replacements are needed.
+         */
+        D3d9PresentationPolicy& PresentationPolicy() noexcept { return PresentationOverrides; }
+
+        /**
+         * @brief Publishes a policy only for a registered, idle device while retaining the active hook owner under its registry lock.
+         * Returns false if no active owner/device exists or reset is in progress; makes no COM calls or reset.
+         * Unknown modes throw without mutation. The caller must retain the supplied device for this call.
+         */
+        static bool TrySetVsyncOverride(IDirect3DDevice9& device, D3d9VsyncOverride mode);
 
         /**
          * @brief Validates declared replacement assets and installs the `Direct3DCreate9` import hook when needed.

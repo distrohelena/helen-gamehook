@@ -1,5 +1,7 @@
-param([Parameter(Mandatory=$true)][string]$RuntimeLibraryPath, [switch]$FailureCases, [switch]$InitialSurfaceHooks)
+param([Parameter(Mandatory=$true)][string]$RuntimeLibraryPath, [switch]$FailureCases, [switch]$InitialSurfaceHooks, [switch]$PresentationOverride, [switch]$PresentationOnly)
 $ErrorActionPreference = 'Stop'
+if ($PresentationOverride -and ($FailureCases -or $InitialSurfaceHooks)) { throw 'Run presentation override separately from other fixture modes.' }
+if ($PresentationOnly -and ($FailureCases -or $InitialSurfaceHooks -or $PresentationOverride)) { throw 'Run pack-free presentation separately.' }
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $compiler = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.44.35207'
 $sdk = 'C:\Program Files (x86)\Windows Kits\10'
@@ -18,4 +20,6 @@ $arguments = @('/nologo','/std:c++20','/EHsc','/MD','/W4','/WX','/DUNICODE','/D_
 & $tool -FilePath "$compiler\bin\Hostx64\x86\cl.exe" -Arguments $arguments
 $fixtureArguments = @("$output\fixtures")
 if ($InitialSurfaceHooks) { $fixtureArguments += 'initial-surface-hooks' }
+if ($PresentationOverride) { $fixtureArguments += 'presentation-override' }
+if ($PresentationOnly) { $fixtureArguments += 'presentation-only' }
 & $tool -FilePath "$output\D3d9ReplacementResetTests.exe" -Arguments $fixtureArguments
