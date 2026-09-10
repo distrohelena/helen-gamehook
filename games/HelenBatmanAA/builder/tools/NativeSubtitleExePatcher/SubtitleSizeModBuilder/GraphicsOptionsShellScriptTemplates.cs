@@ -103,6 +103,7 @@ internal static class GraphicsOptionsShellScriptTemplates
            var SessionId;
            /** Whether the complete captured baseline permits a native transaction. */
            var NativeCanApply;
+           var SupportedFields;
            function BatmanGraphicsOptionsController(screen)
            {
               this.Screen = screen;
@@ -545,7 +546,7 @@ internal static class GraphicsOptionsShellScriptTemplates
            function CanEdit(rowIndex)
            {
               var setting = this.GetSettingForRow(rowIndex);
-              return setting != undefined && this.AreSettingsLoaded() && (rowIndex != 1 || this.InitializationComplete) && !this.InitializationFailed && !this.InteractionBlocked && !this.RollbackLocked && setting.InitialIndex >= 0 && setting.DraftIndex >= 0;
+              return setting != undefined && setting.Supported === true && this.AreSettingsLoaded() && (rowIndex != 1 || this.InitializationComplete) && !this.InitializationFailed && !this.InteractionBlocked && !this.RollbackLocked && setting.InitialIndex >= 0 && setting.DraftIndex >= 0;
            }
            function CanApply()
            {
@@ -609,7 +610,15 @@ internal static class GraphicsOptionsShellScriptTemplates
                  if(this.WindowedResolutionAvailable) { this.WindowedResolutionModes = windowedModes; }
                  if(this.FullscreenResolutionAvailable) { this.FullscreenResolutionModes = fullscreenModes; }
                  var canApply = flash.external.ExternalInterface.call("Helen_Graphics_GetV1",this.SessionId,16);
-                 this.NativeCanApply = completeValues && canApply === 1;
+                 this.SupportedFields = flash.external.ExternalInterface.call("Helen_Graphics_GetV1",this.SessionId,17);
+                 var validCapabilities = this.IsUnsignedInteger(this.SupportedFields,16383);
+                 settingIndex = 0;
+                 while(settingIndex < this.Settings.length)
+                 {
+                    this.Settings[settingIndex].Supported = validCapabilities && (this.SupportedFields & (1 << settingIndex)) != 0;
+                    settingIndex = settingIndex + 1;
+                 }
+                 this.NativeCanApply = completeValues && canApply === 1 && validCapabilities;
               }
               catch(error)
               {
@@ -936,7 +945,7 @@ internal static class GraphicsOptionsShellScriptTemplates
                  }
                  commitInvoked = true;
                  var outcome = flash.external.ExternalInterface.call("Helen_Graphics_CommitV1",this.SessionId,transactionId);
-                 if(outcome === 0 || outcome === 3)
+                 if(outcome === 0 || outcome === 3 || outcome === 5)
                  {
                     this.CopyDraftToInitial();
                     this.UiStatus = outcome === 3 ? "Applied - Cleanup Failed" : "";
@@ -989,6 +998,7 @@ internal static class GraphicsOptionsShellScriptTemplates
            }
            function GetApplyStatusText()
            {
+              if(this.UiStatus == "" && this.SupportedFields == 13311) { return "PhysX / Stereo: not available live"; }
               return this.UiStatus;
            }
            /** Closes native ownership before discarding the local draft or leaving the screen. */
@@ -1481,8 +1491,8 @@ internal static class GraphicsOptionsShellScriptTemplates
     }
 
     /// <summary>
-    /// Creates the visible Apply Changes row whose activation dispatches through the settings
-    /// controller while directional changes and prompt handling remain no-ops.
+    /// Creates a label-only Apply Changes row whose activation dispatches through the settings
+    /// controller. The value/status column and arrows stay hidden while the label reflects availability.
     /// </summary>
     /// <returns>An ActionScript load handler for row fifteen.</returns>
     private static string CreateApplyRowClipAction()
@@ -1513,7 +1523,7 @@ internal static class GraphicsOptionsShellScriptTemplates
                  if(this.ItemText != undefined)
                  {
                     this.ItemText.text = "";
-                    this.ItemText._alpha = 40;
+                    this.ItemText._visible = false;
                  }
                  if(this.Label != undefined)
                  {
@@ -1532,8 +1542,8 @@ internal static class GraphicsOptionsShellScriptTemplates
               }
               if(this.ItemText != undefined)
               {
-                 this.ItemText.text = _parent.GraphicsOptionsController.GetApplyStatusText();
-                 this.ItemText._alpha = _parent.GraphicsOptionsController.CanApply() ? 100 : 40;
+                 this.ItemText.text = "";
+                 this.ItemText._visible = false;
               }
               if(this.Label != undefined)
               {

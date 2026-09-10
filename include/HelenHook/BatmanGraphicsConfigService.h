@@ -4,6 +4,7 @@
 #include <memory>
 #include <HelenHook/BatmanGraphicsSnapshot.h>
 #include <HelenHook/BatmanGraphicsApplyResult.h>
+#include <HelenHook/BatmanGraphicsSessionBackend.h>
 
 namespace helen
 {
@@ -19,7 +20,7 @@ namespace helen
      * UE3 configuration values. This service owns the translation between those menu states and the
      * encoded values persisted in the user config files.
      */
-    class BatmanGraphicsConfigService
+    class BatmanGraphicsConfigService : public BatmanGraphicsSessionBackend
     {
     public:
         /**
@@ -63,7 +64,7 @@ namespace helen
         bool LoadIntoDispatcher(CommandDispatcher& dispatcher) const;
 
         /** @brief Captures independently valid launcher settings once without modifying dispatcher state or either INI. */
-        BatmanGraphicsSnapshot CaptureReadSnapshot() const;
+        BatmanGraphicsSnapshot CaptureReadSnapshot() const override;
 
         /**
          * @brief Writes the graphics draft into `BmEngine.ini` and its launcher-owned `UserEngine.ini` sibling.
@@ -75,8 +76,14 @@ namespace helen
         /** @brief Persists an isolated validated draft through the shared two-file writer and returns its verified outcome. */
         BatmanGraphicsApplyResult ApplyDraft(const BatmanGraphicsDraftState& draft) const;
 
+        /** @brief Adapts the existing trusted persistence path to the session protocol; baseline is not used for file encoding. */
+        BatmanGraphicsApplyResult ApplySessionDraft(const BatmanGraphicsDraftState& baseline,
+            const BatmanGraphicsDraftState& draft) const override;
+
         /** @brief Reports process-lifetime uncertainty from a failed graphics publication; reopening a menu cannot clear it. */
-        bool IsApplyLocked() const noexcept;
+        bool IsApplyLocked() const noexcept override;
+        /** @brief The persistent writer supports all fourteen normalized INI fields. */
+        int SupportedFields() const noexcept override { return 16383; }
 
         /**
          * @brief Writes the current normalized subtitle-size config value back into the active subtitle INI.

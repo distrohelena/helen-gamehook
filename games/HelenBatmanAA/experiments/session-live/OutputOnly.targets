@@ -1,0 +1,10 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Fresh ordinary build artifacts, without experimental source substitution. -->
+  <PropertyGroup>
+    <OutDir>$(SessionLiveOutput)\native\</OutDir>
+    <IntDir>$(SessionLiveOutput)\obj\$(MSBuildProjectName)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'HelenRuntime.Tests'">
+    <OutDir>$(SessionLiveOutput)\native\tests\</OutDir>
+  </PropertyGroup>
+</Project>

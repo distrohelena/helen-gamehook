@@ -1,0 +1,30 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <NoSaveOutput>$(SessionLiveOutput)</NoSaveOutput>
+    <EnableSameSizeRefresh>true</EnableSameSizeRefresh>
+  </PropertyGroup>
+  <Import Project="$(MSBuildThisFileDirectory)..\windowed-resolution\NoSaveProbe.targets" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>HELEN_ENABLE_SESSION_LIVE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory);$(MSBuildThisFileDirectory)..\bloom-reload;$(MSBuildThisFileDirectory)..\windowed-resolution;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'HelenRuntime'">
+    <!-- Keep the real session service. No generated writer bypass and no one-shot probe are part of this build. -->
+    <ClCompile Remove="$(SessionLiveOutput)\BatmanGraphicsSessionService.cpp" />
+    <ClCompile Remove="$(MSBuildThisFileDirectory)..\windowed-resolution\NoSaveResolutionProbe.cpp" />
+    <ClCompile Remove="$(MSBuildThisFileDirectory)..\windowed-resolution\NoSaveVsyncRequest.cpp" />
+    <ClCompile Include="BatmanGraphicsSessionService.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)SessionGraphicsDelta.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)SessionGraphicsOverlay.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)SessionStagingFile.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)SessionGraphicsBackend.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)SessionSettingsPayload.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)SessionNativeMemory.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)SessionNativeObservation.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)SessionGraphicsNative.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)SessionPhysxLevel.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\bloom-reload\BloomIniBinding.cpp" />
+  </ItemGroup>
+</Project>

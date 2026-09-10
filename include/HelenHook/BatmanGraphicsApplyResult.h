@@ -6,7 +6,7 @@
 #include <vector>
 
 namespace helen {
-    /** @brief Carries a completed persistence outcome and any retained transaction evidence for diagnosis. */
+    /** @brief Carries an explicit persistence or session-only outcome and retained transaction evidence for diagnosis. */
     struct BatmanGraphicsApplyResult {
         /** @brief Explicit verified outcome; a false boolean cannot represent these distinctions. */
         BatmanGraphicsApplyOutcome Outcome;

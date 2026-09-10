@@ -1,4 +1,4 @@
-param([switch]$Overlay, [switch]$Binding)
+param([switch]$Overlay, [switch]$Binding, [switch]$EffectBinding)
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..\..'))
 $compiler = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.44.35207'
@@ -12,7 +12,7 @@ $arguments = @('/nologo','/std:c++20','/EHsc','/MD','/W4','/WX','/O2','/DUNICODE
     "/I$repo\include", "/I$compiler\include", "/I$sdk\Include\$version\ucrt", "/I$sdk\Include\$version\shared", "/I$sdk\Include\$version\um",
     "/Fo$output\", "/Fe$output\BloomDraftTests.exe", '/link',
     "/LIBPATH:$compiler\lib\x86", "/LIBPATH:$sdk\Lib\$version\ucrt\x86", "/LIBPATH:$sdk\Lib\$version\um\x86", 'kernel32.lib')
-$sources = if ($Binding) { @("$PSScriptRoot\BloomIniBindingTests.cpp", "$PSScriptRoot\BloomIniBinding.cpp") } elseif ($Overlay) { @("$PSScriptRoot\BloomOverlayEditTests.cpp", "$PSScriptRoot\BloomOverlayEdit.cpp") } else {
+$sources = if ($EffectBinding) { @("$PSScriptRoot\BloomEffectBindingTests.cpp", "$PSScriptRoot\BloomEffectBinding.cpp") } elseif ($Binding) { @("$PSScriptRoot\BloomIniBindingTests.cpp", "$PSScriptRoot\BloomIniBinding.cpp") } elseif ($Overlay) { @("$PSScriptRoot\BloomOverlayEditTests.cpp", "$PSScriptRoot\BloomOverlayEdit.cpp") } else {
     @("$PSScriptRoot\BloomDraftTests.cpp", "$PSScriptRoot\BloomDraft.cpp", "$repo\HelenRuntime\BatmanGraphicsDraftState.cpp")
 }
 & $tool -FilePath "$compiler\bin\Hostx64\x86\cl.exe" -Arguments ($sources + $arguments)

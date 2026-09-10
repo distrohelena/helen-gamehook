@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$RuntimeLibraryPath,
     [Parameter(Mandatory = $true)][string]$BatmanUserIniPath,
     [switch]$EnableFileWriteRouting,
-    [ValidateSet('NoRoute', 'TrustedSaveRouting', 'RoutingNoSaveProbe')][string]$CandidateMode = 'NoRoute',
+    [ValidateSet('NoRoute', 'TrustedSaveRouting', 'RoutingNoSaveProbe', 'RoutingSessionLive')][string]$CandidateMode = 'NoRoute',
     [string]$SourceCommit,
     [string]$NativeOutputRoot,
     [string]$GeneratedSourcePath
@@ -45,6 +45,19 @@ if ([string]::IsNullOrWhiteSpace($SourceCommit)) {
 if ([string]::IsNullOrWhiteSpace($NativeOutputRoot)) {
     $NativeOutputRoot = Split-Path -Parent ([IO.Path]::GetFullPath($NativeDllPath))
 }
+$sessionManifest = $null
+if ($CandidateMode -eq 'RoutingSessionLive') {
+    $sessionManifestPath = Join-Path (Split-Path -Parent $NativeOutputRoot) 'source-manifest.json'
+    $sessionManifest = Get-Content -LiteralPath $sessionManifestPath -Raw | ConvertFrom-Json
+    if ($sessionManifest.mode -ne 'RoutingSessionLive') { throw 'Native manifest is not a session-live build.' }
+    foreach ($entry in @($sessionManifest.sources) + @($sessionManifest.artifacts)) {
+        if ((Get-FileHash -LiteralPath $entry.path).Hash -ne $entry.sha256) { throw "Native source/artifact provenance changed: $($entry.path)" }
+    }
+    foreach ($inputPath in @($NativeDllPath,$RuntimeLibraryPath)) {
+        $full = [IO.Path]::GetFullPath($inputPath)
+        if (@($sessionManifest.artifacts | Where-Object path -EQ $full).Count -ne 1) { throw 'Native inputs do not belong to the verified build.' }
+    }
+}
 
 function Write-CandidateJson {
     <# Writes only newly constructed candidate metadata; never imports another pack's declarations. #>
@@ -82,6 +95,11 @@ $decompiledRoot = Join-Path $assetRoot 'decompiled'
 & $consoleTool -FilePath $ffdec -Arguments @('-export', 'script', $decompiledRoot, $gfxPath) | Out-Null
 $decompiledController = Join-Path $decompiledRoot 'scripts\DefineSprite_600_ScreenOptionsGraphics\frame_1\DoAction.as'
 & $consoleTool -FilePath node -Arguments @((Join-Path $PSScriptRoot 'Test-BatmanDirectGraphicsFrontend.js'), $decompiledController)
+$applyRowRelative = 'PlaceObject2_290_List_Template_29\CLIPACTIONRECORD onClipEvent(load).as'
+foreach ($controllerPath in @($emittedController,$decompiledController)) {
+    $applyRowPath = Join-Path (Split-Path -Parent $controllerPath) $applyRowRelative
+    & $consoleTool -FilePath node -Arguments @((Join-Path $PSScriptRoot 'Test-BatmanApplyRow.js'), $applyRowPath)
+}
 $patchManifest = Join-Path $candidateRoot 'patch.json'
 Write-CandidateJson $patchManifest ([ordered]@{ name = 'Direct graphics transactions'; patches = @([ordered]@{
     owner = 'MainMenu'; exportName = 'MainV2'; exportType = 'GFxMovieInfo'; replacementPath = $gfxPath; payloadMagic = 'GFX'
@@ -133,6 +151,7 @@ $routeMode = if ($EnableFileWriteRouting) { 'engine-config' } else { 'none' }
 & (Join-Path $PSScriptRoot 'Test-BatmanDirectGraphicsPackage.ps1') -PackParent $packParent -BasePath $basePath -TargetPath $targetPath -NativeDllPath $candidateDll -RuntimeLibraryPath $RuntimeLibraryPath -ExpectedRouteMode $routeMode -ExpectedNativeDllSha256 $nativeSourceSha256
 Write-CandidateJson (Join-Path $candidateRoot 'provenance.json') ([ordered]@{
     sourceCommit = $SourceCommit; mode = $CandidateMode; liveTestPending = $true
+    sessionNativeBuild = $sessionManifest
     routingPolicy = if ($EnableFileWriteRouting) { 'engine-config: documents/Square Enix/Batman Arkham Asylum GOTY/BmGame/Config/BmEngine.ini; redirect writes; redirected reads; session lifetime' } else { 'none' }
     nativeInput = $nativeInputPath; nativeSha256 = $nativeSourceSha256; candidateDllSha256 = (Get-FileHash -LiteralPath $candidateDll -Algorithm SHA256).Hash
     runtimeLibrary = [IO.Path]::GetFullPath($RuntimeLibraryPath); runtimeSha256 = (Get-FileHash -LiteralPath $RuntimeLibraryPath).Hash

@@ -25,7 +25,7 @@ function methods(source) {
 /** Supplies native-boundary fixtures and runs the actual frontend initialization. */
 function initialize(source, overrides = {}) {
     const calls = [];
-    const scalars = [0, 1, 5, 1, 1, 0, 0, 0, 1, 0, 1, 0, 1600, 900, 1920, 1080, 1];
+    const scalars = [0, 1, 5, 1, 1, 0, 0, 0, 1, 0, 1, 0, 1600, 900, 1920, 1080, 1, 16383];
     const catalogs = [[[1280, 720], [1600, 900]], [[1280, 720], [1920, 1080]]];
     const context = vm.createContext({
         // Legacy polling must fail the test, not accidentally receive plausible responses.
@@ -80,7 +80,7 @@ assert.ok(calls.some(c => c[0] === 'Helen_Graphics_SetFieldV1' && c[3] === 2 && 
 assert.equal(controller.Destroy(), true);
 assert.equal(calls.filter(c => c[0] === 'Helen_Graphics_CloseV1').length, 1);
 
-for (const outcome of [1, 2, 3, 4, undefined]) {
+for (const outcome of [1, 2, 3, 4, 5, undefined]) {
     const test = initialize(source, {'Helen_Graphics_CommitV1': outcome});
     test.controller.DecrementSetting(3);
     test.controller.ApplyChanges();
@@ -92,6 +92,15 @@ for (const outcome of [1, 2, 3, 4, undefined]) {
         assert.equal(test.controller.Settings[1].InitialIndex, 0, 'Cleanup-failed commit was reported as unapplied');
         assert.equal(test.controller.CanApply(), false);
         assert.ok(test.controller.UiStatus.length > 0);
+    } else if (outcome === 5) {
+        assert.equal(test.controller.Settings[1].InitialIndex, 0, 'Verified session Apply did not publish its baseline');
+        assert.equal(test.controller.CanApply(), false, 'Verified session Apply remained dirty');
+        assert.equal(test.controller.RollbackLocked, false, 'Verified session Apply was treated as uncertain');
+        assert.ok(!/saved/i.test(test.controller.UiStatus), 'Session-only Apply claimed persistence');
+        test.controller.IncrementSetting(3);
+        assert.equal(test.controller.CanApply(), true, 'Second reverse session Apply unavailable');
+        test.controller.ApplyChanges();
+        assert.equal(test.controller.Settings[1].InitialIndex, 1, 'Second session Apply used old UI baseline');
     } else if (outcome === 4) {
         assert.equal(test.controller.Settings[1].InitialIndex, 1, 'Partial session synchronization failure claimed a saved baseline');
         assert.equal(test.controller.CanApply(), false, 'Partial session synchronization failure did not lock Apply');
@@ -105,6 +114,14 @@ const partial = initialize(source, {'Helen_Graphics_GetV1': (session, field) => 
 assert.equal(partial.controller.Settings[1].InitialIndex, -1, 'Wrong type became a valid setting');
 assert.equal(partial.controller.Settings[2].InitialIndex, 4, 'Bad VSync erased valid MSAA');
 assert.equal(partial.calls.filter(c => c[0] === 'Helen_Graphics_EndReadV1').length, 1);
+const sessionOnly = initialize(source, {'Helen_Graphics_GetV1': (session, field) =>
+    [0,1,5,1,1,0,0,0,1,0,1,0,1600,900,1920,1080,1,13311][field]});
+assert.equal(sessionOnly.controller.CanEdit(13), false, 'Unsupported PhysX remains editable');
+assert.equal(sessionOnly.controller.CanEdit(14), false, 'Unsupported Stereo remains editable');
+assert.equal(sessionOnly.controller.CanEdit(6), true, 'Unsupported physics disabled a supported effect');
+assert.match(sessionOnly.controller.GetApplyStatusText(), /PhysX.*Stereo/);
+sessionOnly.controller.IncrementSetting(13);
+assert.equal(sessionOnly.controller.Settings[10].DraftIndex, 1, 'Unsupported PhysX was staged');
 const stageFailure = initialize(source, {'Helen_Graphics_SetFieldV1': undefined});
 stageFailure.controller.DecrementSetting(3);
 stageFailure.controller.ApplyChanges();

@@ -9,6 +9,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <map>
+#include <limits>
 #include <set>
 #include <string>
 #include <system_error>
@@ -956,6 +957,65 @@ BOOL FileWriteRoutingService::Replace(const std::filesystem::path &replaced_path
 
     return CallNativeReplaceFileW(overlay_paths_.at(replaced_route).wstring().c_str(), effective_replacement_path.wstring().c_str(),
                                   nullptr, replace_flags, nullptr, nullptr);
+}
+
+BOOL FileWriteRoutingService::PublishSessionReplacement(const std::filesystem::path& original_path,
+    const std::string& expected_overlay_bytes, const std::filesystem::path& staged_path) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::filesystem::path original;
+    std::filesystem::path staged;
+    if (!TryNormalizeRequestPathUnlocked(original_path,original) || !TryNormalizeRequestPathUnlocked(staged_path,staged)) {
+        SetLastError(ERROR_INVALID_NAME);
+        return FALSE;
+    }
+    std::wstring key;
+    DWORD error = ERROR_SUCCESS;
+    if (ClassifyPathUnlocked(original,key,error) != PathDisposition::Protected || failed_routes_.contains(key)) {
+        SetLastError(error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : error);
+        return FALSE;
+    }
+    const auto route = routes_.find(key);
+    std::error_code filesystem_error;
+    if (route == routes_.end() || route->second.WritePolicy != FileWritePolicy::Redirect || route->second.ReadPolicy != FileReadPolicy::Redirected ||
+        !std::filesystem::equivalent(staged.parent_path(),session_directory_,filesystem_error) || filesystem_error) {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+    std::wstring staged_key;
+    InspectedPath inspection;
+    if (ClassifyPathUnlocked(staged,staged_key,error) != PathDisposition::Unrelated ||
+        !InspectExistingPath(staged.wstring(),inspection,error) || inspection.HasReparseComponent ||
+        !inspection.IsRegularFile || inspection.NumberOfLinks != 1) {
+        SetLastError(error == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : error);
+        return FALSE;
+    }
+    for (const auto& overlay : overlay_paths_) {
+        if (std::filesystem::equivalent(staged,overlay.second,filesystem_error) || filesystem_error) {
+            SetLastError(ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+    }
+    for (const auto& tracked : tracked_handles_) {
+        if (tracked.second == key) { SetLastError(ERROR_SHARING_VIOLATION); return FALSE; }
+    }
+    if (expected_overlay_bytes.size() > (std::numeric_limits<DWORD>::max)()) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    const auto read_file = ResolveKernel32Export<decltype(&ReadFile)>("ReadFile");
+    const auto get_size = ResolveKernel32Export<decltype(&GetFileSizeEx)>("GetFileSizeEx");
+    if (read_file == nullptr || get_size == nullptr) { SetLastError(ERROR_PROC_NOT_FOUND); return FALSE; }
+    const HANDLE raw = CallNativeCreateFileW(overlay_paths_.at(key).c_str(),GENERIC_READ,FILE_SHARE_READ | FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if (raw == INVALID_HANDLE_VALUE) { return FALSE; }
+    const std::unique_ptr<void,decltype(&CallNativeCloseHandle)> handle(raw,&CallNativeCloseHandle);
+    LARGE_INTEGER size;
+    if (!get_size(raw,&size)) { return FALSE; }
+    if (size.QuadPart != static_cast<LONGLONG>(expected_overlay_bytes.size())) { SetLastError(ERROR_REVISION_MISMATCH); return FALSE; }
+    std::string actual(expected_overlay_bytes.size(),'\0');
+    DWORD read = 0;
+    if (!read_file(raw,actual.data(),static_cast<DWORD>(actual.size()),&read,nullptr)) { return FALSE; }
+    if (read != actual.size() || actual != expected_overlay_bytes) { SetLastError(ERROR_REVISION_MISMATCH); return FALSE; }
+    // Keep the read handle open with delete sharing: native replacement is permitted, external write opens are not.
+    // Routed opens remain excluded by mutex_ throughout the comparison and replacement.
+    return CallNativeReplaceFileW(overlay_paths_.at(key).c_str(),staged.c_str(),nullptr,0,nullptr,nullptr);
 }
 
 BOOL FileWriteRoutingService::Copy(const std::filesystem::path &existing_path, const std::filesystem::path &new_path, BOOL fail_if_exists) {

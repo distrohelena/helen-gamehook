@@ -166,6 +166,16 @@ class FileWriteRoutingService {
                  DWORD replace_flags, LPVOID exclude, LPVOID reserved);
 
     /**
+     * @brief Publishes a Helen-owned staged file only if the current session overlay still matches its captured bytes.
+     * @param original_path Exact protected original identifying the required redirected-read/write route; never modified.
+     * @param expected_overlay_bytes Complete pre-staging bytes, checked under the same lock as routed opens and replacement.
+     * @param staged_path Closed private sibling in this service's session directory, consumed only on success.
+     * @return Native success, or FALSE without publication when identity, handle, policy or comparison checks fail.
+     */
+    BOOL PublishSessionReplacement(const std::filesystem::path& original_path, const std::string& expected_overlay_bytes,
+        const std::filesystem::path& staged_path);
+
+    /**
      * @brief Copies a source into a selected destination overlay without escaping protected content.
      * @param existing_path Source path supplied to CopyFileA/W.
      * @param new_path Destination path supplied to CopyFileA/W.

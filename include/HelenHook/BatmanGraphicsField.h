@@ -38,6 +38,8 @@ namespace helen {
         /** @brief Session display enumeration's desktop height; not an INI field. */
         DesktopHeight = 15,
         /** @brief Session transaction availability; not a persisted setting. */
-        CanApply = 16
+        CanApply = 16,
+        /** @brief Backend-supported editable-field bitmask; an observation, never a draft setting. */
+        SupportedFields = 17
     };
 }

@@ -8,8 +8,8 @@ namespace helen {
     /** @brief Serializes direct graphics callbacks and owns their bounded session/transaction lifetime. */
     class BatmanGraphicsSessionService {
     private:
-        /** @brief Required parser and writer, also owning process integrity lockout. */
-        BatmanGraphicsConfigService& Config;
+        /** @brief Required authoritative state/application owner; its integrity lifetime exceeds any editor. */
+        BatmanGraphicsSessionBackend& Backend;
         /** @brief Required display-rule service used for capture and exact-pair revalidation. */
         BatmanDisplayModeService& Display;
         /** @brief Rejects concurrent/reentrant operations, including attempts during synchronous commit. */
@@ -26,7 +26,7 @@ namespace helen {
         const BatmanDisplayCatalog* FindCatalog(BatmanDisplayModeCatalogKind kind) const noexcept;
     public:
         /** @brief Binds initialized required services without performing capture or hook publication. */
-        BatmanGraphicsSessionService(BatmanGraphicsConfigService& config, BatmanDisplayModeService& display);
+        BatmanGraphicsSessionService(BatmanGraphicsSessionBackend& backend, BatmanDisplayModeService& display);
         /** @brief Captures one new editor state; rejects competing operations and invalidates older idle handles. */
         std::optional<std::uint32_t> Open();
         /** @brief Returns a captured scalar during read transfer, including explicit transaction availability. */

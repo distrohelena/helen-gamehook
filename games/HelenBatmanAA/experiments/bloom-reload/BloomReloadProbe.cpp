@@ -2,6 +2,7 @@
 #include "BloomDraft.h"
 #include "BloomOverlayEdit.h"
 #include "BloomIniBinding.h"
+#include "BloomEffectBinding.h"
 #include <HelenHook/ExecutableFingerprint.h>
 #include <HelenHook/Log.h>
 #include <array>
@@ -91,9 +92,8 @@ namespace helen {
             ? BatmanGraphicsField::DynamicShadows : BatmanGraphicsField::Bloom;
         const int selected = BloomDraft::Select(baseline, draft, field);
         const wchar_t* const key = field == BatmanGraphicsField::Bloom ? L"Bloom" : L"DynamicShadows";
-        // Pinned C20130 key table and C24B50/C20B30 renderer transfer; offsets are relative to owner+4.
-        const std::size_t valueIndex = (field == BatmanGraphicsField::Bloom ? 0x30 : 0x24C) / sizeof(std::uint32_t);
-        const std::uintptr_t renderAddress = field == BatmanGraphicsField::Bloom ? 0x26C0DEC : 0x26C0DF0;
+        const BloomEffectBinding binding = BloomEffectBinding::For(field);
+        const std::size_t valueIndex = binding.DataOffset / sizeof(std::uint32_t);
         if (!Routing || Ini.empty()) { throw std::runtime_error("Bloom probe requires initialized session routing"); }
         const std::vector<FileWriteRoutingService::RouteDiagnostics> routes = Routing->GetRouteDiagnostics();
         std::filesystem::path overlay;
@@ -132,8 +132,8 @@ namespace helen {
         }
         const int cachedBefore = CachedBool(cache, key, filename.c_str());
         const ExecutableFingerprint originalBefore = ExecutableFingerprint::FromPath(Ini);
-        Logf(L"[ini-reload] BEFORE key=%ls live=%u render=%u cache=%d selected=%d session=%ls",
-            key, before[valueIndex], Read<unsigned>(renderAddress), cachedBefore, selected, overlay.c_str());
+        Logf(L"[ini-reload] BEFORE key=%ls live=%u render-mirror=%d cache=%d selected=%d session=%ls (mirror=-1 means direct live consumer)",
+            key, before[valueIndex], binding.RenderMirror.has_value() ? Read<int>(*binding.RenderMirror) : -1, cachedBefore, selected, overlay.c_str());
         BloomOverlayEdit::Stage(Ini, overlay, selected, field);
         const int cachedAfterFile = CachedBool(cache, key, filename.c_str());
         Logf(L"[ini-reload] FILE-STAGED key=%ls selected=%d cache-before-explicit-read=%d", key, selected, cachedAfterFile);
@@ -157,15 +157,17 @@ namespace helen {
         reinterpret_cast<ApplySettings>(0xC40090)(reinterpret_cast<void*>(0x26C0B38), incoming.data(), 0);
         flush();
         const Settings after = Read<Settings>(0x26C0B3C);
-        const unsigned rendered = Read<unsigned>(renderAddress);
+        const std::optional<unsigned> rendered = binding.RenderMirror.has_value()
+            ? std::optional<unsigned>(Read<unsigned>(*binding.RenderMirror)) : std::nullopt;
         const ExecutableFingerprint originalAfter = ExecutableFingerprint::FromPath(Ini);
-        Logf(L"[ini-reload] AFTER key=%ls live=%u render=%u cache=%d original-unchanged=%d",
-            key, after[valueIndex], rendered, CachedBool(cache, key, filename.c_str()), originalAfter.Sha256 == originalBefore.Sha256);
+        Logf(L"[ini-reload] AFTER key=%ls live=%u render-mirror=%d cache=%d original-unchanged=%d",
+            key, after[valueIndex], rendered.has_value() ? static_cast<int>(*rendered) : -1,
+            CachedBool(cache, key, filename.c_str()), originalAfter.Sha256 == originalBefore.Sha256);
         if (originalAfter.Sha256 != originalBefore.Sha256) { throw std::runtime_error("Original INI changed during reload experiment"); }
-        if (after != incoming || rendered != static_cast<unsigned>(selected)) {
+        if (after != incoming || (rendered.has_value() && *rendered != static_cast<unsigned>(selected))) {
             throw std::runtime_error("Reload readback or unrelated settings preservation failed");
         }
-        Logf(L"[ini-reload] PASS key=%ls: edited session INI reached live and render settings; unrelated value payload preserved; no Helen save.", key);
+        Logf(L"[ini-reload] PASS key=%ls: edited session INI reached live setting; available renderer mirror checked; unrelated value payload preserved; no Helen save.", key);
         return BatmanGraphicsApplyResult(BatmanGraphicsApplyOutcome::NotApplied, {});
     }
 }

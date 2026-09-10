@@ -42,6 +42,7 @@
   </ItemDefinitionGroup>
   <ItemGroup Condition="'$(EnableBloomReload)' == 'true' and '$(MSBuildProjectName)' == 'HelenRuntime'">
     <ClCompile Include="$(MSBuildThisFileDirectory)..\bloom-reload\BloomDraft.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\bloom-reload\BloomEffectBinding.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)..\bloom-reload\BloomIniBinding.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)..\bloom-reload\BloomOverlayEdit.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)..\bloom-reload\BloomReloadProbe.cpp" />

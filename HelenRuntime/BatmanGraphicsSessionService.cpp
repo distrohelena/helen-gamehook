@@ -13,8 +13,8 @@ namespace {
 }
 
 namespace helen {
-    BatmanGraphicsSessionService::BatmanGraphicsSessionService(BatmanGraphicsConfigService& config, BatmanDisplayModeService& display)
-        : Config(config), Display(display) {
+    BatmanGraphicsSessionService::BatmanGraphicsSessionService(BatmanGraphicsSessionBackend& backend, BatmanDisplayModeService& display)
+        : Backend(backend), Display(display) {
     }
 
     std::optional<std::uint32_t> BatmanGraphicsSessionService::NextIdentity() {
@@ -54,7 +54,7 @@ namespace helen {
             return std::nullopt;
         }
         Session.reset();
-        BatmanGraphicsSnapshot snapshot = Config.CaptureReadSnapshot();
+        BatmanGraphicsSnapshot snapshot = Backend.CaptureReadSnapshot();
         std::optional<BatmanDisplayCatalog> windowed;
         std::optional<BatmanDisplayCatalog> fullscreen;
         const std::optional<int> width = snapshot.Get(BatmanGraphicsField::PersistedWidth);
@@ -81,7 +81,9 @@ namespace helen {
             return std::nullopt;
         }
         if (field == BatmanGraphicsField::CanApply) {
-            return Session->Baseline.has_value() && !Config.IsApplyLocked() ? 1 : 0;
+            return Session->Baseline.has_value() && !Backend.IsApplyLocked() ? 1 : 0;
+        } else if (field == BatmanGraphicsField::SupportedFields) {
+            return Backend.SupportedFields();
         } else if (field == BatmanGraphicsField::DesktopWidth || field == BatmanGraphicsField::DesktopHeight) {
             const BatmanDisplayCatalog* catalog = FindCatalog(BatmanDisplayModeCatalogKind::Fullscreen);
             if (catalog == nullptr) {
@@ -133,7 +135,7 @@ namespace helen {
     std::optional<std::uint32_t> BatmanGraphicsSessionService::BeginApply(std::uint32_t session) {
         const BatmanGraphicsOperationGuard guard(Busy);
         if (!guard.IsAcquired() || !Matches(session) || Session->ReadOpen || Session->Transaction.has_value() ||
-            !Session->Baseline.has_value() || Config.IsApplyLocked()) {
+            !Session->Baseline.has_value() || Backend.IsApplyLocked()) {
             return std::nullopt;
         }
         const std::optional<std::uint32_t> identity = NextIdentity();
@@ -182,7 +184,7 @@ namespace helen {
         }
         BatmanGraphicsTransaction attempted = std::move(*Session->Transaction);
         Session->Transaction.reset();
-        if (Config.IsApplyLocked()) {
+        if (Backend.IsApplyLocked()) {
             return BatmanGraphicsApplyResult(BatmanGraphicsApplyOutcome::IntegrityUncertain, {});
         }
         if (attempted.Draft.Get(BatmanGraphicsField::Fullscreen) != Session->Baseline->Get(BatmanGraphicsField::Fullscreen) &&
@@ -196,8 +198,9 @@ namespace helen {
                     return BatmanGraphicsApplyResult(BatmanGraphicsApplyOutcome::NotApplied, {});
                 }
             }
-            BatmanGraphicsApplyResult result = Config.ApplyDraft(attempted.Draft);
-            if (result.Outcome == BatmanGraphicsApplyOutcome::Committed || result.Outcome == BatmanGraphicsApplyOutcome::CommittedCleanupFailed) {
+            BatmanGraphicsApplyResult result = Backend.ApplySessionDraft(*Session->Baseline, attempted.Draft);
+            if (result.Outcome == BatmanGraphicsApplyOutcome::Committed || result.Outcome == BatmanGraphicsApplyOutcome::CommittedCleanupFailed ||
+                result.Outcome == BatmanGraphicsApplyOutcome::SessionApplied) {
                 Session->Baseline = attempted.Draft;
                 BatmanGraphicsSnapshot::Values values;
                 for (std::size_t index = 0; index < values.size(); ++index) {
@@ -207,8 +210,8 @@ namespace helen {
             }
             return result;
         } catch (...) {
-            Logf(L"[graphics] Direct Commit failed with exception; integrity lock=%d.", Config.IsApplyLocked() ? 1 : 0);
-            return BatmanGraphicsApplyResult(Config.IsApplyLocked() ? BatmanGraphicsApplyOutcome::IntegrityUncertain :
+            Logf(L"[graphics] Direct Commit failed with exception; integrity lock=%d.", Backend.IsApplyLocked() ? 1 : 0);
+            return BatmanGraphicsApplyResult(Backend.IsApplyLocked() ? BatmanGraphicsApplyOutcome::IntegrityUncertain :
                 BatmanGraphicsApplyOutcome::NotApplied, {});
         }
     }

@@ -7,6 +7,16 @@ The previously validated resolution/fullscreen/VSync paths remain available.
 
 ## Question and evidence
 
+**Correction discovered during multi-option work:** earlier Bloom PASS logs
+proved a Bloom cache change but observed/applied AmbientOcclusion's live field.
+Those logs are not valid live Bloom acceptance. The field-binding regression
+test now rejects the old offset, and the source uses Bloom data+0x34. No separate
+Bloom renderer mirror is claimed. Corrected candidate
+`output/bloom-corrected-20260909-a/native` was subsequently installed, with both
+DLL hashes checked and 31 original INIs unchanged. Backup and snapshots are in
+`output/bloom-corrected-install-20260909-a`. Live Bloom acceptance is pending. The
+DynamicShadows binding and its visual acceptance are unaffected.
+
 Can an edited session INI drive a live graphics setting through Batman's own
 configuration reload/apply path, without persisting originals?
 
@@ -17,13 +27,14 @@ Static inspection of the pinned executable identifies the relevant chain:
   loading. A settings reload alone therefore does not guarantee fresh disk data.
 - FConfigFile read 6204A0 clears its sections, calls file-to-string 638320,
   and parses through 61F9F0. The probe explicitly calls this on the cached file.
-- Loader key 203D93C is `Bloom`, mapped to settings-data+30 (owner+34).
+- Loader key 203D93C is `Bloom`, mapped to settings-data+34 (owner+38).
   Key 203D8B8 is `DirectionalLightmaps`, data+24 (owner+28).
 - Apply C40090 receives the complete AB-dword value payload plus save=false.
   It invokes C3FDE0 and publishes a render summary through C24B50.
-- That summary includes owner+34. Its render consumer C20B30 writes the second
-  summary value to 26C0DEC. The probe reads this after the stock rendering-command
-  flush, separately from the main-thread Bloom field at 26C0B6C.
+- That summary includes owner+34, which is AmbientOcclusion, not Bloom. Its
+  renderer mirror is 26C0DEC. Bloom is directly consumed at 26C0B70 (for example,
+  6508C0 and 835470). The corrected probe checks the entire live payload and
+  preserves AmbientOcclusion; it does not label a duplicate read a renderer mirror.
 
 These are static binding observations, not proof of live engine success.
 
@@ -42,8 +53,8 @@ It refuses a DirectionalLightmaps mismatch before the broad apply call.
 
 Incoming settings copy the live AB-dword payload with only Bloom changed. The
 stock apply call uses save=false. After flushing render commands, the probe
-requires the full value payload to match that incoming copy, the render-thread
-Bloom mirror to match selection, and the original INI hash to remain unchanged.
+requires the full value payload to match that incoming copy, any genuinely
+available renderer mirror to match selection, and the original INI hash to remain unchanged.
 Failures are logged, not repaired by writing engine fields back. The existing
 UI intentionally reports Apply Failed because no saved baseline is published.
 The cache/session edit may remain after a failed attempt; restart before retrying.

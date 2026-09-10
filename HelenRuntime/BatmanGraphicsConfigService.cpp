@@ -2178,6 +2178,12 @@ namespace helen
      * @param dispatcher Config dispatcher that supplies the normalized graphics draft values.
      * @return True when both files contain every required setting and are written successfully; otherwise false.
      */
+    BatmanGraphicsApplyResult BatmanGraphicsConfigService::ApplySessionDraft(const BatmanGraphicsDraftState& baseline,
+        const BatmanGraphicsDraftState& draft) const {
+        (void)baseline;
+        return ApplyDraft(draft);
+    }
+
     BatmanGraphicsApplyResult BatmanGraphicsConfigService::ApplyDraft(const BatmanGraphicsDraftState& draft) const {
         LegacyBatmanGraphicsDraftState state;
         state.Fullscreen = draft.Get(BatmanGraphicsField::Fullscreen);
